@@ -152,22 +152,3 @@ type PageGbPlatformChannelReq struct {
 	PlatformID *int64 `form:"platform_id" json:"platform_id"`
 	ChannelID  *int64 `form:"channel_id" json:"channel_id"`
 }
-
-// ── JT/T 1078 车载终端（三期）─────────────────────────────────
-
-// PageJtTerminalReq JT1078 终端分页查询。
-type PageJtTerminalReq struct {
-	PageReq
-	Keyword    string `form:"keyword" json:"keyword"`
-	Status     string `form:"status" json:"status" example:"ON"`
-	PlateNo    string `form:"plate_no" json:"plate_no"`
-	TerminalID string `form:"terminal_id" json:"terminal_id"`
-}
-
-// PageJtChannelReq JT1078 通道分页查询。
-type PageJtChannelReq struct {
-	PageReq
-	Keyword      string `form:"keyword" json:"keyword"`
-	TerminalDBID *int64 `form:"terminal_db_id" json:"terminal_db_id"`
-	Status       string `form:"status" json:"status" example:"ON"`
-}

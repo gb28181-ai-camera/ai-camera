@@ -1,10 +1,10 @@
 -- ================================================================
--- 09-国标视频 - DDL（20 张表 + ac_device 扩展）
+-- 09-国标视频 - DDL（18 张表 + ac_device 扩展）
 -- AI Camera 智能监控平台 · v0.2.0（设计稿，尚未实施）
 -- 覆盖：国标通道 / 媒体节点 / 上级平台 / 级联通道 / 拉流代理 / 推流
 --       / 云端录像 / 录像计划 / 录像计划明细 / 国标报警 / 移动位置
 --       / 业务分组 / 信令日志 / 订阅记录 / 广播对讲会话
---       / 语音 provider 字典 / JT1078 终端 / JT1078 通道
+--       / 语音 provider 字典
 --
 -- 设计依据：docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md
 -- 参考实现：wvp-GB28181-pro v2.7.4（数据库/2.7.4/初始化-mysql-2.7.4.sql，22 张 wvp_ 表）
@@ -261,7 +261,6 @@ CREATE TABLE IF NOT EXISTS ac_gb_media_server (
     rtp_enable            BOOLEAN       DEFAULT TRUE,
     rtp_port_range        VARCHAR(50)   DEFAULT '30000-30500',
     rtp_proxy_port        BIGINT,
-    jtt_proxy_port        BIGINT,
     send_rtp_port_range   VARCHAR(50),
     -- 云端录像的合并/切片/打包下载由独立的 Assist 服务承担（WVP 为独立进程，
     -- 默认端口 18081）。0 表示未启用；此时云端录像只支持单文件直接下载。
@@ -900,85 +899,7 @@ COMMENT ON COLUMN ac_gb_platform_region.region_id   IS '区域 ID（ac_region）
 
 
 -- ================================================================
--- 第 7 节：JT/T 1078 车载终端
--- ================================================================
--- 与 AI 相机场景关联较弱，属「全量平替」范围，建议三期实施。
--- ----------------------------------------------------------------
-
--- ----------------------------------------------------------------
--- ac_jt_terminal JT/T 1078 车载终端
--- ----------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS ac_jt_terminal (
-    id                BIGSERIAL     PRIMARY KEY,
-    deleted_at        TIMESTAMPTZ,
-    created_by        VARCHAR(50),
-    created_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
-    updated_by        VARCHAR(50),
-    updated_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
-    active            BOOLEAN       DEFAULT TRUE,
-    phone_number      VARCHAR(50)   NOT NULL,
-    terminal_id       VARCHAR(50),
-    province_id       BIGINT,
-    city_id           BIGINT,
-    maker_id          VARCHAR(20),
-    terminal_model    VARCHAR(50),
-    terminal_sim      VARCHAR(50),
-    plate_color       BIGINT,
-    plate_no          VARCHAR(50),
-    plate_type        VARCHAR(50),
-    longitude         DOUBLE PRECISION,
-    latitude          DOUBLE PRECISION,
-    status            VARCHAR(20)   DEFAULT 'OFF',
-    register_time     TIMESTAMPTZ,
-    media_server_id   VARCHAR(50),
-    sdp_ip            VARCHAR(50),
-    remark            VARCHAR(500),
-    dept_id           BIGINT
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ac_jt_terminal_phone   ON ac_jt_terminal (phone_number) WHERE deleted_at IS NULL;
-CREATE INDEX        IF NOT EXISTS idx_ac_jt_terminal_deleted_at ON ac_jt_terminal (deleted_at);
-
-COMMENT ON TABLE  ac_jt_terminal               IS 'JT/T 1078 车载终端';
-COMMENT ON COLUMN ac_jt_terminal.phone_number  IS '终端手机号（BCD 编码，唯一）';
-COMMENT ON COLUMN ac_jt_terminal.terminal_id   IS '终端 ID';
-COMMENT ON COLUMN ac_jt_terminal.province_id   IS '省域 ID';
-COMMENT ON COLUMN ac_jt_terminal.city_id       IS '市县域 ID';
-COMMENT ON COLUMN ac_jt_terminal.maker_id      IS '制造商 ID';
-COMMENT ON COLUMN ac_jt_terminal.plate_color   IS '车牌颜色';
-COMMENT ON COLUMN ac_jt_terminal.plate_no      IS '车牌号';
-COMMENT ON COLUMN ac_jt_terminal.status        IS '在线状态：ON/OFF';
-
-
--- ----------------------------------------------------------------
--- ac_jt_channel JT/T 1078 通道
--- ----------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS ac_jt_channel (
-    id                BIGSERIAL     PRIMARY KEY,
-    deleted_at        TIMESTAMPTZ,
-    created_by        VARCHAR(50),
-    created_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
-    updated_by        VARCHAR(50),
-    updated_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
-    terminal_db_id    BIGINT        NOT NULL,
-    channel_id        BIGINT        NOT NULL,
-    name              VARCHAR(255),
-    has_audio         BOOLEAN       DEFAULT FALSE,
-    status            VARCHAR(20)   DEFAULT 'OFF',
-    dept_id           BIGINT
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ac_jt_channel_terminal_ch ON ac_jt_channel (terminal_db_id, channel_id) WHERE deleted_at IS NULL;
-CREATE INDEX        IF NOT EXISTS idx_ac_jt_channel_deleted_at  ON ac_jt_channel (deleted_at);
-
-COMMENT ON TABLE  ac_jt_channel               IS 'JT/T 1078 通道';
-COMMENT ON COLUMN ac_jt_channel.terminal_db_id IS '所属终端（ac_jt_terminal.id）';
-COMMENT ON COLUMN ac_jt_channel.channel_id    IS '通道号（终端内唯一）';
-COMMENT ON COLUMN ac_jt_channel.name          IS '通道名称';
-COMMENT ON COLUMN ac_jt_channel.has_audio     IS '是否支持音频';
-
--- ================================================================
--- DDL 结束（20 张新表 + ac_device 扩展 13 列）
+-- DDL 结束（18 张新表 + ac_device 扩展 13 列）
 --
 -- 配套变更（不在本文件，但必须同步执行）：
 --   1. docs/开发文档/数据库设计/sql/init/01-初始数据.sql

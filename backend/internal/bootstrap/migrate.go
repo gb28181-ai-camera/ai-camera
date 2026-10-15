@@ -92,8 +92,6 @@ func AutoMigrate() {
 		&model.GbPlatformRegion{},
 
 		// ── JT/T 1078 车载终端（v0.2.0，三期范围）──
-		&model.JtTerminal{},
-		&model.JtChannel{},
 	}
 
 	if err := globalDB.AutoMigrate(models...); err != nil {

@@ -1642,7 +1642,7 @@ INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, pl
 SELECT 125, '12', 2, '国标级联', '/gb/platform', 'ShareAltOutlined', '', 'directory', 'pc', 'gb:platform-dir:view', '目录', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 125);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
-SELECT 126, '12', 2, '组织与车载', '/gb/org', 'PartitionOutlined', '', 'directory', 'pc', 'gb:org-dir:view', '目录', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+SELECT 126, '12', 2, '组织与语音', '/gb/org', 'PartitionOutlined', '', 'directory', 'pc', 'gb:org-dir:view', '目录', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 126);
 
 -- ── 12.3 页面（type=menu）─────────────────────────────────────
@@ -1697,9 +1697,6 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 1252);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
 SELECT 1261, '126', 3, '业务分组', '/gb/org/group', 'ApartmentOutlined', 'gb/GbGroupTree', 'menu', 'pc', 'gb:group:list', '菜单', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 1261);
-INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
-SELECT 1262, '126', 3, '车载终端', '/gb/org/jt-terminal', 'CarOutlined', 'gb/JtTerminalList', 'menu', 'pc', 'gb:jt-terminal:list', '菜单', 2, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 1262);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
 SELECT 1263, '126', 3, '语音 Agent', '/gb/org/voice-agent', 'AudioOutlined', 'gb/VoiceAgentConfig', 'menu', 'pc', 'gb:voice-agent:view', '菜单', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 1263);
@@ -1894,15 +1891,6 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12612);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
 SELECT 12613, '1261', 4, '删除分组', '', '', '', 'button', 'pc', 'gb:group:delete', '按钮', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12613);
-INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
-SELECT 12621, '1262', 4, '新增终端', '', '', '', 'button', 'pc', 'gb:jt-terminal:create', '按钮', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12621);
-INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
-SELECT 12622, '1262', 4, '编辑终端', '', '', '', 'button', 'pc', 'gb:jt-terminal:update', '按钮', 2, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12622);
-INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
-SELECT 12623, '1262', 4, '删除终端', '', '', '', 'button', 'pc', 'gb:jt-terminal:delete', '按钮', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12623);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
 SELECT 12631, '1263', 4, '保存配置', '', '', '', 'button', 'pc', 'gb:voice-agent:update', '按钮', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12631);
@@ -2199,21 +2187,6 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 12612 AND method = '
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 392, 12613, 'DELETE', '/web/gb/groups/:id', '删除业务分组', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 12613 AND method = 'DELETE' AND path = '/web/gb/groups/:id');
-INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
-SELECT 393, 1262, 'GET', '/web/gb/jt-terminals', '分页查询JT1078终端', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 1262 AND method = 'GET' AND path = '/web/gb/jt-terminals');
-INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
-SELECT 394, 1262, 'GET', '/web/gb/jt-terminals/:id', '查询JT1078终端详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 1262 AND method = 'GET' AND path = '/web/gb/jt-terminals/:id');
-INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
-SELECT 395, 12621, 'POST', '/web/gb/jt-terminals', '新增JT1078终端', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 12621 AND method = 'POST' AND path = '/web/gb/jt-terminals');
-INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
-SELECT 396, 12622, 'PUT', '/web/gb/jt-terminals/:id', '编辑JT1078终端', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 12622 AND method = 'PUT' AND path = '/web/gb/jt-terminals/:id');
-INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
-SELECT 397, 12623, 'DELETE', '/web/gb/jt-terminals/:id', '删除JT1078终端', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 12623 AND method = 'DELETE' AND path = '/web/gb/jt-terminals/:id');
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 398, 1263, 'GET', '/web/settings/voice-agent', '读取语音Agent配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 1263 AND method = 'GET' AND path = '/web/settings/voice-agent');

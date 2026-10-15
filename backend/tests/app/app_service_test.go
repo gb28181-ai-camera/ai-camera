@@ -449,11 +449,19 @@ func TestAppService_PageInspectTasks(t *testing.T) {
 		other := newAppFixture(t, ctx, uniq("zzq_app_insp_b"))
 		inspectSvc := svcinspect.NewInspectService()
 
+		// 计划时间取「1 小时后」，但**必须仍落在当天** —— 下方「按当天过滤」断言依赖这一点。
+		// 若直接写 time.Now().Add(time.Hour)，在 23:00 之后运行测试时会跨到次日，
+		// 断言必然失败（实测踩过：23:49 运行，命中 0 而非 2）。这里做一次跨天回夹。
+		planDT := time.Now().Add(time.Hour)
+		if now := time.Now(); planDT.Day() != now.Day() {
+			planDT = time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 0, 0, now.Location())
+		}
+
 		keyword := uniq("ZZQ-APP-TASK")
 		for i := 0; i < 2; i++ {
 			if _, err := inspectSvc.CreateTask(ctx, &request.CreateInspectTaskReq{
 				Name: keyword, InspectorID: inspector.User.ID, Location: "1号配电房", Content: "内容",
-				PlanDT: time.Now().Add(time.Hour).Format("2006-01-02 15:04:05"),
+				PlanDT: planDT.Format("2006-01-02 15:04:05"),
 			}); err != nil {
 				t.Fatalf("创建任务失败: %v", err)
 			}
@@ -461,7 +469,7 @@ func TestAppService_PageInspectTasks(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			if _, err := inspectSvc.CreateTask(ctx, &request.CreateInspectTaskReq{
 				Name: keyword, InspectorID: other.User.ID,
-				PlanDT: time.Now().Add(time.Hour).Format("2006-01-02 15:04:05"),
+				PlanDT: planDT.Format("2006-01-02 15:04:05"),
 			}); err != nil {
 				t.Fatalf("创建任务失败: %v", err)
 			}
