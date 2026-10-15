@@ -133,34 +133,31 @@ services:
       - ./frontend/nginx.compose.conf:/etc/nginx/conf.d/default.conf:ro
     networks: [ai-camera]
 
-  # ── 以下为 v0.2.0 规划服务，当前代码尚不存在，先以注释占位 ──────────
-  #
-  # zlm:                     # ZLMediaKit —— 收 RTP/PS、解复用、转 WebRTC/FLV/HLS、录像
-  #   profiles: [gb28181]
-  #   image: zlmediakit/zlmediakit:master
-  #   container_name: ai-camera-zlm
-  #   restart: unless-stopped
-  #   ports:
-  #     - "1935:1935"          # RTMP
-  #     - "8082:80"            # HTTP-FLV / HLS / WHEP
-  #     - "554:554"            # RTSP
-  #     - "${ZLM_RTP_PORT:-10000}:10000/udp"   # ★ 单端口模式：只映射 1 个 RTP 端口
-  #     - "${ZLM_RTP_PORT:-10000}:10000/tcp"   #   TCP-PASSIVE 也需要（设备主动连进来）
-  #   volumes:
-  #     - ./deploy/zlm/config.ini:/opt/media/conf/config.ini:ro
-  #     - zlmrecord:/opt/media/bin/www/record
-  #   environment:
-  #     TZ: Asia/Shanghai
-  #   networks: [ai-camera]
-  #
-  # ⚠️ 为什么是「一个端口」而不是端口段 —— 见设计文档 §2.2：
-  #   ZLM 的 rtp.enable=false（单端口模式）下所有流共用此端口，靠 SSRC 区分，
-  #   流名为 {gbDeviceId}_{gbChannelId}。
-  #   若改用多端口模式（rtp.enable=true），则需映射 30000-30500/udp 共 501 个端口，
-  #   Docker Desktop 会为每个端口起 userland proxy，且它不支持 hostNetwork —— 不可行。
-  #   WVP 自己的 docker 编排也正是用单端口模式规避此问题。
-  #   本项目因此采用单端口模式，并把 SSRC 全局唯一从「优化项」升为硬前提（§6.4）。
-  #
+  # ══════════════════════════════════════════════════════════════════
+  # 媒体服务（profile: gb28181）
+  # ══════════════════════════════════════════════════════════════════
+
+  zlm:
+    profiles: [gb28181]
+    image: zlmediakit/zlmediakit:master
+    container_name: ai-camera-zlm
+    restart: unless-stopped
+    ports:
+      - "${ZLM_HTTP_PORT:-8082}:80"          # HTTP-FLV / HLS / WHEP / REST API
+      - "${ZLM_RTP_PORT:-10000}:10000/udp"   # ★ 单端口模式：收流只用一个 UDP 端口
+      - "${ZLM_RTP_PORT:-10000}:10000/tcp"   #   设备用 TCP-PASSIVE 时走这条
+      - "8000:8000/udp"                      # WebRTC 收流端口
+    volumes:
+      # 覆盖镜像默认配置。★ 必须用 rw（不能加 :ro）——
+      # ZLM 启动时会校验并回写 config.ini（实测：secret 短于 32 字符会被自动改写）。
+      # 用 :ro 会因写入失败而报错。
+      - ./deploy/zlm/config.ini:/opt/media/conf/config.ini
+      - zlmrecord:/opt/media/bin/www/record
+    environment:
+      TZ: Asia/Shanghai
+    networks: [ai-camera]
+
+  # sipsvc / pipecat 仍为 v0.2.0 规划服务，代码尚未实现，见下：
   #
   # sipsvc:                  # GB28181 信令服务 —— 与 backend 同属一个工程、同一个镜像
   #   profiles: [gb28181]    # 一期固定 1 副本：TCP 连接与 SIP 事务/会话状态是节点本地的，
@@ -211,7 +208,7 @@ volumes:
   pgdata:
   redisdata:
   uploads:
-  # zlmrecord:               # v0.2.0：云端录像落盘
+  zlmrecord:               # v0.2.0：云端录像落盘
 
 networks:
   ai-camera:
