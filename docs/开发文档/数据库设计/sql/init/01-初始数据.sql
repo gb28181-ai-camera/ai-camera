@@ -1,0 +1,1609 @@
+-- ================================================================
+-- 01-初始数据 - AI Camera 智能监控平台 · v0.1.0
+-- 生成时间基准：2026-09-21
+--
+-- 幂等性：全部语句使用 INSERT ... SELECT ... WHERE NOT EXISTS 形式，
+--         可重复执行且不会产生重复数据。
+--
+-- 执行顺序（必须先建表，再灌数据）：
+--   psql -f sql/ddl/01..08-*.sql
+--   psql -f sql/init/01-初始数据.sql
+--
+-- 内容清单：
+--   1. 部门（总公司）
+--   2. 超级管理员用户 admin / 超级管理员角色 super_admin / 关联关系
+--   3. 完整 PC 菜单树（含按钮权限）+ 移动端菜单树
+--   4. ac_menu_api：契约文档路由总表中的全部鉴权端点（Casbin p 策略唯一来源）
+--   5. ac_role_menu_rel：super_admin 的角色-菜单授权
+--   6. casbin_rule：p 策略（super_admin × 全部接口）+ g 策略（admin → super_admin）
+--   7. 内置告警类型 3 条 / 内置设备模式 3 条
+--   8. 示例区域 3 条 / 示例风险类型 2 条 / 示例固件类型 2 条 / 示例系统参数
+--
+-- 注意：本文件不使用 $$ 美元引用与存储过程、且注释中不含分号，
+--       可被 tests/testutil/initdb 直接按分号分句逐条执行。
+-- ================================================================
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 1. 系统基础：部门
+-- ════════════════════════════════════════════════════════════════
+INSERT INTO ac_dept (id, parent_id, level, name, code, path, sequence, active, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, NULL, 1, '总公司', 'ROOT', '/1/', 1, TRUE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_dept WHERE id = 1);
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 2. 超级管理员用户与角色
+--    账号 admin，明文密码 admin123，哈希为 bcrypt cost=10。
+--    该哈希已用 golang.org/x/crypto/bcrypt（后端使用的库）
+--    与 bcryptjs 双向校验通过（CompareHashAndPassword == nil）。
+--    登录后请立即在「个人中心 → 修改密码」更换初始密码。
+-- ════════════════════════════════════════════════════════════════
+INSERT INTO ac_user (id, active, name, user_name, password_hash, email, phone, is_admin, dept_id, remark, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, '系统管理员', 'admin', '$2a$10$KZABO4S46mqPVXqbZu3pN.wOEpES4QJE9faWabkgtFy6EaF7tKV2.', '', '', TRUE, 1, '内置超级管理员账号，初始密码 admin123', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_user WHERE user_name = 'admin');
+
+INSERT INTO ac_role (id, active, sequence, name, code, description, data_permission, cross_dept_ids, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, 1, '超级管理员', 'super_admin', '拥有全部菜单与接口权限', 'all', '', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_role WHERE code = 'super_admin');
+
+INSERT INTO ac_user_role_rel (id, user_id, role_id)
+SELECT 1, 1, 1
+WHERE NOT EXISTS (SELECT 1 FROM ac_user_role_rel WHERE user_id = 1 AND role_id = 1);
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 3. 菜单树
+--    type：directory 目录 / menu 菜单 / button 按钮
+--    platform：pc 管理后台 / mobile 移动端
+--    说明：菜单 id 采用层级编码（父 811 → 按钮 8111），便于人工维护。
+-- ════════════════════════════════════════════════════════════════
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, NULL, 1, '首页', '/dashboard', 'HomeOutlined', 'dashboard/index', 'menu', 'pc', 'dashboard:view', '菜单', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 1);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 2, NULL, 1, '实时监控', '/monitor/realtime', 'VideoCameraOutlined', 'monitor/index', 'menu', 'pc', 'monitor:view', '菜单', 2, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 2);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 3, NULL, 1, 'AI风险', '/risk/ai-risk', 'WarningOutlined', 'risk/index', 'menu', 'pc', 'risk:view', '菜单', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 3);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 4, NULL, 1, 'AI监控', '/risk/ai-monitor', 'RobotOutlined', 'ai-monitor/index', 'menu', 'pc', 'ai-monitor:view', '菜单', 4, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 4);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 5, NULL, 1, '风险统计', '/risk-stats', 'AreaChartOutlined', '', 'directory', 'pc', 'risk-stats:view', '目录', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 5);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 6, NULL, 1, '巡检中心', '/inspect', 'SafetyCertificateOutlined', '', 'directory', 'pc', 'inspect:view', '目录', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 6);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 7, NULL, 1, '统计分析', '/analysis', 'BarChartOutlined', '', 'directory', 'pc', 'analysis:view', '目录', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 7);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8, NULL, 1, '系统设置', '/system', 'SettingOutlined', '', 'directory', 'pc', 'system:view', '目录', 8, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9, NULL, 1, '通用能力', '/common', 'AppstoreOutlined', '', 'directory', 'pc', 'common:view', '目录', 9, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 51, '5', 2, '风险监控', '/risk/monitor', 'WarningOutlined', 'risk-stats/risk-monitor', 'menu', 'pc', 'risk-monitor:view', '菜单', 51, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 51);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 52, '5', 2, '设备监控', '/device/monitor', 'DesktopOutlined', 'risk-stats/device-monitor', 'menu', 'pc', 'device-monitor:view', '菜单', 52, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 52);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 53, '5', 2, 'GIS查看', '/device/gis', 'GlobalOutlined', 'risk-stats/gis', 'menu', 'pc', 'gis:view', '菜单', 53, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 53);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 54, '5', 2, '设备历史记录', '/device/history', 'HistoryOutlined', 'risk-stats/device-history', 'menu', 'pc', 'device-history:view', '菜单', 54, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 54);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 55, '5', 2, '设备告警', '/alarm/list', 'BellOutlined', 'risk-stats/alarm', 'menu', 'pc', 'alarm:view', '菜单', 55, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 55);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 56, '5', 2, '物联网卡监控', '/device/iot-card-monitor', 'SimOutlined', 'risk-stats/iot-card-monitor', 'menu', 'pc', 'iot-card-monitor:view', '菜单', 56, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 56);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 61, '6', 2, '巡检任务管理', '/inspect/task', 'ScheduleOutlined', 'inspect/tasks', 'menu', 'pc', 'inspect-task:view', '菜单', 61, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 61);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 62, '6', 2, '巡检记录', '/inspect/record', 'FileTextOutlined', 'inspect/records', 'menu', 'pc', 'inspect-record:view', '菜单', 62, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 62);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 71, '7', 2, '风险统计分析', '/stats/risk', 'LineChartOutlined', 'analysis/risk', 'menu', 'pc', 'stats-risk:view', '菜单', 71, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 71);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 72, '7', 2, '设备告警分析', '/stats/alarm', 'PieChartOutlined', 'analysis/alarm', 'menu', 'pc', 'stats-alarm:view', '菜单', 72, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 72);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 73, '7', 2, '可视化大屏', '/screen', 'FundProjectionScreenOutlined', 'analysis/screen', 'menu', 'pc', 'screen:view', '菜单', 73, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 73);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 81, '8', 2, '资源管理', '/system/resource', 'ClusterOutlined', '', 'directory', 'pc', 'resource:view', '目录', 81, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 81);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 82, '8', 2, '告警设置', '/system/alarm-setting', 'AlertOutlined', '', 'directory', 'pc', 'alarm-setting-dir:view', '目录', 82, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 82);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 83, '8', 2, '升级管理', '/system/upgrade', 'CloudUploadOutlined', '', 'directory', 'pc', 'upgrade:view', '目录', 83, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 83);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 84, '8', 2, '基础信息管理', '/system/basic', 'ProfileOutlined', '', 'directory', 'pc', 'basic:view', '目录', 84, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 84);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 85, '8', 2, '第三方平台管理', '/system/thirdparty', 'ApiOutlined', '', 'directory', 'pc', 'thirdparty:view', '目录', 85, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 85);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 86, '8', 2, '系统管理', '/system/management', 'TeamOutlined', '', 'directory', 'pc', 'management:view', '目录', 86, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 86);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 811, '81', 3, '设备管理', '/settings/device', 'DesktopOutlined', 'system/resource/devices', 'menu', 'pc', 'device:view', '菜单', 811, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 811);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 812, '81', 3, '语音配置管理', '/settings/voice', 'SoundOutlined', 'system/resource/voice-configs', 'menu', 'pc', 'voice-config:view', '菜单', 812, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 812);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 813, '81', 3, '物联网卡管理', '/settings/iot-card', 'SimOutlined', 'system/resource/iot-cards', 'menu', 'pc', 'iot-card:view', '菜单', 813, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 813);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 814, '81', 3, '物联网卡更换记录', '/settings/iot-card-replace', 'SwapOutlined', 'system/resource/iot-card-replace-logs', 'menu', 'pc', 'iot-card-replace:view', '菜单', 814, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 814);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 815, '81', 3, '设备模式管理', '/settings/device-mode', 'ControlOutlined', 'system/resource/device-modes', 'menu', 'pc', 'device-mode:view', '菜单', 815, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 815);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 821, '82', 3, '设备告警设置', '/settings/alarm', 'BellOutlined', 'system/alarm-setting/alarm-settings', 'menu', 'pc', 'alarm-setting:view', '菜单', 821, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 821);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 822, '82', 3, '风险通知设置', '/settings/risk-notify', 'NotificationOutlined', 'system/alarm-setting/risk-notify-settings', 'menu', 'pc', 'risk-notify:view', '菜单', 822, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 822);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 831, '83', 3, '设备升级管理', '/settings/upgrade', 'CloudUploadOutlined', 'system/upgrade/devices', 'menu', 'pc', 'upgrade-device:view', '菜单', 831, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 831);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 832, '83', 3, '固件管理', '/settings/firmware', 'CodeOutlined', 'system/upgrade/firmwares', 'menu', 'pc', 'firmware:view', '菜单', 832, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 832);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 833, '83', 3, '模型管理', '/settings/model', 'ExperimentOutlined', 'system/upgrade/models', 'menu', 'pc', 'ai-model:view', '菜单', 833, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 833);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 834, '83', 3, '固件类型管理', '/settings/firmware-type', 'TagsOutlined', 'system/upgrade/firmware-types', 'menu', 'pc', 'firmware-type:view', '菜单', 834, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 834);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 841, '84', 3, '区域管理', '/basic/region', 'EnvironmentOutlined', 'system/basic/regions', 'menu', 'pc', 'region:view', '菜单', 841, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 841);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 842, '84', 3, '风险类型管理', '/basic/risk-type', 'WarningOutlined', 'system/basic/risk-types', 'menu', 'pc', 'risk-type:view', '菜单', 842, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 842);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 843, '84', 3, '告警类型管理', '/basic/alarm-type', 'BellOutlined', 'system/basic/alarm-types', 'menu', 'pc', 'alarm-type:view', '菜单', 843, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 843);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 851, '85', 3, '个推账号绑定', '/settings/getui', 'MobileOutlined', 'system/thirdparty/getui', 'menu', 'pc', 'getui:view', '菜单', 851, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 851);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 852, '85', 3, '腾讯云短信配置', '/settings/sms', 'MessageOutlined', 'system/thirdparty/sms', 'menu', 'pc', 'sms:view', '菜单', 852, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 852);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 861, '86', 3, '个人中心', '/profile', 'UserOutlined', 'system/management/profile', 'menu', 'pc', 'profile:view', '菜单', 861, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 861);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 862, '86', 3, '用户管理', '/system/user', 'UserAddOutlined', 'system/management/users', 'menu', 'pc', 'user:view', '菜单', 862, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 862);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 863, '86', 3, '菜单管理', '/system/menu', 'MenuOutlined', 'system/management/menus', 'menu', 'pc', 'menu:view', '菜单', 863, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 863);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 864, '86', 3, '角色管理', '/system/role', 'SafetyCertificateOutlined', 'system/management/roles', 'menu', 'pc', 'role:view', '菜单', 864, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 864);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 865, '86', 3, '部门管理', '/system/dept', 'ApartmentOutlined', 'system/management/depts', 'menu', 'pc', 'dept:view', '菜单', 865, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 865);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 866, '86', 3, '岗位管理', '/system/post', 'IdcardOutlined', 'system/management/posts', 'menu', 'pc', 'post:view', '菜单', 866, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 866);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 867, '86', 3, '操作日志', '/system/operation-log', 'FileSearchOutlined', 'system/management/logs', 'menu', 'pc', 'log:view', '菜单', 867, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 867);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 868, '86', 3, '系统通知', '/system/notification', 'NotificationOutlined', 'system/management/notifications', 'menu', 'pc', 'notification:view', '菜单', 868, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 868);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 869, '86', 3, '参数配置', '/system/config', 'ToolOutlined', 'system/management/configs', 'menu', 'pc', 'config:view', '菜单', 869, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 869);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 91, '9', 2, '文件上传', '', '', '', 'menu', 'pc', 'upload:file', '菜单', 91, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 91);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 92, '9', 2, '音频上传', '', '', '', 'menu', 'pc', 'upload:audio', '菜单', 92, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 92);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 511, '51', 4, '处理风险', '', '', '', 'button', 'pc', 'risk:handle', '按钮', 511, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 511);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 512, '51', 4, '检测准确性', '', '', '', 'button', 'pc', 'risk:accurate', '按钮', 512, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 512);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 513, '51', 4, '删除风险', '', '', '', 'button', 'pc', 'risk:delete', '按钮', 513, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 513);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 514, '51', 4, '导出风险', '', '', '', 'button', 'pc', 'risk:export', '按钮', 514, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 514);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 551, '55', 4, '处理告警', '', '', '', 'button', 'pc', 'alarm:handle', '按钮', 551, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 551);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 552, '55', 4, '删除告警', '', '', '', 'button', 'pc', 'alarm:delete', '按钮', 552, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 552);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 553, '55', 4, '导出告警', '', '', '', 'button', 'pc', 'alarm:export', '按钮', 553, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 553);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 561, '56', 4, '导出物联网卡监控', '', '', '', 'button', 'pc', 'iot-card-monitor:export', '按钮', 561, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 561);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 611, '61', 4, '新增巡检任务', '', '', '', 'button', 'pc', 'inspect-task:create', '按钮', 611, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 611);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 612, '61', 4, '编辑巡检任务', '', '', '', 'button', 'pc', 'inspect-task:update', '按钮', 612, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 612);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 613, '61', 4, '删除巡检任务', '', '', '', 'button', 'pc', 'inspect-task:delete', '按钮', 613, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 613);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 614, '61', 4, '导出巡检任务', '', '', '', 'button', 'pc', 'inspect-task:export', '按钮', 614, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 614);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 621, '62', 4, '导出巡检记录', '', '', '', 'button', 'pc', 'inspect-record:export', '按钮', 621, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 621);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 711, '71', 4, '导出风险统计', '', '', '', 'button', 'pc', 'stats-risk:export', '按钮', 711, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 711);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 721, '72', 4, '导出告警分析', '', '', '', 'button', 'pc', 'stats-alarm:export', '按钮', 721, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 721);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8111, '811', 4, '新增设备', '', '', '', 'button', 'pc', 'device:create', '按钮', 8111, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8111);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8112, '811', 4, '编辑设备', '', '', '', 'button', 'pc', 'device:update', '按钮', 8112, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8112);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8113, '811', 4, '删除设备', '', '', '', 'button', 'pc', 'device:delete', '按钮', 8113, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8113);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8114, '811', 4, '切换设备模式', '', '', '', 'button', 'pc', 'device:mode', '按钮', 8114, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8114);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8115, '811', 4, '同步设备时间', '', '', '', 'button', 'pc', 'device:sync-time', '按钮', 8115, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8115);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8116, '811', 4, '实时监控开关', '', '', '', 'button', 'pc', 'device:monitor', '按钮', 8116, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8116);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8117, '811', 4, '导出设备', '', '', '', 'button', 'pc', 'device:export', '按钮', 8117, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8117);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8121, '812', 4, '新增语音配置', '', '', '', 'button', 'pc', 'voice-config:create', '按钮', 8121, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8121);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8122, '812', 4, '编辑语音配置', '', '', '', 'button', 'pc', 'voice-config:update', '按钮', 8122, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8122);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8123, '812', 4, '删除语音配置', '', '', '', 'button', 'pc', 'voice-config:delete', '按钮', 8123, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8123);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8131, '813', 4, '新增物联网卡', '', '', '', 'button', 'pc', 'iot-card:create', '按钮', 8131, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8131);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8132, '813', 4, '编辑物联网卡', '', '', '', 'button', 'pc', 'iot-card:update', '按钮', 8132, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8132);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8133, '813', 4, '删除物联网卡', '', '', '', 'button', 'pc', 'iot-card:delete', '按钮', 8133, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8133);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8134, '813', 4, '导出物联网卡', '', '', '', 'button', 'pc', 'iot-card:export', '按钮', 8134, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8134);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8141, '814', 4, '更换物联网卡', '', '', '', 'button', 'pc', 'iot-card-replace:create', '按钮', 8141, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8141);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8142, '814', 4, '导出更换记录', '', '', '', 'button', 'pc', 'iot-card-replace:export', '按钮', 8142, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8142);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8151, '815', 4, '新增设备模式', '', '', '', 'button', 'pc', 'device-mode:create', '按钮', 8151, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8151);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8152, '815', 4, '编辑设备模式', '', '', '', 'button', 'pc', 'device-mode:update', '按钮', 8152, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8152);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8153, '815', 4, '删除设备模式', '', '', '', 'button', 'pc', 'device-mode:delete', '按钮', 8153, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8153);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8211, '821', 4, '新增告警设置', '', '', '', 'button', 'pc', 'alarm-setting:create', '按钮', 8211, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8211);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8212, '821', 4, '编辑告警设置', '', '', '', 'button', 'pc', 'alarm-setting:update', '按钮', 8212, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8212);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8213, '821', 4, '删除告警设置', '', '', '', 'button', 'pc', 'alarm-setting:delete', '按钮', 8213, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8213);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8214, '821', 4, '关闭全部告警通知', '', '', '', 'button', 'pc', 'alarm-setting:disable-all', '按钮', 8214, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8214);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8221, '822', 4, '新增风险通知', '', '', '', 'button', 'pc', 'risk-notify:create', '按钮', 8221, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8221);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8222, '822', 4, '编辑风险通知', '', '', '', 'button', 'pc', 'risk-notify:update', '按钮', 8222, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8222);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8223, '822', 4, '删除风险通知', '', '', '', 'button', 'pc', 'risk-notify:delete', '按钮', 8223, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8223);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8224, '822', 4, '关闭全部风险通知', '', '', '', 'button', 'pc', 'risk-notify:disable-all', '按钮', 8224, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8224);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8311, '831', 4, '下发升级', '', '', '', 'button', 'pc', 'upgrade-device:create', '按钮', 8311, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8311);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8312, '831', 4, '取消升级计划', '', '', '', 'button', 'pc', 'upgrade-device:cancel', '按钮', 8312, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8312);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8313, '831', 4, '导出升级记录', '', '', '', 'button', 'pc', 'upgrade-device:export', '按钮', 8313, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8313);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8321, '832', 4, '新增固件', '', '', '', 'button', 'pc', 'firmware:create', '按钮', 8321, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8321);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8322, '832', 4, '编辑固件', '', '', '', 'button', 'pc', 'firmware:update', '按钮', 8322, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8322);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8323, '832', 4, '删除固件', '', '', '', 'button', 'pc', 'firmware:delete', '按钮', 8323, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8323);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8331, '833', 4, '新增模型', '', '', '', 'button', 'pc', 'ai-model:create', '按钮', 8331, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8331);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8332, '833', 4, '编辑模型', '', '', '', 'button', 'pc', 'ai-model:update', '按钮', 8332, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8332);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8333, '833', 4, '删除模型', '', '', '', 'button', 'pc', 'ai-model:delete', '按钮', 8333, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8333);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8341, '834', 4, '新增固件类型', '', '', '', 'button', 'pc', 'firmware-type:create', '按钮', 8341, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8341);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8342, '834', 4, '编辑固件类型', '', '', '', 'button', 'pc', 'firmware-type:update', '按钮', 8342, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8342);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8343, '834', 4, '删除固件类型', '', '', '', 'button', 'pc', 'firmware-type:delete', '按钮', 8343, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8343);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8411, '841', 4, '新增区域', '', '', '', 'button', 'pc', 'region:create', '按钮', 8411, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8411);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8412, '841', 4, '编辑区域', '', '', '', 'button', 'pc', 'region:update', '按钮', 8412, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8412);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8413, '841', 4, '删除区域', '', '', '', 'button', 'pc', 'region:delete', '按钮', 8413, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8413);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8414, '841', 4, '导出区域', '', '', '', 'button', 'pc', 'region:export', '按钮', 8414, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8414);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8421, '842', 4, '新增风险类型', '', '', '', 'button', 'pc', 'risk-type:create', '按钮', 8421, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8421);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8422, '842', 4, '编辑风险类型', '', '', '', 'button', 'pc', 'risk-type:update', '按钮', 8422, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8422);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8423, '842', 4, '删除风险类型', '', '', '', 'button', 'pc', 'risk-type:delete', '按钮', 8423, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8423);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8431, '843', 4, '新增告警类型', '', '', '', 'button', 'pc', 'alarm-type:create', '按钮', 8431, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8431);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8432, '843', 4, '编辑告警类型', '', '', '', 'button', 'pc', 'alarm-type:update', '按钮', 8432, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8432);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8433, '843', 4, '删除告警类型', '', '', '', 'button', 'pc', 'alarm-type:delete', '按钮', 8433, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8433);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8511, '851', 4, '修改个推配置', '', '', '', 'button', 'pc', 'getui:update', '按钮', 8511, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8511);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8521, '852', 4, '修改短信配置', '', '', '', 'button', 'pc', 'sms:update', '按钮', 8521, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8521);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8611, '861', 4, '修改个人资料', '', '', '', 'button', 'pc', 'profile:update', '按钮', 8611, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8611);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8612, '861', 4, '修改密码', '', '', '', 'button', 'pc', 'profile:password', '按钮', 8612, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8612);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8621, '862', 4, '新增用户', '', '', '', 'button', 'pc', 'user:create', '按钮', 8621, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8621);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8622, '862', 4, '编辑用户', '', '', '', 'button', 'pc', 'user:update', '按钮', 8622, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8622);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8623, '862', 4, '删除用户', '', '', '', 'button', 'pc', 'user:delete', '按钮', 8623, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8623);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8624, '862', 4, '重置密码', '', '', '', 'button', 'pc', 'user:reset-password', '按钮', 8624, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8624);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8625, '862', 4, '启用停用用户', '', '', '', 'button', 'pc', 'user:enable', '按钮', 8625, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8625);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8626, '862', 4, '导出用户', '', '', '', 'button', 'pc', 'user:export', '按钮', 8626, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8626);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8631, '863', 4, '新增菜单', '', '', '', 'button', 'pc', 'menu:create', '按钮', 8631, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8631);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8632, '863', 4, '编辑菜单', '', '', '', 'button', 'pc', 'menu:update', '按钮', 8632, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8632);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8633, '863', 4, '删除菜单', '', '', '', 'button', 'pc', 'menu:delete', '按钮', 8633, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8633);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8634, '863', 4, '菜单接口绑定', '', '', '', 'button', 'pc', 'menu:api', '按钮', 8634, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8634);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8641, '864', 4, '新增角色', '', '', '', 'button', 'pc', 'role:create', '按钮', 8641, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8641);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8642, '864', 4, '编辑角色', '', '', '', 'button', 'pc', 'role:update', '按钮', 8642, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8642);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8643, '864', 4, '删除角色', '', '', '', 'button', 'pc', 'role:delete', '按钮', 8643, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8643);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8644, '864', 4, '分配权限', '', '', '', 'button', 'pc', 'role:assign', '按钮', 8644, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8644);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8651, '865', 4, '新增部门', '', '', '', 'button', 'pc', 'dept:create', '按钮', 8651, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8651);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8652, '865', 4, '编辑部门', '', '', '', 'button', 'pc', 'dept:update', '按钮', 8652, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8652);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8653, '865', 4, '删除部门', '', '', '', 'button', 'pc', 'dept:delete', '按钮', 8653, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8653);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8661, '866', 4, '新增岗位', '', '', '', 'button', 'pc', 'post:create', '按钮', 8661, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8661);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8662, '866', 4, '编辑岗位', '', '', '', 'button', 'pc', 'post:update', '按钮', 8662, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8662);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8663, '866', 4, '删除岗位', '', '', '', 'button', 'pc', 'post:delete', '按钮', 8663, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8663);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8671, '867', 4, '导出日志', '', '', '', 'button', 'pc', 'log:export', '按钮', 8671, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8671);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8672, '867', 4, '删除日志', '', '', '', 'button', 'pc', 'log:delete', '按钮', 8672, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8672);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8673, '867', 4, '清空日志', '', '', '', 'button', 'pc', 'log:clear', '按钮', 8673, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8673);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8681, '868', 4, '标记已读', '', '', '', 'button', 'pc', 'notification:read', '按钮', 8681, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8681);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8682, '868', 4, '删除通知', '', '', '', 'button', 'pc', 'notification:delete', '按钮', 8682, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8682);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8691, '869', 4, '新增参数', '', '', '', 'button', 'pc', 'config:create', '按钮', 8691, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8691);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8692, '869', 4, '编辑参数', '', '', '', 'button', 'pc', 'config:update', '按钮', 8692, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8692);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8693, '869', 4, '删除参数', '', '', '', 'button', 'pc', 'config:delete', '按钮', 8693, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8693);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8694, '869', 4, '启用停用参数', '', '', '', 'button', 'pc', 'config:enable', '按钮', 8694, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8694);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 101, NULL, 1, '首页', '/m/home', 'home', 'pages/home/index', 'menu', 'mobile', 'app:home', '菜单', 101, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 101);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 102, NULL, 1, '风险', '/m/risks', 'warning', 'pages/risk/index', 'menu', 'mobile', 'app:risk', '菜单', 102, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 102);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 103, NULL, 1, '告警', '/m/alarms', 'bell', 'pages/alarm/index', 'menu', 'mobile', 'app:alarm', '菜单', 103, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 103);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 104, NULL, 1, '巡检', '/m/inspect', 'clipboard', 'pages/inspect/index', 'menu', 'mobile', 'app:inspect', '菜单', 104, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 104);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 105, NULL, 1, '设备', '/m/devices', 'camera', 'pages/device/index', 'menu', 'mobile', 'app:device', '菜单', 105, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 105);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 106, NULL, 1, '通知', '/m/notifications', 'message', 'pages/notification/index', 'menu', 'mobile', 'app:notice', '菜单', 106, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 106);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 107, NULL, 1, '我的', '/m/profile', 'user', 'pages/profile/index', 'menu', 'mobile', 'app:profile', '菜单', 107, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 107);
+
+-- 通用能力目录及上传菜单在侧边栏隐藏（仅作权限载体）
+UPDATE ac_menu SET hidden = TRUE WHERE id IN (9, 91, 92);
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 4. 菜单-接口绑定（ac_menu_api）
+--    本表是 Casbin p 策略的唯一来源，必须覆盖契约文档路由总表中
+--    全部需要鉴权的端点。以下端点不在此表内（不经 Casbin 校验）：
+--      POST /web/auth/login          公开接口（登录）
+--      POST /app/auth/login          公开接口（移动端登录）
+--      GET  /health                  公开接口（健康检查）
+--      POST /web/risks/report        设备回调（ApiKeyAuth 分组）
+--      POST /web/alarms/report       设备回调（ApiKeyAuth 分组）
+--      POST /web/devices/:id/heartbeat 设备心跳（ApiKeyAuth 分组）
+--    同一接口可绑定到多个菜单（如实时监控与设备管理都要读设备列表），
+--    Casbin p 策略按 (角色, 路径, 方法) 唯一，重复绑定不会放大权限。
+-- ════════════════════════════════════════════════════════════════
+
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, 861, 'GET', '/web/profile', '获取个人信息', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 861 AND method = 'GET' AND path = '/web/profile');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 2, 8611, 'PUT', '/web/profile', '修改个人信息', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8611 AND method = 'PUT' AND path = '/web/profile');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 3, 8612, 'PUT', '/web/profile/password', '修改密码', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8612 AND method = 'PUT' AND path = '/web/profile/password');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 4, 861, 'GET', '/web/profile/menus', '获取当前用户菜单树', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 861 AND method = 'GET' AND path = '/web/profile/menus');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 5, 861, 'GET', '/web/profile/api-keys', '查询API密钥列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 861 AND method = 'GET' AND path = '/web/profile/api-keys');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 6, 861, 'POST', '/web/profile/api-keys', '生成API密钥', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 861 AND method = 'POST' AND path = '/web/profile/api-keys');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 7, 861, 'DELETE', '/web/profile/api-keys/:id', '删除API密钥', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 861 AND method = 'DELETE' AND path = '/web/profile/api-keys/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 8, 862, 'GET', '/web/system/users', '分页查询用户', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 862 AND method = 'GET' AND path = '/web/system/users');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9, 862, 'GET', '/web/system/users/options', '用户下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 862 AND method = 'GET' AND path = '/web/system/users/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 10, 862, 'GET', '/web/system/users/:id', '查询用户详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 862 AND method = 'GET' AND path = '/web/system/users/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 11, 8621, 'POST', '/web/system/users', '新增用户', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8621 AND method = 'POST' AND path = '/web/system/users');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 12, 8622, 'PUT', '/web/system/users/:id', '编辑用户', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8622 AND method = 'PUT' AND path = '/web/system/users/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 13, 8623, 'DELETE', '/web/system/users/:id', '删除用户', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8623 AND method = 'DELETE' AND path = '/web/system/users/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 14, 8625, 'PUT', '/web/system/users/:id/enable', '启用用户', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8625 AND method = 'PUT' AND path = '/web/system/users/:id/enable');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 15, 8625, 'PUT', '/web/system/users/:id/disable', '停用用户', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8625 AND method = 'PUT' AND path = '/web/system/users/:id/disable');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 16, 8624, 'PUT', '/web/system/users/:id/reset-password', '重置用户密码', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8624 AND method = 'PUT' AND path = '/web/system/users/:id/reset-password');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 17, 864, 'GET', '/web/system/roles', '分页查询角色', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 864 AND method = 'GET' AND path = '/web/system/roles');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 18, 864, 'GET', '/web/system/roles/options', '角色下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 864 AND method = 'GET' AND path = '/web/system/roles/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 19, 864, 'GET', '/web/system/roles/:id', '查询角色详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 864 AND method = 'GET' AND path = '/web/system/roles/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 20, 8641, 'POST', '/web/system/roles', '新增角色', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8641 AND method = 'POST' AND path = '/web/system/roles');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 21, 8642, 'PUT', '/web/system/roles/:id', '编辑角色', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8642 AND method = 'PUT' AND path = '/web/system/roles/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 22, 8643, 'DELETE', '/web/system/roles/:id', '删除角色', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8643 AND method = 'DELETE' AND path = '/web/system/roles/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 23, 8644, 'GET', '/web/system/roles/:id/menus', '查询角色已授权菜单', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8644 AND method = 'GET' AND path = '/web/system/roles/:id/menus');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 24, 8644, 'PUT', '/web/system/roles/:id/menus', '分配角色菜单', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8644 AND method = 'PUT' AND path = '/web/system/roles/:id/menus');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 25, 8644, 'GET', '/web/system/roles/:id/depts', '查询角色已关联部门', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8644 AND method = 'GET' AND path = '/web/system/roles/:id/depts');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 26, 8644, 'PUT', '/web/system/roles/:id/depts', '分配角色部门', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8644 AND method = 'PUT' AND path = '/web/system/roles/:id/depts');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 27, 8644, 'GET', '/web/system/roles/:id/posts', '查询角色已关联岗位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8644 AND method = 'GET' AND path = '/web/system/roles/:id/posts');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 28, 8644, 'PUT', '/web/system/roles/:id/posts', '分配角色岗位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8644 AND method = 'PUT' AND path = '/web/system/roles/:id/posts');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 29, 8644, 'GET', '/web/system/roles/:id/users', '查询角色已关联用户', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8644 AND method = 'GET' AND path = '/web/system/roles/:id/users');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 30, 8644, 'PUT', '/web/system/roles/:id/users', '分配角色用户', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8644 AND method = 'PUT' AND path = '/web/system/roles/:id/users');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 31, 863, 'GET', '/web/system/menus', '查询菜单树', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 863 AND method = 'GET' AND path = '/web/system/menus');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 32, 863, 'GET', '/web/system/menus/:id', '查询菜单详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 863 AND method = 'GET' AND path = '/web/system/menus/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 33, 8631, 'POST', '/web/system/menus', '新增菜单', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8631 AND method = 'POST' AND path = '/web/system/menus');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 34, 8632, 'PUT', '/web/system/menus/:id', '编辑菜单', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8632 AND method = 'PUT' AND path = '/web/system/menus/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 35, 8633, 'DELETE', '/web/system/menus/:id', '删除菜单', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8633 AND method = 'DELETE' AND path = '/web/system/menus/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 36, 8634, 'GET', '/web/system/menus/:id/apis', '查询菜单绑定接口', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8634 AND method = 'GET' AND path = '/web/system/menus/:id/apis');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 37, 8634, 'POST', '/web/system/menus/:id/apis', '新增菜单接口绑定', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8634 AND method = 'POST' AND path = '/web/system/menus/:id/apis');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 38, 8634, 'DELETE', '/web/system/menus/apis/:apiId', '删除菜单接口绑定', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8634 AND method = 'DELETE' AND path = '/web/system/menus/apis/:apiId');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 39, 865, 'GET', '/web/system/depts', '查询部门树', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 865 AND method = 'GET' AND path = '/web/system/depts');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 40, 865, 'GET', '/web/system/depts/options', '部门下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 865 AND method = 'GET' AND path = '/web/system/depts/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 41, 865, 'GET', '/web/system/depts/:id', '查询部门详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 865 AND method = 'GET' AND path = '/web/system/depts/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 42, 8651, 'POST', '/web/system/depts', '新增部门', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8651 AND method = 'POST' AND path = '/web/system/depts');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 43, 8652, 'PUT', '/web/system/depts/:id', '编辑部门', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8652 AND method = 'PUT' AND path = '/web/system/depts/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 44, 8653, 'DELETE', '/web/system/depts/:id', '删除部门', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8653 AND method = 'DELETE' AND path = '/web/system/depts/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 45, 866, 'GET', '/web/system/posts', '分页查询岗位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 866 AND method = 'GET' AND path = '/web/system/posts');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 46, 866, 'GET', '/web/system/posts/options', '岗位下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 866 AND method = 'GET' AND path = '/web/system/posts/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 47, 866, 'GET', '/web/system/posts/:id', '查询岗位详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 866 AND method = 'GET' AND path = '/web/system/posts/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 48, 8661, 'POST', '/web/system/posts', '新增岗位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8661 AND method = 'POST' AND path = '/web/system/posts');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 49, 8662, 'PUT', '/web/system/posts/:id', '编辑岗位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8662 AND method = 'PUT' AND path = '/web/system/posts/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 50, 8663, 'DELETE', '/web/system/posts/:id', '删除岗位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8663 AND method = 'DELETE' AND path = '/web/system/posts/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 51, 869, 'GET', '/web/system/configs', '查询参数列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 869 AND method = 'GET' AND path = '/web/system/configs');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 52, 8691, 'POST', '/web/system/configs', '新增参数', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8691 AND method = 'POST' AND path = '/web/system/configs');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 53, 8692, 'PUT', '/web/system/configs/:id', '编辑参数', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8692 AND method = 'PUT' AND path = '/web/system/configs/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 54, 8693, 'DELETE', '/web/system/configs/:id', '删除参数', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8693 AND method = 'DELETE' AND path = '/web/system/configs/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 55, 8694, 'PUT', '/web/system/configs/:id/enable', '启用参数', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8694 AND method = 'PUT' AND path = '/web/system/configs/:id/enable');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 56, 8694, 'PUT', '/web/system/configs/:id/disable', '停用参数', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8694 AND method = 'PUT' AND path = '/web/system/configs/:id/disable');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 57, 867, 'GET', '/web/system/logs', '分页查询操作日志', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 867 AND method = 'GET' AND path = '/web/system/logs');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 58, 867, 'GET', '/web/system/logs/:id', '查询操作日志详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 867 AND method = 'GET' AND path = '/web/system/logs/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 59, 8672, 'DELETE', '/web/system/logs/:id', '删除操作日志', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8672 AND method = 'DELETE' AND path = '/web/system/logs/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 60, 8673, 'DELETE', '/web/system/logs/clear', '清空操作日志', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8673 AND method = 'DELETE' AND path = '/web/system/logs/clear');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 61, 8671, 'GET', '/web/system/logs/export', '导出操作日志', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8671 AND method = 'GET' AND path = '/web/system/logs/export');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 62, 868, 'GET', '/web/system/notifications', '分页查询系统通知', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 868 AND method = 'GET' AND path = '/web/system/notifications');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 63, 868, 'GET', '/web/system/notifications/unread-count', '查询未读通知数', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 868 AND method = 'GET' AND path = '/web/system/notifications/unread-count');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 64, 8681, 'PUT', '/web/system/notifications/:id/read', '标记通知已读', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8681 AND method = 'PUT' AND path = '/web/system/notifications/:id/read');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 65, 8681, 'PUT', '/web/system/notifications/read-all', '全部标记已读', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8681 AND method = 'PUT' AND path = '/web/system/notifications/read-all');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 66, 8682, 'DELETE', '/web/system/notifications/:id', '删除通知', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8682 AND method = 'DELETE' AND path = '/web/system/notifications/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 67, 841, 'GET', '/web/basic/regions', '分页查询区域', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 841 AND method = 'GET' AND path = '/web/basic/regions');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 68, 841, 'GET', '/web/basic/regions/options', '区域下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 841 AND method = 'GET' AND path = '/web/basic/regions/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 69, 841, 'GET', '/web/basic/regions/:id', '查询区域详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 841 AND method = 'GET' AND path = '/web/basic/regions/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 70, 8411, 'POST', '/web/basic/regions', '新增区域', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8411 AND method = 'POST' AND path = '/web/basic/regions');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 71, 8412, 'PUT', '/web/basic/regions/:id', '编辑区域', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8412 AND method = 'PUT' AND path = '/web/basic/regions/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 72, 8413, 'DELETE', '/web/basic/regions/:id', '删除区域', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8413 AND method = 'DELETE' AND path = '/web/basic/regions/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 73, 842, 'GET', '/web/basic/risk-types', '分页查询风险类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 842 AND method = 'GET' AND path = '/web/basic/risk-types');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 74, 842, 'GET', '/web/basic/risk-types/options', '风险类型下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 842 AND method = 'GET' AND path = '/web/basic/risk-types/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 75, 842, 'GET', '/web/basic/risk-types/:id', '查询风险类型详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 842 AND method = 'GET' AND path = '/web/basic/risk-types/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 76, 8421, 'POST', '/web/basic/risk-types', '新增风险类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8421 AND method = 'POST' AND path = '/web/basic/risk-types');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 77, 8422, 'PUT', '/web/basic/risk-types/:id', '编辑风险类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8422 AND method = 'PUT' AND path = '/web/basic/risk-types/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 78, 8423, 'DELETE', '/web/basic/risk-types/:id', '删除风险类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8423 AND method = 'DELETE' AND path = '/web/basic/risk-types/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 79, 843, 'GET', '/web/basic/alarm-types', '分页查询告警类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 843 AND method = 'GET' AND path = '/web/basic/alarm-types');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 80, 843, 'GET', '/web/basic/alarm-types/options', '告警类型下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 843 AND method = 'GET' AND path = '/web/basic/alarm-types/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 81, 843, 'GET', '/web/basic/alarm-types/:id', '查询告警类型详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 843 AND method = 'GET' AND path = '/web/basic/alarm-types/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 82, 8431, 'POST', '/web/basic/alarm-types', '新增告警类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8431 AND method = 'POST' AND path = '/web/basic/alarm-types');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 83, 8432, 'PUT', '/web/basic/alarm-types/:id', '编辑告警类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8432 AND method = 'PUT' AND path = '/web/basic/alarm-types/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 84, 8433, 'DELETE', '/web/basic/alarm-types/:id', '删除告警类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8433 AND method = 'DELETE' AND path = '/web/basic/alarm-types/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 85, 811, 'GET', '/web/devices', '分页查询设备', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 811 AND method = 'GET' AND path = '/web/devices');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 86, 811, 'GET', '/web/devices/options', '设备下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 811 AND method = 'GET' AND path = '/web/devices/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 87, 811, 'GET', '/web/devices/:id', '查询设备详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 811 AND method = 'GET' AND path = '/web/devices/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 88, 8111, 'POST', '/web/devices', '新增设备', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8111 AND method = 'POST' AND path = '/web/devices');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 89, 8112, 'PUT', '/web/devices/:id', '编辑设备', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8112 AND method = 'PUT' AND path = '/web/devices/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 90, 8113, 'DELETE', '/web/devices/:id', '删除设备', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8113 AND method = 'DELETE' AND path = '/web/devices/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 91, 8114, 'PUT', '/web/devices/:id/mode', '切换设备模式', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8114 AND method = 'PUT' AND path = '/web/devices/:id/mode');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 92, 8115, 'PUT', '/web/devices/:id/sync-time', '同步设备时间', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8115 AND method = 'PUT' AND path = '/web/devices/:id/sync-time');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 93, 8116, 'PUT', '/web/devices/:id/monitor', '开关实时监控', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8116 AND method = 'PUT' AND path = '/web/devices/:id/monitor');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 94, 54, 'GET', '/web/devices/history', '分页查询设备历史记录', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 54 AND method = 'GET' AND path = '/web/devices/history');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 95, 54, 'GET', '/web/devices/:id/history-chart', '设备历史曲线', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 54 AND method = 'GET' AND path = '/web/devices/:id/history-chart');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 96, 815, 'GET', '/web/devices/modes', '分页查询设备模式', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 815 AND method = 'GET' AND path = '/web/devices/modes');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 97, 815, 'GET', '/web/devices/modes/options', '设备模式下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 815 AND method = 'GET' AND path = '/web/devices/modes/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 98, 8151, 'POST', '/web/devices/modes', '新增设备模式', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8151 AND method = 'POST' AND path = '/web/devices/modes');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 99, 8152, 'PUT', '/web/devices/modes/:id', '编辑设备模式', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8152 AND method = 'PUT' AND path = '/web/devices/modes/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 100, 8153, 'DELETE', '/web/devices/modes/:id', '删除设备模式', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8153 AND method = 'DELETE' AND path = '/web/devices/modes/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 101, 813, 'GET', '/web/devices/iot-cards', '分页查询物联网卡', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 813 AND method = 'GET' AND path = '/web/devices/iot-cards');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 102, 813, 'GET', '/web/devices/iot-cards/options', '物联网卡下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 813 AND method = 'GET' AND path = '/web/devices/iot-cards/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 103, 8131, 'POST', '/web/devices/iot-cards', '新增物联网卡', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8131 AND method = 'POST' AND path = '/web/devices/iot-cards');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 104, 8132, 'PUT', '/web/devices/iot-cards/:id', '编辑物联网卡', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8132 AND method = 'PUT' AND path = '/web/devices/iot-cards/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 105, 8133, 'DELETE', '/web/devices/iot-cards/:id', '删除物联网卡', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8133 AND method = 'DELETE' AND path = '/web/devices/iot-cards/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 106, 814, 'GET', '/web/devices/iot-card-replace-logs', '分页查询物联网卡更换记录', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 814 AND method = 'GET' AND path = '/web/devices/iot-card-replace-logs');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 107, 8141, 'POST', '/web/devices/iot-card-replace-logs', '更换物联网卡', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8141 AND method = 'POST' AND path = '/web/devices/iot-card-replace-logs');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 108, 812, 'GET', '/web/devices/voice-configs', '分页查询语音配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 812 AND method = 'GET' AND path = '/web/devices/voice-configs');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 109, 8121, 'POST', '/web/devices/voice-configs', '新增语音配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8121 AND method = 'POST' AND path = '/web/devices/voice-configs');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 110, 8122, 'PUT', '/web/devices/voice-configs/:id', '编辑语音配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8122 AND method = 'PUT' AND path = '/web/devices/voice-configs/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 111, 8123, 'DELETE', '/web/devices/voice-configs/:id', '删除语音配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8123 AND method = 'DELETE' AND path = '/web/devices/voice-configs/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 112, 3, 'GET', '/web/risks', 'AI风险列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 3 AND method = 'GET' AND path = '/web/risks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 113, 3, 'GET', '/web/risks/pending-count', 'AI风险待处理数', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 3 AND method = 'GET' AND path = '/web/risks/pending-count');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 114, 3, 'GET', '/web/risks/:id', 'AI风险详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 3 AND method = 'GET' AND path = '/web/risks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 115, 51, 'GET', '/web/risks', '分页查询风险记录', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 51 AND method = 'GET' AND path = '/web/risks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 116, 51, 'GET', '/web/risks/pending-count', '风险待处理数', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 51 AND method = 'GET' AND path = '/web/risks/pending-count');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 117, 51, 'GET', '/web/risks/:id', '查询风险详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 51 AND method = 'GET' AND path = '/web/risks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 118, 51, 'PUT', '/web/risks/:id/read', '标记风险消息已读', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 51 AND method = 'PUT' AND path = '/web/risks/:id/read');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 119, 512, 'PUT', '/web/risks/:id/accurate', '确认检测准确性', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 512 AND method = 'PUT' AND path = '/web/risks/:id/accurate');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 120, 511, 'PUT', '/web/risks/:id/handle', '处理风险', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 511 AND method = 'PUT' AND path = '/web/risks/:id/handle');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 121, 513, 'DELETE', '/web/risks/:id', '删除风险记录', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 513 AND method = 'DELETE' AND path = '/web/risks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 122, 55, 'GET', '/web/alarms', '分页查询设备告警', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 55 AND method = 'GET' AND path = '/web/alarms');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 123, 55, 'GET', '/web/alarms/pending-count', '告警待处理数', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 55 AND method = 'GET' AND path = '/web/alarms/pending-count');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 124, 55, 'GET', '/web/alarms/:id', '查询告警详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 55 AND method = 'GET' AND path = '/web/alarms/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 125, 55, 'PUT', '/web/alarms/:id/read', '标记告警消息已读', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 55 AND method = 'PUT' AND path = '/web/alarms/:id/read');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 126, 551, 'PUT', '/web/alarms/:id/handle', '处理告警', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 551 AND method = 'PUT' AND path = '/web/alarms/:id/handle');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 127, 552, 'DELETE', '/web/alarms/:id', '删除告警记录', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 552 AND method = 'DELETE' AND path = '/web/alarms/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 128, 61, 'GET', '/web/inspects/tasks', '分页查询巡检任务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 61 AND method = 'GET' AND path = '/web/inspects/tasks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 129, 61, 'GET', '/web/inspects/tasks/:id', '查询巡检任务详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 61 AND method = 'GET' AND path = '/web/inspects/tasks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 130, 611, 'POST', '/web/inspects/tasks', '新增巡检任务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 611 AND method = 'POST' AND path = '/web/inspects/tasks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 131, 612, 'PUT', '/web/inspects/tasks/:id', '编辑巡检任务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 612 AND method = 'PUT' AND path = '/web/inspects/tasks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 132, 613, 'DELETE', '/web/inspects/tasks/:id', '删除巡检任务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 613 AND method = 'DELETE' AND path = '/web/inspects/tasks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 212, 61, 'PUT', '/web/inspects/tasks/:id/read', '标记巡检任务消息通知已读', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 61 AND method = 'PUT' AND path = '/web/inspects/tasks/:id/read');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 133, 62, 'GET', '/web/inspects/records', '分页查询巡检记录', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 62 AND method = 'GET' AND path = '/web/inspects/records');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 134, 62, 'GET', '/web/inspects/records/:id', '查询巡检记录详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 62 AND method = 'GET' AND path = '/web/inspects/records/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 135, 834, 'GET', '/web/upgrades/firmware-types', '分页查询固件类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 834 AND method = 'GET' AND path = '/web/upgrades/firmware-types');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 136, 834, 'GET', '/web/upgrades/firmware-types/options', '固件类型下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 834 AND method = 'GET' AND path = '/web/upgrades/firmware-types/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 137, 8341, 'POST', '/web/upgrades/firmware-types', '新增固件类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8341 AND method = 'POST' AND path = '/web/upgrades/firmware-types');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 138, 8342, 'PUT', '/web/upgrades/firmware-types/:id', '编辑固件类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8342 AND method = 'PUT' AND path = '/web/upgrades/firmware-types/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 139, 8343, 'DELETE', '/web/upgrades/firmware-types/:id', '删除固件类型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8343 AND method = 'DELETE' AND path = '/web/upgrades/firmware-types/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 140, 832, 'GET', '/web/upgrades/firmwares', '分页查询固件', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 832 AND method = 'GET' AND path = '/web/upgrades/firmwares');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 141, 832, 'GET', '/web/upgrades/firmwares/options', '固件下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 832 AND method = 'GET' AND path = '/web/upgrades/firmwares/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 142, 8321, 'POST', '/web/upgrades/firmwares', '新增固件', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8321 AND method = 'POST' AND path = '/web/upgrades/firmwares');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 143, 8322, 'PUT', '/web/upgrades/firmwares/:id', '编辑固件', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8322 AND method = 'PUT' AND path = '/web/upgrades/firmwares/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 144, 8323, 'DELETE', '/web/upgrades/firmwares/:id', '删除固件', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8323 AND method = 'DELETE' AND path = '/web/upgrades/firmwares/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 145, 833, 'GET', '/web/upgrades/models', '分页查询AI模型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 833 AND method = 'GET' AND path = '/web/upgrades/models');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 146, 833, 'GET', '/web/upgrades/models/options', 'AI模型下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 833 AND method = 'GET' AND path = '/web/upgrades/models/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 147, 8331, 'POST', '/web/upgrades/models', '新增AI模型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8331 AND method = 'POST' AND path = '/web/upgrades/models');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 148, 8332, 'PUT', '/web/upgrades/models/:id', '编辑AI模型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8332 AND method = 'PUT' AND path = '/web/upgrades/models/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 149, 8333, 'DELETE', '/web/upgrades/models/:id', '删除AI模型', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8333 AND method = 'DELETE' AND path = '/web/upgrades/models/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 150, 8311, 'POST', '/web/upgrades/devices', '下发设备升级(现在/定时)', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8311 AND method = 'POST' AND path = '/web/upgrades/devices');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 151, 831, 'GET', '/web/upgrades/plans', '分页查询升级计划', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 831 AND method = 'GET' AND path = '/web/upgrades/plans');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 152, 8312, 'PUT', '/web/upgrades/plans/:id/cancel', '取消单个升级计划', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8312 AND method = 'PUT' AND path = '/web/upgrades/plans/:id/cancel');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 153, 8312, 'PUT', '/web/upgrades/plans/cancel', '批量取消升级计划', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8312 AND method = 'PUT' AND path = '/web/upgrades/plans/cancel');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 154, 831, 'GET', '/web/upgrades/records', '分页查询升级记录', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 831 AND method = 'GET' AND path = '/web/upgrades/records');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 155, 821, 'GET', '/web/settings/alarm-settings', '分页查询设备告警设置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 821 AND method = 'GET' AND path = '/web/settings/alarm-settings');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 156, 8211, 'POST', '/web/settings/alarm-settings', '新增设备告警设置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8211 AND method = 'POST' AND path = '/web/settings/alarm-settings');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 157, 8212, 'PUT', '/web/settings/alarm-settings/:id', '编辑设备告警设置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8212 AND method = 'PUT' AND path = '/web/settings/alarm-settings/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 158, 8213, 'DELETE', '/web/settings/alarm-settings/:id', '删除设备告警设置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8213 AND method = 'DELETE' AND path = '/web/settings/alarm-settings/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 159, 8214, 'PUT', '/web/settings/alarm-settings/disable-all', '关闭全部告警通知', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8214 AND method = 'PUT' AND path = '/web/settings/alarm-settings/disable-all');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 160, 822, 'GET', '/web/settings/risk-notify-settings', '分页查询风险通知设置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 822 AND method = 'GET' AND path = '/web/settings/risk-notify-settings');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 161, 8221, 'POST', '/web/settings/risk-notify-settings', '新增风险通知设置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8221 AND method = 'POST' AND path = '/web/settings/risk-notify-settings');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 162, 8222, 'PUT', '/web/settings/risk-notify-settings/:id', '编辑风险通知设置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8222 AND method = 'PUT' AND path = '/web/settings/risk-notify-settings/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 163, 8223, 'DELETE', '/web/settings/risk-notify-settings/:id', '删除风险通知设置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8223 AND method = 'DELETE' AND path = '/web/settings/risk-notify-settings/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 164, 8224, 'PUT', '/web/settings/risk-notify-settings/disable-all', '关闭全部风险通知', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8224 AND method = 'PUT' AND path = '/web/settings/risk-notify-settings/disable-all');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 165, 851, 'GET', '/web/settings/getui', '查询个推账号配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 851 AND method = 'GET' AND path = '/web/settings/getui');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 166, 8511, 'PUT', '/web/settings/getui', '保存个推账号配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8511 AND method = 'PUT' AND path = '/web/settings/getui');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 167, 852, 'GET', '/web/settings/sms', '查询腾讯云短信配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 852 AND method = 'GET' AND path = '/web/settings/sms');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 168, 8521, 'PUT', '/web/settings/sms', '保存腾讯云短信配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8521 AND method = 'PUT' AND path = '/web/settings/sms');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 169, 1, 'GET', '/web/stats/dashboard', '首页看板统计', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 1 AND method = 'GET' AND path = '/web/stats/dashboard');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 170, 71, 'GET', '/web/stats/risk', '风险统计分析', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 71 AND method = 'GET' AND path = '/web/stats/risk');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 171, 72, 'GET', '/web/stats/alarm', '设备告警分析', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 72 AND method = 'GET' AND path = '/web/stats/alarm');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 172, 73, 'GET', '/web/stats/screen', '可视化大屏数据', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 73 AND method = 'GET' AND path = '/web/stats/screen');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 173, 56, 'GET', '/web/stats/traffic', '物联网卡流量统计', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 56 AND method = 'GET' AND path = '/web/stats/traffic');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 174, 2, 'GET', '/web/stats/device-status', '设备在线状态统计', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 2 AND method = 'GET' AND path = '/web/stats/device-status');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 175, 52, 'GET', '/web/stats/device-status', '设备监控状态统计', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 52 AND method = 'GET' AND path = '/web/stats/device-status');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 176, 2, 'GET', '/web/devices', '实时监控设备列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 2 AND method = 'GET' AND path = '/web/devices');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 177, 53, 'GET', '/web/devices/options', 'GIS查看设备下拉选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 53 AND method = 'GET' AND path = '/web/devices/options');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 178, 91, 'POST', '/web/upload', '通用文件上传', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 91 AND method = 'POST' AND path = '/web/upload');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 179, 92, 'POST', '/web/upload/audio', '语音文件上传', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 92 AND method = 'POST' AND path = '/web/upload/audio');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 180, 101, 'GET', '/app/menus', '移动端菜单树', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 101 AND method = 'GET' AND path = '/app/menus');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 181, 101, 'GET', '/app/home', '移动端首页', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 101 AND method = 'GET' AND path = '/app/home');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 182, 101, 'GET', '/app/todos', '移动端待办', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 101 AND method = 'GET' AND path = '/app/todos');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 183, 102, 'GET', '/app/risks', '移动端风险列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 102 AND method = 'GET' AND path = '/app/risks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 184, 102, 'GET', '/app/risks/:id', '移动端风险详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 102 AND method = 'GET' AND path = '/app/risks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 185, 102, 'PUT', '/app/risks/:id/handle', '移动端处理风险', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 102 AND method = 'PUT' AND path = '/app/risks/:id/handle');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 186, 102, 'PUT', '/app/risks/:id/accurate', '移动端确认检测准确性', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 102 AND method = 'PUT' AND path = '/app/risks/:id/accurate');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 187, 103, 'GET', '/app/alarms', '移动端告警列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 103 AND method = 'GET' AND path = '/app/alarms');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 188, 103, 'PUT', '/app/alarms/:id/handle', '移动端处理告警', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 103 AND method = 'PUT' AND path = '/app/alarms/:id/handle');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 189, 104, 'GET', '/app/inspect-tasks', '移动端巡检任务列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 104 AND method = 'GET' AND path = '/app/inspect-tasks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 190, 104, 'GET', '/app/inspect-tasks/:id', '移动端巡检任务详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 104 AND method = 'GET' AND path = '/app/inspect-tasks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 191, 104, 'PUT', '/app/inspect-tasks/:id/finish', '移动端完成巡检任务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 104 AND method = 'PUT' AND path = '/app/inspect-tasks/:id/finish');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 192, 105, 'GET', '/app/devices', '移动端设备列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 105 AND method = 'GET' AND path = '/app/devices');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 193, 105, 'GET', '/app/devices/:id', '移动端设备详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 105 AND method = 'GET' AND path = '/app/devices/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 194, 106, 'GET', '/app/notifications', '移动端通知列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 106 AND method = 'GET' AND path = '/app/notifications');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 195, 106, 'PUT', '/app/notifications/:id/read', '移动端标记通知已读', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 106 AND method = 'PUT' AND path = '/app/notifications/:id/read');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 196, 107, 'GET', '/app/profile', '移动端个人信息', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 107 AND method = 'GET' AND path = '/app/profile');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 197, 107, 'PUT', '/app/profile', '移动端修改个人信息', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 107 AND method = 'PUT' AND path = '/app/profile');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 198, 107, 'PUT', '/app/profile/password', '移动端修改密码', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 107 AND method = 'PUT' AND path = '/app/profile/password');
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 5. 角色-菜单授权：super_admin 拥有全部菜单
+-- ════════════════════════════════════════════════════════════════
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT 1, m.id FROM ac_menu m
+WHERE NOT EXISTS (SELECT 1 FROM ac_role_menu_rel r WHERE r.role_id = 1 AND r.menu_id = m.id);
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 6. Casbin 策略（casbin_rule）
+--    p 策略：super_admin → 全部菜单接口（与 ac_menu_api 同源）
+--    g 策略：admin → super_admin
+--    先按角色清理再重建，保证重复执行结果一致。
+-- ════════════════════════════════════════════════════════════════
+DELETE FROM casbin_rule WHERE p_type = 'p' AND v0 = 'super_admin';
+
+INSERT INTO casbin_rule (p_type, v0, v1, v2)
+SELECT DISTINCT 'p', 'super_admin', path, method FROM ac_menu_api WHERE deleted_at IS NULL;
+
+DELETE FROM casbin_rule WHERE p_type = 'g' AND v0 = 'admin';
+
+INSERT INTO casbin_rule (p_type, v0, v1)
+SELECT 'g', 'admin', 'super_admin'
+WHERE NOT EXISTS (SELECT 1 FROM casbin_rule WHERE p_type = 'g' AND v0 = 'admin' AND v1 = 'super_admin');
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 7. 内置字典：告警类型 / 设备模式
+-- ════════════════════════════════════════════════════════════════
+INSERT INTO ac_alarm_type (id, active, sequence, name, code, level, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, 1, '离线告警', 'offline', 'high', '设备心跳超时判定为离线', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_alarm_type WHERE code = 'offline');
+
+INSERT INTO ac_alarm_type (id, active, sequence, name, code, level, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 2, TRUE, 2, '电量告警', 'battery', 'medium', '设备电量低于阈值时告警', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_alarm_type WHERE code = 'battery');
+
+INSERT INTO ac_alarm_type (id, active, sequence, name, code, level, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 3, TRUE, 3, '流量告警', 'traffic', 'medium', '物联网卡流量低于阈值时告警', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_alarm_type WHERE code = 'traffic');
+
+INSERT INTO ac_device_mode (id, active, sequence, name, code, remark, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, 1, '充电模式', 'charging', '设备仅维持心跳与充电，关闭实时视频', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_device_mode WHERE code = 'charging');
+
+INSERT INTO ac_device_mode (id, active, sequence, name, code, remark, created_by, created_dt, updated_by, updated_dt)
+SELECT 2, TRUE, 2, '全开模式', 'full', 'AI 识别、实时视频、上报全部开启', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_device_mode WHERE code = 'full');
+
+INSERT INTO ac_device_mode (id, active, sequence, name, code, remark, created_by, created_dt, updated_by, updated_dt)
+SELECT 3, TRUE, 3, '省电模式', 'power_saving', '降低上报频率与视频码率以延长续航', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_device_mode WHERE code = 'power_saving');
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 8. 示例业务数据：区域 / 风险类型 / 固件类型 / 系统参数
+-- ════════════════════════════════════════════════════════════════
+INSERT INTO ac_region (id, active, sequence, name, code, remark, dept_id, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, 1, '一号厂区', 'AREA_A', '示例区域，可删除', 1, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_region WHERE code = 'AREA_A');
+
+INSERT INTO ac_region (id, active, sequence, name, code, remark, dept_id, created_by, created_dt, updated_by, updated_dt)
+SELECT 2, TRUE, 2, '二号厂区', 'AREA_B', '示例区域，可删除', 1, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_region WHERE code = 'AREA_B');
+
+INSERT INTO ac_region (id, active, sequence, name, code, remark, dept_id, created_by, created_dt, updated_by, updated_dt)
+SELECT 3, TRUE, 3, '仓储中心', 'AREA_C', '示例区域，可删除', 1, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_region WHERE code = 'AREA_C');
+
+INSERT INTO ac_risk_type (id, active, sequence, name, code, level, description, dept_id, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, 1, '未佩戴安全帽', 'no_helmet', 'high', '示例风险类型，可删除', 1, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_risk_type WHERE code = 'no_helmet');
+
+INSERT INTO ac_risk_type (id, active, sequence, name, code, level, description, dept_id, created_by, created_dt, updated_by, updated_dt)
+SELECT 2, TRUE, 2, '违规闯入', 'intrusion', 'high', '示例风险类型，可删除', 1, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_risk_type WHERE code = 'intrusion');
+
+INSERT INTO ac_firmware_type (id, active, sequence, name, code, description, dept_id, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, 1, '主控固件', 'main', '示例固件类型，可删除', 1, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_firmware_type WHERE code = 'main');
+
+INSERT INTO ac_firmware_type (id, active, sequence, name, code, description, dept_id, created_by, created_dt, updated_by, updated_dt)
+SELECT 2, TRUE, 2, '摄像头固件', 'camera', '示例固件类型，可删除', 1, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_firmware_type WHERE code = 'camera');
+
+INSERT INTO ac_system_config (id, active, name, code, "value", group_name, data_type, sequence, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, '设备心跳超时(秒)', 'device_heartbeat_timeout', '180', 'device', 'int', 1, '超过该时长未收到心跳则判定离线', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_system_config WHERE code = 'device_heartbeat_timeout');
+
+INSERT INTO ac_system_config (id, active, name, code, "value", group_name, data_type, sequence, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 2, TRUE, '电量告警阈值(%)', 'battery_alarm_threshold', '20', 'device', 'int', 2, '设备电量低于该值触发电量告警', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_system_config WHERE code = 'battery_alarm_threshold');
+
+INSERT INTO ac_system_config (id, active, name, code, "value", group_name, data_type, sequence, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 3, TRUE, '流量告警阈值(MB)', 'traffic_alarm_threshold', '100', 'device', 'int', 3, '物联网卡剩余流量低于该值触发流量告警', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_system_config WHERE code = 'traffic_alarm_threshold');
+
+INSERT INTO ac_sequence (id, code, name, prefix, current_val, step, date_pattern, reset_by_day, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, 'device_code', '设备编号', 'AC', 0, 1, '20060102', TRUE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_sequence WHERE code = 'device_code');
+
+INSERT INTO ac_sequence (id, code, name, prefix, current_val, step, date_pattern, reset_by_day, created_by, created_dt, updated_by, updated_dt)
+SELECT 2, 'inspect_task_code', '巡检任务编号', 'IT', 0, 1, '20060102', TRUE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_sequence WHERE code = 'inspect_task_code');
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 9. 修正序列值
+--    以上 INSERT 显式指定了主键，BIGSERIAL 的序列不会自动推进，
+--    此处将各序列对齐到当前最大 id，避免后续 insert 主键冲突。
+-- ════════════════════════════════════════════════════════════════
+SELECT setval(pg_get_serial_sequence('ac_dept', 'id'),          COALESCE((SELECT MAX(id) FROM ac_dept), 1));
+SELECT setval(pg_get_serial_sequence('ac_user', 'id'),          COALESCE((SELECT MAX(id) FROM ac_user), 1));
+SELECT setval(pg_get_serial_sequence('ac_role', 'id'),          COALESCE((SELECT MAX(id) FROM ac_role), 1));
+SELECT setval(pg_get_serial_sequence('ac_menu', 'id'),          COALESCE((SELECT MAX(id) FROM ac_menu), 1));
+SELECT setval(pg_get_serial_sequence('ac_menu_api', 'id'),      COALESCE((SELECT MAX(id) FROM ac_menu_api), 1));
+SELECT setval(pg_get_serial_sequence('ac_user_role_rel', 'id'), COALESCE((SELECT MAX(id) FROM ac_user_role_rel), 1));
+SELECT setval(pg_get_serial_sequence('ac_role_menu_rel', 'id'), COALESCE((SELECT MAX(id) FROM ac_role_menu_rel), 1));
+SELECT setval(pg_get_serial_sequence('ac_region', 'id'),        COALESCE((SELECT MAX(id) FROM ac_region), 1));
+SELECT setval(pg_get_serial_sequence('ac_risk_type', 'id'),     COALESCE((SELECT MAX(id) FROM ac_risk_type), 1));
+SELECT setval(pg_get_serial_sequence('ac_alarm_type', 'id'),    COALESCE((SELECT MAX(id) FROM ac_alarm_type), 1));
+SELECT setval(pg_get_serial_sequence('ac_device_mode', 'id'),   COALESCE((SELECT MAX(id) FROM ac_device_mode), 1));
+SELECT setval(pg_get_serial_sequence('ac_firmware_type', 'id'), COALESCE((SELECT MAX(id) FROM ac_firmware_type), 1));
+SELECT setval(pg_get_serial_sequence('ac_system_config', 'id'), COALESCE((SELECT MAX(id) FROM ac_system_config), 1));
+SELECT setval(pg_get_serial_sequence('ac_sequence', 'id'),      COALESCE((SELECT MAX(id) FROM ac_sequence), 1));
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 9. 消息推送 WebHook（飞书 / 钉钉 / 企业微信 / 自定义）
+--    挂在「85 第三方平台管理」下。
+--    注意：本段置于文件末尾，需在菜单与接口写入后重建 Casbin p 策略，
+--    否则新增接口不会进入 super_admin 的授权集合。
+-- ════════════════════════════════════════════════════════════════
+
+-- 菜单
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 853, '85', 3, '消息推送配置', '/settings/webhooks', 'NotificationOutlined', 'system/thirdparty/webhooks', 'menu', 'pc', 'webhook:view', '菜单', 853, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 853);
+
+-- 按钮权限
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8531, '853', 4, '新增配置', '', '', '', 'button', 'pc', 'webhook:create', '按钮', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8531);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8532, '853', 4, '编辑配置', '', '', '', 'button', 'pc', 'webhook:update', '按钮', 2, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8532);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8533, '853', 4, '删除配置', '', '', '', 'button', 'pc', 'webhook:delete', '按钮', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8533);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 8534, '853', 4, '测试推送', '', '', '', 'button', 'pc', 'webhook:test', '按钮', 4, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 8534);
+
+-- 接口绑定（Casbin p 策略的来源）
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 200, 8531, 'POST', '/web/settings/webhooks', '新增WebHook配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8531 AND method = 'POST' AND path = '/web/settings/webhooks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 201, 8531, 'POST', '/web/settings/webhooks/test', '即时测试WebHook配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8531 AND method = 'POST' AND path = '/web/settings/webhooks/test');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 202, 853, 'GET', '/web/settings/webhooks', '分页查询WebHook配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 853 AND method = 'GET' AND path = '/web/settings/webhooks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 203, 853, 'GET', '/web/settings/webhooks/platforms', '查询WebHook平台选项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 853 AND method = 'GET' AND path = '/web/settings/webhooks/platforms');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 204, 853, 'GET', '/web/settings/webhooks/:id', '查询WebHook配置详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 853 AND method = 'GET' AND path = '/web/settings/webhooks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 205, 8532, 'PUT', '/web/settings/webhooks/:id', '编辑WebHook配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8532 AND method = 'PUT' AND path = '/web/settings/webhooks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 206, 8532, 'PUT', '/web/settings/webhooks/:id/enable', '启用WebHook配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8532 AND method = 'PUT' AND path = '/web/settings/webhooks/:id/enable');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 207, 8532, 'PUT', '/web/settings/webhooks/:id/disable', '停用WebHook配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8532 AND method = 'PUT' AND path = '/web/settings/webhooks/:id/disable');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 208, 8533, 'DELETE', '/web/settings/webhooks/:id', '删除WebHook配置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8533 AND method = 'DELETE' AND path = '/web/settings/webhooks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 209, 8534, 'POST', '/web/settings/webhooks/:id/test', '发送WebHook测试消息', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 8534 AND method = 'POST' AND path = '/web/settings/webhooks/:id/test');
+
+-- 角色授权：super_admin 拥有新菜单
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT 1, m.id FROM ac_menu m
+WHERE m.id IN (853, 8531, 8532, 8533, 8534)
+  AND NOT EXISTS (SELECT 1 FROM ac_role_menu_rel r WHERE r.role_id = 1 AND r.menu_id = m.id);
+
+-- 重建 Casbin p 策略（新增接口必须重新派生，否则 super_admin 无法访问）
+DELETE FROM casbin_rule WHERE p_type = 'p' AND v0 = 'super_admin';
+INSERT INTO casbin_rule (p_type, v0, v1, v2)
+SELECT DISTINCT 'p', 'super_admin', path, method FROM ac_menu_api WHERE deleted_at IS NULL;
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 10. 按钮级权限码（补齐页面 permCodes 检查的标识）
+--     前端页面用 permCodes.includes('<模块>:<实体>:<动作>') 控制按钮显隐，
+--     这些标识必须作为 type='button' 的菜单行存在，且已授予对应角色，
+--     否则 /web/profile/menus 不会返回它们，按钮对超管也不渲染。
+-- ════════════════════════════════════════════════════════════════
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9001, '841', 4, '区域-新增', '', '', '', 'button', 'pc', 'basic:region:create', '按钮', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9001);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9002, '841', 4, '区域-编辑', '', '', '', 'button', 'pc', 'basic:region:update', '按钮', 2, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9002);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9003, '841', 4, '区域-删除', '', '', '', 'button', 'pc', 'basic:region:delete', '按钮', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9003);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9004, '842', 4, '风险类型-新增', '', '', '', 'button', 'pc', 'basic:risk-type:create', '按钮', 4, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9004);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9005, '842', 4, '风险类型-编辑', '', '', '', 'button', 'pc', 'basic:risk-type:update', '按钮', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9005);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9006, '842', 4, '风险类型-删除', '', '', '', 'button', 'pc', 'basic:risk-type:delete', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9006);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9007, '843', 4, '告警类型-新增', '', '', '', 'button', 'pc', 'basic:alarm-type:create', '按钮', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9007);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9008, '843', 4, '告警类型-编辑', '', '', '', 'button', 'pc', 'basic:alarm-type:update', '按钮', 8, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9008);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9009, '843', 4, '告警类型-删除', '', '', '', 'button', 'pc', 'basic:alarm-type:delete', '按钮', 9, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9009);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9010, '811', 4, '设备-切换模式', '', '', '', 'button', 'pc', 'device:switch-mode', '按钮', 10, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9010);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9011, '814', 4, '物联网卡-更换登记', '', '', '', 'button', 'pc', 'iot-card:replace', '按钮', 11, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9011);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9012, '52', 4, '设备监控-查看', '', '', '', 'button', 'pc', 'device:monitor:view', '按钮', 12, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9012);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9013, '52', 4, '设备监控-视频', '', '', '', 'button', 'pc', 'device:monitor:video', '按钮', 13, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9013);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9014, '61', 4, '巡检任务-新增', '', '', '', 'button', 'pc', 'inspect:task:create', '按钮', 14, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9014);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9015, '61', 4, '巡检任务-编辑', '', '', '', 'button', 'pc', 'inspect:task:update', '按钮', 15, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9015);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9016, '61', 4, '巡检任务-删除', '', '', '', 'button', 'pc', 'inspect:task:delete', '按钮', 16, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9016);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9017, '821', 4, '告警设置-新增', '', '', '', 'button', 'pc', 'setting:alarm:create', '按钮', 17, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9017);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9018, '821', 4, '告警设置-编辑', '', '', '', 'button', 'pc', 'setting:alarm:update', '按钮', 18, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9018);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9019, '821', 4, '告警设置-删除', '', '', '', 'button', 'pc', 'setting:alarm:delete', '按钮', 19, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9019);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9020, '821', 4, '告警设置-关闭全部', '', '', '', 'button', 'pc', 'setting:alarm:disable-all', '按钮', 20, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9020);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9021, '822', 4, '风险通知-新增', '', '', '', 'button', 'pc', 'setting:risk-notify:create', '按钮', 21, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9021);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9022, '822', 4, '风险通知-编辑', '', '', '', 'button', 'pc', 'setting:risk-notify:update', '按钮', 22, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9022);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9023, '822', 4, '风险通知-删除', '', '', '', 'button', 'pc', 'setting:risk-notify:delete', '按钮', 23, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9023);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9024, '822', 4, '风险通知-关闭全部', '', '', '', 'button', 'pc', 'setting:risk-notify:disable-all', '按钮', 24, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9024);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9025, '851', 4, '个推-保存', '', '', '', 'button', 'pc', 'setting:thirdparty:getui:update', '按钮', 25, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9025);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9026, '852', 4, '短信-保存', '', '', '', 'button', 'pc', 'setting:thirdparty:sms:update', '按钮', 26, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9026);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9027, '831', 4, '升级-下发', '', '', '', 'button', 'pc', 'upgrade:issue', '按钮', 27, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9027);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9028, '831', 4, '升级-取消', '', '', '', 'button', 'pc', 'upgrade:cancel', '按钮', 28, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9028);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9029, '832', 4, '固件-新增', '', '', '', 'button', 'pc', 'upgrade:firmware:create', '按钮', 29, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9029);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9030, '832', 4, '固件-编辑', '', '', '', 'button', 'pc', 'upgrade:firmware:update', '按钮', 30, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9030);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9031, '832', 4, '固件-删除', '', '', '', 'button', 'pc', 'upgrade:firmware:delete', '按钮', 31, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9031);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9032, '833', 4, '模型-新增', '', '', '', 'button', 'pc', 'upgrade:model:create', '按钮', 32, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9032);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9033, '833', 4, '模型-编辑', '', '', '', 'button', 'pc', 'upgrade:model:update', '按钮', 33, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9033);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9034, '833', 4, '模型-删除', '', '', '', 'button', 'pc', 'upgrade:model:delete', '按钮', 34, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9034);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9035, '834', 4, '固件类型-新增', '', '', '', 'button', 'pc', 'upgrade:firmware-type:create', '按钮', 35, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9035);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9036, '834', 4, '固件类型-编辑', '', '', '', 'button', 'pc', 'upgrade:firmware-type:update', '按钮', 36, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9036);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9037, '834', 4, '固件类型-删除', '', '', '', 'button', 'pc', 'upgrade:firmware-type:delete', '按钮', 37, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9037);
+
+-- 授予 super_admin（角色 1）
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT 1, m.id FROM ac_menu m
+WHERE m.id BETWEEN 9001 AND 9100
+  AND NOT EXISTS (SELECT 1 FROM ac_role_menu_rel r WHERE r.role_id = 1 AND r.menu_id = m.id);
+
+-- ════════════════════════════════════════════════════════════════
+-- 11. 固件 / AI 模型详情接口（v0.1.0 补实现）
+--     此前 GET /web/upgrades/firmwares/:id、/web/upgrades/models/:id 未实现（404）。
+--     路由已补齐，此处同步补 ac_menu_api 绑定并重建 Casbin p 策略
+--     （ac_menu_api 是 p 策略的唯一来源，缺失则 super_admin 也会被 403 拒绝）。
+-- ════════════════════════════════════════════════════════════════
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 210, 832, 'GET', '/web/upgrades/firmwares/:id', '查询固件详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 832 AND method = 'GET' AND path = '/web/upgrades/firmwares/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 211, 833, 'GET', '/web/upgrades/models/:id', '查询AI模型详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE menu_id = 833 AND method = 'GET' AND path = '/web/upgrades/models/:id');
+
+-- 重建 Casbin p 策略（新增接口必须重新派生，否则 super_admin 无法访问）
+DELETE FROM casbin_rule WHERE p_type = 'p' AND v0 = 'super_admin';
+INSERT INTO casbin_rule (p_type, v0, v1, v2)
+SELECT DISTINCT 'p', 'super_admin', path, method FROM ac_menu_api WHERE deleted_at IS NULL;
+
+-- 补充：system 一组按钮权限码（页面通过 can() 辅助函数读取，首轮排查遗漏）
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9101, '862', 4, '用户-新增', '', '', '', 'button', 'pc', 'system:user:create', '按钮', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9101);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9102, '862', 4, '用户-编辑', '', '', '', 'button', 'pc', 'system:user:update', '按钮', 2, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9102);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9103, '862', 4, '用户-删除', '', '', '', 'button', 'pc', 'system:user:delete', '按钮', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9103);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9104, '862', 4, '用户-重置密码', '', '', '', 'button', 'pc', 'system:user:reset', '按钮', 4, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9104);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9105, '864', 4, '角色-新增', '', '', '', 'button', 'pc', 'system:role:create', '按钮', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9105);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9106, '864', 4, '角色-编辑', '', '', '', 'button', 'pc', 'system:role:update', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9106);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9107, '864', 4, '角色-删除', '', '', '', 'button', 'pc', 'system:role:delete', '按钮', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9107);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9108, '864', 4, '角色-授权', '', '', '', 'button', 'pc', 'system:role:assign', '按钮', 8, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9108);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9109, '864', 4, '角色-数据权限', '', '', '', 'button', 'pc', 'system:role:data', '按钮', 9, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9109);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9110, '863', 4, '菜单-新增', '', '', '', 'button', 'pc', 'system:menu:create', '按钮', 10, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9110);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9111, '863', 4, '菜单-编辑', '', '', '', 'button', 'pc', 'system:menu:update', '按钮', 11, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9111);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9112, '863', 4, '菜单-删除', '', '', '', 'button', 'pc', 'system:menu:delete', '按钮', 12, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9112);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9113, '863', 4, '菜单-绑定接口', '', '', '', 'button', 'pc', 'system:menu:api', '按钮', 13, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9113);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9114, '865', 4, '部门-新增', '', '', '', 'button', 'pc', 'system:dept:create', '按钮', 14, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9114);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9115, '865', 4, '部门-编辑', '', '', '', 'button', 'pc', 'system:dept:update', '按钮', 15, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9115);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9116, '865', 4, '部门-删除', '', '', '', 'button', 'pc', 'system:dept:delete', '按钮', 16, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9116);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9117, '866', 4, '岗位-新增', '', '', '', 'button', 'pc', 'system:post:create', '按钮', 17, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9117);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9118, '866', 4, '岗位-编辑', '', '', '', 'button', 'pc', 'system:post:update', '按钮', 18, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9118);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9119, '866', 4, '岗位-删除', '', '', '', 'button', 'pc', 'system:post:delete', '按钮', 19, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9119);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9120, '869', 4, '参数-新增', '', '', '', 'button', 'pc', 'system:config:create', '按钮', 20, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9120);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9121, '869', 4, '参数-编辑', '', '', '', 'button', 'pc', 'system:config:update', '按钮', 21, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9121);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9122, '869', 4, '参数-删除', '', '', '', 'button', 'pc', 'system:config:delete', '按钮', 22, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9122);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9123, '867', 4, '日志-删除', '', '', '', 'button', 'pc', 'system:log:delete', '按钮', 23, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9123);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9124, '867', 4, '日志-清空', '', '', '', 'button', 'pc', 'system:log:clear', '按钮', 24, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9124);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9125, '867', 4, '日志-导出', '', '', '', 'button', 'pc', 'system:log:export', '按钮', 25, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9125);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9126, '868', 4, '通知-标记已读', '', '', '', 'button', 'pc', 'system:notify:mark', '按钮', 26, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9126);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9127, '868', 4, '通知-删除', '', '', '', 'button', 'pc', 'system:notify:delete', '按钮', 27, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 9127);
+
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT 1, m.id FROM ac_menu m
+WHERE m.id BETWEEN 9101 AND 9200
+  AND NOT EXISTS (SELECT 1 FROM ac_role_menu_rel r WHERE r.role_id = 1 AND r.menu_id = m.id);
+
+
+-- ════════════════════════════════════════════════════════════════
+-- 11. 示例设备与物联网卡
+--     设备/风险/告警/巡检/升级/统计等多数页面与 E2E 用例都依赖一台
+--     可查询的示例设备（东门摄像头 / CAM_001），缺失会导致干净库上
+--     设备相关用例全部落空。此处补齐，使 resetdb + initdb 后的库自足。
+-- ════════════════════════════════════════════════════════════════
+
+INSERT INTO ac_iot_card (id, active, name, card_no, region_id, device_id, traffic_total, traffic_used, traffic_left, stat_dt, expire_dt, status, remark, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, '示例物联网卡', '89860000000000000001', 1, NULL, 30720, 4096, 26624, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '365 days', 'normal', '示例数据', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_iot_card WHERE id = 1 OR card_no = '89860000000000000001');
+
+INSERT INTO ac_device (id, active, name, device_code, region_id, location, latitude, longitude, firmware_ver, model_ver, system_ver, work_mode, device_mode, info_interval, iot_card_id, status, battery, voltage, storage_total, storage_free, online_dt, monitor_enabled, stream_url, remark, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, '东门摄像头', 'CAM_001', 1, '东门入口', '30.5728', '104.0668', '', '', 'v1.0.0', '全开模式', '全开模式', 60, 1, 'online', 86, '12.4', 65536, 51200, CURRENT_TIMESTAMP, TRUE, '', '示例数据', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_device WHERE id = 1 OR device_code = 'CAM_001');
+
+UPDATE ac_iot_card SET device_id = 1 WHERE card_no = '89860000000000000001' AND device_id IS NULL;
+
+-- 一台设备的历史采样点，供「设备历史记录」页面与曲线用例使用
+INSERT INTO ac_device_history (device_id, device_code, iot_card_no, region_id, location, status, battery, voltage, storage_free, sampled_dt, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, 'CAM_001', '89860000000000000001', 1, '东门入口', 'online', 90 - (n.i * 2), '12.4', 60000 - (n.i * 100), CURRENT_TIMESTAMP - (n.i * INTERVAL '1 hour'), 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM generate_series(0, 11) AS n(i)
+WHERE NOT EXISTS (SELECT 1 FROM ac_device_history WHERE device_id = 1);
+
+-- 示例风险与告警各一条，使风险监控/设备告警页面与筛选用例有数据可查
+INSERT INTO ac_risk_record (id, risk_type_id, device_id, device_code, region_id, location, image_url, video_url, risk_level, detect_score, occurred_dt, detect_accurate, read, status, voice_played, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, 1, 1, 'CAM_001', 1, '东门入口', '', '', 'high', 0.93, CURRENT_TIMESTAMP - INTERVAL '2 hours', '', FALSE, 'pending', FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_risk_record WHERE id = 1);
+
+INSERT INTO ac_alarm_record (id, alarm_type_id, device_id, device_code, region_id, location, alarm_level, content, occurred_dt, read, status, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, 1, 1, 'CAM_001', 1, '东门入口', 'high', '设备心跳超时，已离线', CURRENT_TIMESTAMP - INTERVAL '1 hour', FALSE, 'pending', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_alarm_record WHERE id = 1);

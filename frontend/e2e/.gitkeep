@@ -1,0 +1,2 @@
+# E2E 测试用例目录（Playwright）。
+# 详见项目 CLAUDE.md「端到端测试规范」：Modal 必须用 e2e-xxx-modal 类选择器定位。

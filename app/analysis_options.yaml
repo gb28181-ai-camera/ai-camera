@@ -1,0 +1,19 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # 生成的 Controller 中大量使用 dynamic 解析，避免噪音
+    avoid_print: ignore
+
+linter:
+  rules:
+    # 允许省略 new / const 关键字
+    prefer_const_constructors: true
+    prefer_const_literals_to_create_immutables: true
+    prefer_final_locals: true
+    unnecessary_this: true
+    # 生成代码中常见，关闭以免误报
+    non_constant_identifier_names: false
+    # 目录结构沿用 boticz-mes 的命名习惯（DColor.dart / AppNavigator.dart 等），
+    # 文件名不改为 lower_case_with_underscores
+    file_names: false

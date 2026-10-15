@@ -1,0 +1,118 @@
+# AI Camera CI/CD 流水线
+# 阶段：build（构建镜像）→ publish（滚动发布）→ notice（飞书通知）
+#
+# 分支策略：
+#   develop  → 开发环境（dev）
+#   master   → 生产环境（prod）
+
+stages:
+  - build
+  - publish
+  - notice
+
+variables:
+  DOCKER_DRIVER: overlay2
+  GIT_DEPTH: "1"
+
+# ────────────────────────────────────────────────
+# 模板
+# ────────────────────────────────────────────────
+
+.backend-job:
+  tags:
+    - boticz-runner
+  before_script:
+    - cd backend
+
+.frontend-job:
+  tags:
+    - boticz-runner
+  before_script:
+    - cd frontend
+
+# ────────────────────────────────────────────────
+# 构建阶段
+# ────────────────────────────────────────────────
+
+build-backend:
+  stage: build
+  extends: .backend-job
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      changes:
+        - backend/**/*
+  script:
+    - source ./scripts/bashrc.sh
+    - bash scripts/gen-swagger.sh
+    - bash scripts/build.sh
+
+build-backend-prod:
+  stage: build
+  extends: .backend-job
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+      changes:
+        - backend/**/*
+  script:
+    - source ./scripts/bashrc.sh
+    - bash scripts/gen-swagger.sh
+    - bash scripts/build.sh --prod
+
+build-frontend:
+  stage: build
+  extends: .frontend-job
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+      changes:
+        - frontend/**/*
+  script:
+    # 构建管理后台 + 官网两个入口
+    - npm ci
+    - npm run build
+    - docker build -t dev-registry.boticz.com:5000/boticz/ai-camera-admin:latest -f Dockerfile .
+    - docker push dev-registry.boticz.com:5000/boticz/ai-camera-admin:latest
+    - docker build -t dev-registry.boticz.com:5000/boticz/ai-camera-website:latest -f Dockerfile.website .
+    - docker push dev-registry.boticz.com:5000/boticz/ai-camera-website:latest
+
+# ────────────────────────────────────────────────
+# 发布阶段
+# ────────────────────────────────────────────────
+
+publish-backend:
+  stage: publish
+  extends: .backend-job
+  needs: ["build-backend"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+  script:
+    - bash scripts/publish.sh
+
+publish-backend-prod:
+  stage: publish
+  extends: .backend-job
+  needs: ["build-backend-prod"]
+  when: manual
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  script:
+    - bash scripts/publish.sh --prod
+
+# ────────────────────────────────────────────────
+# 通知阶段
+# ────────────────────────────────────────────────
+
+notice:
+  stage: notice
+  tags:
+    - boticz-runner
+  when: always
+  script:
+    - |
+      if [ "$CI_JOB_STATUS" == "success" ]; then
+        MSG="✅ AI Camera 流水线成功\n分支：$CI_COMMIT_BRANCH\n提交：$CI_COMMIT_TITLE"
+      else
+        MSG="❌ AI Camera 流水线失败\n分支：$CI_COMMIT_BRANCH\n提交：$CI_COMMIT_TITLE"
+      fi
+      curl -s -X POST "$FEISHU_WEBHOOK" \
+        -H "Content-Type: application/json" \
+        -d "{\"msg_type\":\"text\",\"content\":{\"text\":\"$MSG\"}}"

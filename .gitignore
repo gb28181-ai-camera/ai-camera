@@ -1,0 +1,81 @@
+# ── 通用 ──
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+.idea/
+.vscode/*
+!.vscode/launch.json
+*.swp
+
+# ── 配置与密钥（禁止提交真实凭据）──
+backend/config/config.yaml
+backend/config/config-test.yaml
+*.pem
+*.key
+# MCP Server 配置内嵌数据库连接串（含明文密码与内网 IP），禁止提交
+.mcp.json
+.mcp.local.json
+# 环境变量文件（前端两个 .env 只有 API 地址，单独白名单）
+.env
+.env.*
+!frontend/.env
+!frontend/.env.production
+# GB28181 / 流媒体 / 语音 Agent 后续引入的本地密钥
+deploy/**/secrets*.yaml
+deploy/**/secrets*.yml
+deploy/**/config.local.ini
+deploy/pipecat/.env
+
+# ── Go ──
+backend/server
+backend/server.exe
+backend/*.exe
+backend/cmd/server/*.exe*
+backend/seed_e2e.exe
+backend/logs/
+backend/uploads/
+backend/uploads-test/
+backend/tmp/
+__debug_bin*
+
+# ── Node / 前端 ──
+node_modules/
+frontend/dist/
+frontend/dist-website/
+frontend/.vite/
+frontend/.vite-electron/
+frontend/out/
+frontend/release/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+frontend/.turbo/
+frontend/scripts/api-docs.json
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ── Flutter ──
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/build/
+app/.packages
+app/ios/Pods/
+app/ios/.symlinks/
+app/macos/Pods/
+app/android/.gradle/
+app/android/local.properties
+app/android/key.properties
+app/coverage/
+*.iml
+
+# ── Claude / 编辑器本地状态 ──
+.claude/settings.local.json
+.clinerules/
+
+# ── 生成物 ──
+backend/docs/web/
+backend/docs/app/
+frontend/e2e/screenshots/

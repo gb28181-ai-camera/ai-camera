@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Camera API 文档</title>
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    body { margin: 0; padding: 0; }
+    .swagger-ui .topbar { display: none; }
+    .topnav {
+      background: #1e40af; color: #fff; padding: 12px 20px;
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      display: flex; align-items: center; gap: 24px;
+    }
+    .topnav h1 { font-size: 16px; margin: 0; font-weight: 600; }
+    .topnav a { color: #c7d2fe; text-decoration: none; font-size: 14px; }
+    .topnav a:hover { color: #fff; }
+    .topnav a.active { color: #fff; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="topnav">
+    <h1>AI Camera 智能监控平台 API</h1>
+    <a id="link-web" href="#" class="active">Web 端接口文档</a>
+    <a id="link-app" href="#">App 端接口文档</a>
+  </div>
+  <div id="swagger-ui"></div>
+
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+  <script>
+    // 两个端的文档 JSON 分别由 router/swagger.go 以静态文件方式提供
+    var SPECS = {
+      web: { url: '/web/api-docs.json', el: 'link-web' },
+      app: { url: '/app/api-docs.json', el: 'link-app' }
+    };
+
+    function render(which) {
+      Object.keys(SPECS).forEach(function (k) {
+        document.getElementById(SPECS[k].el).className = (k === which) ? 'active' : '';
+      });
+      if (window.ui) { window.ui.destroy(); }
+      window.ui = SwaggerUIBundle({
+        url: SPECS[which].url,
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+        plugins: [SwaggerUIBundle.plugins.DownloadUrl],
+        layout: 'StandaloneLayout'
+      });
+    }
+
+    document.getElementById('link-web').onclick = function (e) { e.preventDefault(); render('web'); };
+    document.getElementById('link-app').onclick = function (e) { e.preventDefault(); render('app'); };
+
+    window.onload = function () { render('web'); };
+  </script>
+</body>
+</html>

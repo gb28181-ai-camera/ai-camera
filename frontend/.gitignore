@@ -1,0 +1,29 @@
+# 依赖与产物
+node_modules/
+dist/
+dist-website/
+
+# forge / electron 中间产物
+.vite/
+out/
+
+# 从 swagger 拉取的文档（体积大，不入库）
+scripts/api-docs.json
+
+# 环境本地覆盖
+.env.local
+.env.*.local
+
+# 测试产物
+test-results/
+playwright-report/
+coverage/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# E2E 登录态（含 token，勿入库）
+e2e/.auth/
