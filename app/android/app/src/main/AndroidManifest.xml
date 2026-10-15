@@ -8,11 +8,13 @@
     <!-- 语音对讲的音频路由（切换听筒/扬声器、控制音量），flutter_webrtc 音频会话需要 -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
 
-    <!-- 拍照巡检（预留）：仅当 App 内确实提供「拍摄现场照片并上传」时保留，
-         否则应移除，避免应用商店把「有摄像头」当作安装前提。
-         注意：实时播放页的「抓图」是截取视频帧，不需要本权限。 -->
+    <!-- 更换头像：个人中心允许用户拍照设置头像（2026-10-15 确认保留）。
+         注意：实时播放页的「抓图」是截取视频帧，**不需要**本权限 —— 别把它当成
+         保留本权限的理由。真正的用途只有「拍照改头像」。
+         若日后取消改头像功能，应一并移除此权限与下面的 uses-feature，
+         避免应用商店把「有摄像头」当作安装前提。 -->
     <uses-permission android:name="android.permission.CAMERA"/>
-    <!-- 声明相机为「非必需」，使无摄像头的设备仍可安装 -->
+    <!-- 声明相机为「非必需」，使无摄像头的设备仍可安装（改头像也可从相册选图） -->
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
     <application
