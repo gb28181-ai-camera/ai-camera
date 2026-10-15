@@ -20,6 +20,8 @@ const (
 	defaultDeviceModel  = "AICam-SIM"
 	defaultManufacturer = "Boticz-Simulator"
 	defaultFirmware     = "v0.2.0-sim"
+	// defaultFPS 与内置样本码流的帧率一致（PTS 步进 = 90000/25 = 3600）。
+	defaultFPS = 25
 )
 
 // 支持的媒体传输模式（§7.2）。
@@ -47,8 +49,12 @@ type Config struct {
 	Expires   int    // 注册有效期（秒），决定 re-REGISTER 周期
 
 	// —— 媒体 ——
-	Mode       string // 媒体传输模式：udp / tcp-passive / tcp-active
-	StreamFile string // H.264 Annex-B 样本文件路径，空则不加载
+	Mode         string        // 媒体传输模式：udp / tcp-passive / tcp-active
+	StreamFile   string        // H.264 Annex-B 样本文件路径，空则不加载（无样本时 INVITE 会被回 488）
+	Loop         bool          // 样本放完后是否从头再推
+	FPS          int           // 推流帧率；≤0 表示不限速（仅压测用）
+	Duration     time.Duration // >0 时每路推流推满该时长自动停止
+	SSRCOverride string        // 非空时设备在 200 OK 里回一个与平台不同的 y=（验证平台校正路径）
 
 	// —— 行为开关 ——
 	KeepaliveInterval time.Duration // Keepalive 心跳周期
@@ -106,7 +112,26 @@ func (c *Config) Validate() error {
 	if !isGBCharset(c.Charset) && !strings.EqualFold(c.Charset, "UTF-8") {
 		return fmt.Errorf("--charset 只支持 GB2312 / UTF-8，当前 %q", c.Charset)
 	}
+	if c.FPS < 0 {
+		return fmt.Errorf("--fps 不能为负：%d", c.FPS)
+	}
+	if c.Duration < 0 {
+		return fmt.Errorf("--duration 不能为负：%s", c.Duration)
+	}
+	if c.SSRCOverride != "" && !isDigits(c.SSRCOverride) {
+		return fmt.Errorf("--ssrc-override 必须是十进制数字串（如 0200000001）：%q", c.SSRCOverride)
+	}
 	return nil
+}
+
+// isDigits 判断字符串是否全为 ASCII 数字。
+func isDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ResolveLocalIP 返回本地信令 IP。

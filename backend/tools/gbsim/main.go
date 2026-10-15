@@ -24,6 +24,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -31,6 +33,7 @@ import (
 	"github.com/boticz/ai-camera-backend/tools/gbsim/manscdp"
 	"github.com/boticz/ai-camera-backend/tools/gbsim/ps"
 	"github.com/boticz/ai-camera-backend/tools/gbsim/sipua"
+	"github.com/boticz/ai-camera-backend/tools/gbsim/stream"
 )
 
 // exitUsage 是「参数用法错误」的退出码，与 flag 包的约定保持一致。
@@ -73,6 +76,10 @@ func parseFlags(args []string, out io.Writer) (*Config, error) {
 	fs.IntVar(&cfg.Channels, "channels", 1, "模拟的通道数量，≥1")
 	fs.StringVar(&cfg.Mode, "mode", defaultMode, "媒体传输模式：udp / tcp-passive / tcp-active（本批次仅 udp）")
 	fs.StringVar(&cfg.StreamFile, "stream-file", "", "H.264 Annex-B 样本文件路径；给了就加载并校验")
+	fs.BoolVar(&cfg.Loop, "loop", true, "样本放完后从头再推（点播是持续流，默认开）")
+	fs.IntVar(&cfg.FPS, "fps", defaultFPS, "推流帧率；0 表示不限速（仅压测用，正常别关）")
+	fs.DurationVar(&cfg.Duration, "duration", 0, "每路推流推满该时长后自动停（0 = 不限制）")
+	fs.StringVar(&cfg.SSRCOverride, "ssrc-override", "", "设备在 200 OK 里回一个与平台不同的 y=（验证平台的 SSRC 校正路径）")
 	fs.StringVar(&cfg.Charset, "charset", defaultCharset, "XML 正文编码：GB2312 / UTF-8（对应 ac_device.charset）")
 	fs.StringVar(&cfg.LocalIP, "local-ip", "", "本地信令 IP；留空则按到 --sip-server 的路由自动探测")
 	fs.IntVar(&cfg.LocalPort, "local-port", defaultLocalPort, "本地信令端口（平台会把下行指令发到这里）")
@@ -98,7 +105,7 @@ func parseFlags(args []string, out io.Writer) (*Config, error) {
 	return &cfg, nil
 }
 
-const usageText = `gbsim —— GB28181 智能相机模拟器（v0.2.0 第一批：SIP 注册 + MANSCDP + PS/RTP 封装）
+const usageText = `gbsim —— GB28181 智能相机模拟器（v0.2.0 第二批：SIP 注册 + MANSCDP + INVITE 应答 + 真实 RTP 推流）
 
 用法:
   go run ./tools/gbsim \
@@ -109,7 +116,7 @@ const usageText = `gbsim —— GB28181 智能相机模拟器（v0.2.0 第一批
     --channels 2 \
     --mode udp \
     --stream-file testdata/sample.h264 \
-    --risk-interval 30s
+    --fps 25 --loop --duration 0
 
 参数:
 `
@@ -134,28 +141,38 @@ func run(cfg *Config) error {
 	channels := cfg.BuildChannels()
 	printBanner(cfg, channels)
 
+	// 样本码流在启动时加载一次，之后所有点播会话共用（只读，可并发）。
+	var sampleNALs [][]byte
 	if cfg.StreamFile != "" {
 		nals, err := loadH264Sample(cfg.StreamFile)
 		if err != nil {
 			return err
 		}
+		sampleNALs = nals
 		logger.Info("样本码流已加载", "file", cfg.StreamFile, "nals", len(nals),
 			"access_units", len(ps.GroupAccessUnits(nals)))
+	} else {
+		logger.Warn("未提供 --stream-file，收到点播 INVITE 会回 488（没有可推的媒体源）")
+	}
+	if !strings.EqualFold(cfg.Mode, ModeUDP) {
+		logger.Warn("--mode 非 udp：本批次只实现 UDP 收流，TCP 模式的 INVITE 会被回 488",
+			"mode", cfg.Mode)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	ua, err := sipua.New(sipua.Config{
-		DeviceID:  cfg.DeviceID,
-		SIPServer: cfg.SIPServer,
-		SIPDomain: cfg.SIPDomain,
-		Password:  cfg.Password,
-		LocalIP:   cfg.LocalIP,
-		LocalPort: cfg.LocalPort,
-		Transport: cfg.Transport,
-		Expires:   cfg.Expires,
-		Logger:    logger,
+		DeviceID:     cfg.DeviceID,
+		SIPServer:    cfg.SIPServer,
+		SIPDomain:    cfg.SIPDomain,
+		Password:     cfg.Password,
+		LocalIP:      cfg.LocalIP,
+		LocalPort:    cfg.LocalPort,
+		Transport:    cfg.Transport,
+		Expires:      cfg.Expires,
+		SSRCOverride: cfg.SSRCOverride,
+		Logger:       logger,
 	})
 	if err != nil {
 		return err
@@ -164,6 +181,9 @@ func run(cfg *Config) error {
 
 	dispatcher := &messageDispatcher{cfg: cfg, channels: channels, logger: logger}
 	ua.SetMessageHandler(dispatcher.Handle)
+	if len(sampleNALs) > 0 {
+		ua.SetMediaFactory(newMediaFactory(cfg, sampleNALs, logger))
+	}
 
 	if err := ua.Start(ctx); err != nil {
 		return err
@@ -221,10 +241,25 @@ func printBanner(cfg *Config, channels []Channel) {
 	fmt.Fprintf(os.Stderr, "  本地信令  %s:%d（%s）\n", cfg.LocalIP, cfg.LocalPort, cfg.Transport)
 	fmt.Fprintf(os.Stderr, "  注册有效期 %ds，心跳间隔 %s\n", cfg.Expires, cfg.KeepaliveInterval)
 	fmt.Fprintf(os.Stderr, "  媒体模式  %s，编码 %s\n", cfg.Mode, cfg.Charset)
+	if cfg.StreamFile != "" {
+		fmt.Fprintf(os.Stderr, "  推流参数  %s，fps=%d，loop=%v，duration=%s\n",
+			cfg.StreamFile, cfg.FPS, cfg.Loop, durationText(cfg.Duration))
+	}
+	if cfg.SSRCOverride != "" {
+		fmt.Fprintf(os.Stderr, "  ⚠ SSRC 覆盖 %s（故意与平台不同，用于验证平台的校正路径）\n", cfg.SSRCOverride)
+	}
 	fmt.Fprintf(os.Stderr, "  通道 %d 个：\n", len(channels))
 	for _, ch := range channels {
 		fmt.Fprintf(os.Stderr, "    - %s %s\n", ch.DeviceID, ch.Name)
 	}
+}
+
+// durationText 把推流时长渲染成可读文本（0 显示为「不限」）。
+func durationText(d time.Duration) string {
+	if d <= 0 {
+		return "不限"
+	}
+	return d.String()
 }
 
 // loadH264Sample 读取并校验 Annex-B H.264 样本。
@@ -262,6 +297,44 @@ func loadH264Sample(path string) ([][]byte, error) {
 			path, hasSPS, hasPPS)
 	}
 	return nals, nil
+}
+
+// newMediaFactory 构造 sipua 需要的媒体工厂：每次点播 INVITE 都新建一个推流会话。
+//
+// 关键点：**推流目标与 SSRC 全部取自 INVITE 的 SDP**（info 里），
+// 而不是 cfg 里的任何字段 —— 平台每次点播都可能分配不同的端口与 SSRC。
+// cfg 只提供那些与单次点播无关的参数：样本、帧率、循环、时长。
+func newMediaFactory(cfg *Config, nals [][]byte, logger *slog.Logger) sipua.MediaFactory {
+	return func(info sipua.InviteInfo) (sipua.MediaSession, int, error) {
+		ssrc, err := parseSSRC(info.DeviceSSRC)
+		if err != nil {
+			return nil, 0, err
+		}
+		st, err := stream.New(stream.Config{
+			NALs:       nals,
+			SSRC:       ssrc,
+			TargetIP:   info.PlatformIP,   // ← 平台 SDP 的 c=
+			TargetPort: info.PlatformPort, // ← 平台 SDP 的 m=
+			LocalIP:    cfg.LocalIP,
+			FPS:        cfg.FPS,
+			Loop:       cfg.Loop,
+			Duration:   cfg.Duration,
+			Logger:     logger,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		return st, st.LocalRTPPort(), nil
+	}
+}
+
+// parseSSRC 把国标 SSRC 的十进制字符串（10 位，如 "0200000001"）转成 uint32。
+func parseSSRC(s string) (uint32, error) {
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("SSRC %q 不是合法的十进制 32 位无符号整数：%w", s, err)
+	}
+	return uint32(v), nil
 }
 
 // keepaliveLoop 周期性发送 MANSCDP Keepalive，维持平台侧的在线状态。

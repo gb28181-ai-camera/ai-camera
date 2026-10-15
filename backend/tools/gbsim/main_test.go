@@ -6,14 +6,18 @@ import (
 	"flag"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/boticz/ai-camera-backend/tools/gbsim/manscdp"
 	"github.com/boticz/ai-camera-backend/tools/gbsim/ps"
 	"github.com/boticz/ai-camera-backend/tools/gbsim/sipua"
+	"github.com/boticz/ai-camera-backend/tools/gbsim/stream"
 )
 
 const samplePath = "testdata/sample.h264"
@@ -424,5 +428,156 @@ func TestConfigResolveLocalIP(t *testing.T) {
 	}
 	if got != "127.0.0.1" {
 		t.Fatalf("探测回环应得到 127.0.0.1，实际 %q", got)
+	}
+}
+
+// TestParseFlagsMediaOptions 覆盖本批次新增的推流参数。
+func TestParseFlagsMediaOptions(t *testing.T) {
+	var out bytes.Buffer
+	cfg, err := parseFlags([]string{
+		"--device-id", "34020000001320000001",
+		"--sip-server", "127.0.0.1:5060",
+		"--sip-domain", "3402000000",
+		"--stream-file", samplePath,
+		"--fps", "30",
+		"--duration", "5s",
+		"--ssrc-override", "0999999999",
+		"--loop=false",
+	}, &out)
+	if err != nil {
+		t.Fatalf("解析失败：%v\n%s", err, out.String())
+	}
+	if cfg.FPS != 30 {
+		t.Errorf("--fps 解析错误：%d", cfg.FPS)
+	}
+	if cfg.Duration.String() != "5s" {
+		t.Errorf("--duration 解析错误：%s", cfg.Duration)
+	}
+	if cfg.SSRCOverride != "0999999999" {
+		t.Errorf("--ssrc-override 解析错误：%q", cfg.SSRCOverride)
+	}
+	if cfg.Loop {
+		t.Error("--loop=false 未生效")
+	}
+}
+
+// TestParseFlagsDefaultLoopOn 点播是持续流，--loop 默认必须为 true。
+func TestParseFlagsDefaultLoopOn(t *testing.T) {
+	var out bytes.Buffer
+	cfg, err := parseFlags([]string{
+		"--device-id", "34020000001320000001",
+		"--sip-server", "127.0.0.1:5060",
+		"--sip-domain", "3402000000",
+	}, &out)
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if !cfg.Loop {
+		t.Error("--loop 默认应为 true")
+	}
+	if cfg.FPS != defaultFPS {
+		t.Errorf("--fps 默认应为 %d，实际 %d", defaultFPS, cfg.FPS)
+	}
+}
+
+// TestValidateRejectsBadMediaOptions 负数帧率 / 负时长 / 非数字 SSRC 都应在启动前拦下。
+func TestValidateRejectsBadMediaOptions(t *testing.T) {
+	base := func() *Config { return sampleConfig() }
+
+	c := base()
+	c.FPS = -1
+	if err := c.Validate(); err == nil {
+		t.Error("负 fps 应校验失败")
+	}
+
+	c = base()
+	c.Duration = -time.Second
+	if err := c.Validate(); err == nil {
+		t.Error("负 duration 应校验失败")
+	}
+
+	c = base()
+	c.SSRCOverride = "0x2000"
+	if err := c.Validate(); err == nil {
+		t.Error("非十进制 ssrc-override 应校验失败")
+	}
+
+	c = base()
+	c.SSRCOverride = "0999999999"
+	if err := c.Validate(); err != nil {
+		t.Errorf("合法 ssrc-override 不应失败：%v", err)
+	}
+}
+
+// TestMediaFactoryUsesSDPTarget 是接线层的守门用例：
+// 推流目标必须来自 INVITE 的 SDP（InviteInfo 的 PlatformIP/PlatformPort），
+// SSRC 必须用设备侧决定的值 —— 任何一处退回配置里的硬编码，多路点播就会串流。
+func TestMediaFactoryUsesSDPTarget(t *testing.T) {
+	nals, err := loadH264Sample(samplePath)
+	if err != nil {
+		t.Fatalf("加载样本失败：%v", err)
+	}
+
+	// 用一个真实监听的端口做目标，确保 stream.New 能成功建连。
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("监听失败：%v", err)
+	}
+	defer conn.Close()
+	host, portStr, _ := net.SplitHostPort(conn.LocalAddr().String())
+	port, _ := strconv.Atoi(portStr)
+
+	cfg := sampleConfig()
+	cfg.StreamFile = samplePath
+	cfg.FPS = 25
+	cfg.Loop = false
+
+	factory := newMediaFactory(cfg, nals, silentLogger())
+	sess, localPort, err := factory(sipua.InviteInfo{
+		PlatformIP:   host,
+		PlatformPort: port,
+		DeviceSSRC:   "0200000001",
+	})
+	if err != nil {
+		t.Fatalf("媒体工厂构造失败：%v", err)
+	}
+	st, ok := sess.(*stream.Streamer)
+	if !ok {
+		t.Fatalf("媒体工厂应返回 *stream.Streamer，实际 %T", sess)
+	}
+	defer st.Close()
+
+	wantTarget := net.JoinHostPort(host, strconv.Itoa(port))
+	if st.Target() != wantTarget {
+		t.Errorf("推流目标应取自 SDP 的 %q，实际 %q", wantTarget, st.Target())
+	}
+	if st.SSRC() != 200000001 {
+		t.Errorf("SSRC 应取自 SDP 的 0200000001（十进制 200000001），实际 %d", st.SSRC())
+	}
+	if localPort == 0 || localPort != st.LocalRTPPort() {
+		t.Errorf("返回的本地端口 %d 应等于 Streamer 实际绑定端口 %d", localPort, st.LocalRTPPort())
+	}
+}
+
+// TestParseSSRC 锁定十进制 SSRC 字符串到 uint32 的转换与报错。
+func TestParseSSRC(t *testing.T) {
+	cases := map[string]uint32{
+		"0200000001": 200000001,
+		"0999999999": 999999999,
+		"0000000001": 1,
+	}
+	for in, want := range cases {
+		got, err := parseSSRC(in)
+		if err != nil {
+			t.Fatalf("解析 %q 失败：%v", in, err)
+		}
+		if got != want {
+			t.Errorf("解析 %q 应为 %d，实际 %d", in, want, got)
+		}
+	}
+	for _, bad := range []string{"", "0x2000", "abc", "99999999999999"} {
+		if _, err := parseSSRC(bad); err == nil {
+			t.Errorf("非法 SSRC %q 应报错", bad)
+		}
 	}
 }

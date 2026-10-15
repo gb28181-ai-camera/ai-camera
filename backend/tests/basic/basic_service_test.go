@@ -153,8 +153,17 @@ func TestRegionService_Update(t *testing.T) {
 		if m.UpdatedBy != testUserName {
 			t.Errorf("updated_by = %q, 期望 %q", m.UpdatedBy, testUserName)
 		}
-		if !m.UpdatedDT.After(m.CreatedDT) && m.UpdatedDT.Before(m.CreatedDT) {
-			t.Errorf("updated_dt(%v) 应不早于 created_dt(%v)", m.UpdatedDT, m.CreatedDT)
+		// ⚠️ 这两个时间戳来自**不同的时钟**，不能做微秒级先后比较：
+		//   created_dt 由 PostgreSQL 的 DEFAULT CURRENT_TIMESTAMP 赋值（库的时钟）
+		//   updated_dt 由 Go 的 autoUpdateTime 赋值（应用的时钟）
+		// 容器化环境下二者分处不同机器（PG 在 Docker 的 Linux VM、测试在 Windows 宿主机），
+		// 实测出现过 updated_dt 比 created_dt 早 81µs 的抖动，约 1/3 概率误报。
+		// 这里给 1 秒容差 —— 断言的**本意**是「更新确实刷新了 updated_dt」，
+		// 而不是断言两个时钟的微秒级先后。
+		const clockSkewTolerance = time.Second
+		if m.UpdatedDT.Before(m.CreatedDT.Add(-clockSkewTolerance)) {
+			t.Errorf("updated_dt(%v) 比 created_dt(%v) 早了超过 %v，更新未刷新时间戳",
+				m.UpdatedDT, m.CreatedDT, clockSkewTolerance)
 		}
 		if m.CreatedBy != origCreatedBy {
 			t.Errorf("created_by 被改动: %q -> %q", origCreatedBy, m.CreatedBy)

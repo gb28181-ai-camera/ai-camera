@@ -1,7 +1,8 @@
 // Package sipua 实现 gbsim 所需的极简 SIP 用户代理。
 //
-// 它只覆盖 GB28181 **设备侧**用到的动作：REGISTER（含 Digest）、周期 Keepalive、
-// 接收平台下发的 MESSAGE 并回 200 OK。INVITE / BYE / 云台应答等留给后续批次。
+// 它覆盖 GB28181 **设备侧**用到的动作：REGISTER（含 Digest）、周期 Keepalive、
+// 接收平台下发的 MESSAGE 并回 200 OK，以及实时点播的 INVITE → 200 OK(SDP) → ACK → BYE
+// 全套会话（见 invite.go）。云台应答、回放（MANSRTSP）、TCP 媒体模式留给后续批次。
 //
 // 底层用 github.com/emiago/sipgo 的事务层，不自己实现 RFC 3261 的状态机。
 // 注意 sipgo 只提供**客户端** Digest（Client.DoDigestAuth），服务端 Digest 是另一个项目
@@ -46,6 +47,11 @@ type Config struct {
 	Expires   int    // 注册有效期（秒）
 	UserAgent string // User-Agent 头，仅用于日志辨识
 	Logger    *slog.Logger
+
+	// SSRCOverride 非空时，设备在 200 OK 里回一个**与平台不同**的 SSRC（--ssrc-override）。
+	// 用途是覆盖平台的 SSRC 校正路径（§13.3.2）：平台发现不一致且开了 ssrc_check 时
+	// 会调 updateRtpServerSSRC 把收流端改成设备报的值。留空则沿用平台的 y=。
+	SSRCOverride string
 }
 
 // MessageHandler 处理入向 MESSAGE 的 XML 正文，返回若干条**出向 MESSAGE** 的正文。
@@ -79,6 +85,12 @@ type UA struct {
 	expiresAt    time.Time
 	lastResponse *sip.Response
 	msgHandler   MessageHandler
+	mediaFactory MediaFactory
+
+	// sessMu 保护 sessions：INVITE / ACK / BYE 来自 sipgo 的不同处理协程，
+	// 同一 Call-ID 的会话状态必须有锁。
+	sessMu   sync.Mutex
+	sessions map[string]*inviteSession
 }
 
 // New 构造 UA 并完成 sipgo 的 UA/Client/Server 组装，但不开始监听 —— 由 Start 负责。
@@ -129,17 +141,16 @@ func New(cfg Config) (*UA, error) {
 		aor:        sip.Uri{Scheme: "sip", User: cfg.DeviceID, Host: cfg.SIPDomain},
 		contactURI: sip.Uri{Scheme: "sip", User: cfg.DeviceID, Host: cfg.LocalIP, Port: cfg.LocalPort},
 		fromTag:    sip.GenerateTagN(16),
+		sessions:   map[string]*inviteSession{},
 	}
 
 	u.server.OnMessage(u.handleMessage)
 	u.server.OnOptions(u.handleOptions)
 	u.server.OnNoRoute(u.handleNoRoute)
-	// 本批次不实现 INVITE 应答（媒体点播留给后续批次），但必须明确回绝而不是静默丢弃，
-	// 否则平台侧会一直等到超时，排障时看不出「设备收到了但不会做」。
-	u.server.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
-		u.log.Warn("收到 INVITE，但本批次尚未实现媒体点播应答", "call_id", callIDOf(req))
-		tx.Respond(sip.NewResponseFromRequest(req, sip.StatusNotImplemented, "Not Implemented", nil))
-	})
+	// 实时点播：INVITE 协商媒体 → ACK 起流 → BYE 停流。
+	u.server.OnInvite(u.handleInvite)
+	u.server.OnAck(u.handleAck)
+	u.server.OnBye(u.handleBye)
 
 	return u, nil
 }
@@ -209,8 +220,9 @@ func (u *UA) Start(ctx context.Context) error {
 	}
 }
 
-// Close 释放 UA 资源。
+// Close 释放 UA 资源。它会先停掉所有在推的媒体会话，避免 goroutine 泄漏。
 func (u *UA) Close() error {
+	u.stopAllSessions()
 	if u.server != nil {
 		_ = u.server.Close()
 	}

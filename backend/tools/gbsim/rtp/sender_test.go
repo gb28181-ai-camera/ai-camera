@@ -4,18 +4,28 @@ import (
 	"bytes"
 	"encoding/binary"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
 
 // memConn 是一个把写入内容攒在内存里的假连接，用于确定性断言 RTP 包内容。
 // 只实现 Write；其余 net.Conn 方法在测试里用不到（嵌入的 nil 接口足够满足类型）。
+//
+// ⚠️ mu 是必需的：真实 net.Conn 允许并发 Write，Sender 也确实是并发使用的
+// （TestSendPSBytesConcurrent 从 8 个 goroutine 同时发）。没有这把锁，
+// 测试用的 bytes.Buffer 会在 -race 下报数据竞争 —— 那是假连接的问题，不是 Sender 的。
 type memConn struct {
 	net.Conn
+	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-func (m *memConn) Write(b []byte) (int, error) { return m.buf.Write(b) }
+func (m *memConn) Write(b []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.buf.Write(b)
+}
 
 type parsedPacket struct {
 	version     byte
