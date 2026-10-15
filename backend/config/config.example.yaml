@@ -1,0 +1,77 @@
+# ============================================================================
+# AI Camera 后端配置模板 —— 本地开发（宿主机跑 Go 进程）
+#
+# 用法：
+#   cp backend/config/config.example.yaml backend/config/config.yaml
+#   然后按需修改（config.yaml 已被 gitignore，不会提交）
+#
+# 依赖本地数据库：
+#   docker compose up -d            # 起 postgres（含 PostGIS + pgvector）与 redis
+#   cd backend && go run ./cmd/server/main.go
+#
+# 所有标了「可被环境变量覆盖」的项，都可以不改文件、直接用环境变量覆盖，
+# 例如：DATABASE_PASSWORD=xxx go run ./cmd/server/main.go
+# 完整映射见 backend/config/config.go 的 envBindings。
+# ============================================================================
+
+server:
+  port: 8080
+  mode: debug
+  read_timeout: 10s
+  write_timeout: 10s
+
+database:
+  # 本地 compose 起的 PostgreSQL（宿主机视角为 localhost）
+  host: localhost
+  port: 5432
+  user: aicamera
+  # 【需填写】与 .env 的 POSTGRES_PASSWORD 一致；也可用环境变量 DATABASE_PASSWORD 覆盖
+  password: ""
+  dbname: ai_camera_dev
+  sslmode: disable
+  max_idle_conns: 5
+  max_open_conns: 20
+  conn_max_lifetime: 1h
+
+redis:
+  host: localhost
+  port: 6379
+  password: aicamera_redis
+  db: 0
+  pool_size: 10
+
+jwt:
+  # 【需修改】生产环境务必更换。生成：openssl rand -base64 48
+  secret: "dev-only-please-change-me"
+  expire_hours: 7200
+
+casbin:
+  model_path: config/rbac_model.conf
+  auto_load_interval: 5m
+
+media:
+  upload_dir: ./uploads
+  base_url: "http://localhost:8080/uploads"
+
+thirdparty:
+  getui:
+    app_id: ""
+    app_key: ""
+    app_secret: ""
+    master_secret: ""
+  sms:
+    secret_id: ""
+    secret_key: ""
+    sdk_app_id: ""
+    sign_name: ""
+
+swagger:
+  enabled: true
+
+log:
+  level: info
+  format: console
+  output: console
+  max_size: 100
+  max_backups: 30
+  max_age: 7

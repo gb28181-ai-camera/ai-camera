@@ -36,8 +36,26 @@ ai-camera/
 | `postgres_ai_camera_dev` | `ai_camera_dev` | 开发环境数据库 |
 | `postgres_ai_camera_test` | `ai_camera_test` | 测试环境数据库（冒烟测试用） |
 
-MCP 配置文件位于：
-`C:\Users\Administrator\AppData\Roaming\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
+MCP 配置模板见仓库根 `.mcp.json.example`（`.mcp.json` 内含明文连接串，已被 gitignore）：
+```bash
+cp .mcp.json.example .mcp.json   # 然后填入数据库密码
+```
+
+### 本地数据库（Docker Compose）
+
+**本地调试使用本地数据库，不再依赖远程实例。** 容器镜像为 PostgreSQL 16 + **PostGIS** + **pgvector**：
+
+```bash
+cd <仓库根>          # 必须在此目录，.env 与 docker-compose.yml 同级
+cp .env.example .env # 填入 POSTGRES_PASSWORD 与 JWT_SECRET
+docker compose up -d # 启动 postgres(5432) + redis(6379)
+docker compose up -d --profile full   # 额外启动 backend + frontend
+```
+
+- 两个库 `ai_camera_dev` / `ai_camera_test` 由 `deploy/postgres/init/01-extensions.sql` 首次启动时自动创建，并各自装好 `postgis` 与 `vector` 扩展。
+- 连接信息：`localhost:5432`，用户 `aicamera`，密码见 `.env`。
+- 配置模板：`backend/config/config.example.yaml`（开发）、`config-test.example.yaml`（测试），复制为去掉 `.example` 的文件即可用。
+- **容器化部署时密钥不落盘**：`BACKEND` 通过环境变量注入（`DATABASE_PASSWORD` / `JWT_SECRET` 等），映射表见 [backend/config/config.go](backend/config/config.go) 的 `envBindings`。
 
 ## 常用命令
 
@@ -265,28 +283,38 @@ cd backend && go run ./tests/testutil/resetdb/main.go
 ```
 
 **执行测试**（必须设置环境变量指向测试数据库）：
+
+先起本地数据库并导出一次凭据，后续命令即可省略：
 ```bash
-cd backend && TEST_DB_HOST=192.168.1.227 TEST_DB_PORT=5432 TEST_DB_USER=boticz TEST_DB_PASSWORD='<测试库密码>' TEST_DB_NAME=ai_camera_test go test ./tests/... -count=1 -p 1 -timeout 600s
+# 仓库根目录：起本地 PostgreSQL（含 PostGIS + pgvector）与 Redis
+docker compose up -d
+
+# 导出测试库连接信息（密码取自 .env 的 POSTGRES_PASSWORD）
+export TEST_DB_HOST=localhost
+export TEST_DB_PORT=5432
+export TEST_DB_USER=aicamera
+export TEST_DB_PASSWORD='<.env 中的 POSTGRES_PASSWORD>'
+export TEST_DB_NAME=ai_camera_test
 ```
 
-> **`<测试库密码>` 从何而来**：测试库密码不再写入版本库。请向团队管理员索取，
-> 或从本地 `backend/config/config-test.yaml` 的 `database.password` 读取（该文件已被 gitignore）。
-> 建议先导出一次，后续命令即可省略：
-> ```bash
-> export TEST_DB_PASSWORD='<向管理员索取>'
-> ```
-> `resetdb` / `initdb` / `dbtool` 已改为**不提供密码默认值**，未设置环境变量时会直接报错退出，
-> 避免明文凭据再次进入版本库。
+然后执行：
+```bash
+cd backend && go test ./tests/... -count=1 -p 1 -timeout 600s
+```
+
+> **测试库密码从何而来**：取自 `.env` 的 `POSTGRES_PASSWORD`（`.env` 已被 gitignore）。
+> `resetdb` / `initdb` / `dbtool` **不提供密码默认值**，未设置 `TEST_DB_PASSWORD` 时会直接报错退出，
+> 避免明文凭据进入版本库。
+
+运行指定模块：
+```bash
+cd backend && go test ./tests/system/... -v
+```
 
 > **必须加 `-p 1`（包间串行）**。`go test ./...` 默认**并行执行多个测试包**，而本项目所有包共用同一个
 > 物理库 `ai_camera_test`。`WithTx` 只保证**单进程内**的事务隔离（它覆盖的是该进程的全局 DB 句柄），
 > 跨进程的并发写入仍会相互干扰：A 包按数量统计断言时，B 包恰好插入了同类型数据就会让断言失败。
 > 实测：不加 `-p 1` 时 `tests/upgrade` 有 2 个用例随机失败，加 `-p 1` 后全绿。
-
-运行指定模块：
-```bash
-cd backend && TEST_DB_HOST=192.168.1.227 TEST_DB_PORT=5432 TEST_DB_USER=boticz TEST_DB_PASSWORD='<测试库密码>' TEST_DB_NAME=ai_camera_test go test ./tests/system/... -v
-```
 
 **字段验证**：所有后端单元测试必须验证绝大多数字段的更新，防止字段保存失效。
 

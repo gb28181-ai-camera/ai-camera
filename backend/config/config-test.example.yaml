@@ -1,0 +1,74 @@
+# ============================================================================
+# AI Camera 后端配置模板 —— 测试环境 / 冒烟测试
+#
+# 用法：
+#   cp backend/config/config-test.example.yaml backend/config/config-test.yaml
+#   CONFIG_PATH="config/config-test.yaml" go run ./cmd/server/main.go
+#
+# 与开发环境的差异：端口 8081（与 8080 错开）、库 ai_camera_test、
+# 日志走 console（便于冒烟排查）、上传目录独立。
+#
+# ⚠️ 测试库 ai_camera_test 由 deploy/postgres/init/01-extensions.sql 自动创建，
+#    与开发库同实例、同扩展（PostGIS + pgvector）。
+# ⚠️ 禁止用测试配置连开发库：后端单测与冒烟测试会清库。
+# ============================================================================
+
+server:
+  port: 8081
+  mode: test
+  read_timeout: 10s
+  write_timeout: 10s
+
+database:
+  host: localhost
+  port: 5432
+  user: aicamera
+  # 【需填写】与 .env 的 POSTGRES_PASSWORD 一致；也可用环境变量 DATABASE_PASSWORD 覆盖
+  password: ""
+  dbname: ai_camera_test
+  sslmode: disable
+  max_idle_conns: 5
+  max_open_conns: 20
+  conn_max_lifetime: 1h
+
+redis:
+  host: localhost
+  port: 6379
+  password: aicamera_redis
+  db: 0
+  pool_size: 10
+
+jwt:
+  secret: "test-only-please-change-me"
+  expire_hours: 7200
+
+casbin:
+  model_path: config/rbac_model.conf
+  auto_load_interval: 5m
+
+media:
+  upload_dir: ./uploads-test
+  base_url: "http://localhost:8081/uploads"
+
+thirdparty:
+  getui:
+    app_id: ""
+    app_key: ""
+    app_secret: ""
+    master_secret: ""
+  sms:
+    secret_id: ""
+    secret_key: ""
+    sdk_app_id: ""
+    sign_name: ""
+
+swagger:
+  enabled: true
+
+log:
+  level: info
+  format: console
+  output: console
+  max_size: 100
+  max_backups: 30
+  max_age: 7

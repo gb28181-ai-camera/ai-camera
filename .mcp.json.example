@@ -1,0 +1,27 @@
+{
+  "_comment": "AI Camera 项目的 PostgreSQL MCP Server 配置模板。用法：cp .mcp.json.example .mcp.json，然后填入真实密码。.mcp.json 已被 gitignore（内含明文连接串），切勿提交。",
+  "mcpServers": {
+    "postgres_ai_camera_dev": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@bytebase/dbhub",
+        "--transport",
+        "stdio",
+        "--dsn",
+        "postgresql://aicamera:<数据库密码>@localhost:5432/ai_camera_dev?sslmode=disable"
+      ]
+    },
+    "postgres_ai_camera_test": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@bytebase/dbhub",
+        "--transport",
+        "stdio",
+        "--dsn",
+        "postgresql://aicamera:<数据库密码>@localhost:5432/ai_camera_test?sslmode=disable"
+      ]
+    }
+  }
+}

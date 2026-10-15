@@ -1,0 +1,78 @@
+# ============================================================================
+# AI Camera 后端配置 —— Docker Compose 容器内部使用
+#
+# 该文件由 docker-compose.yml 挂载为容器内的 config/config.yaml。
+#
+# ⚠️ 本文件**不存放任何密钥**。容器内会变化的值（数据库密码、JWT 密钥等）
+#    一律通过环境变量注入，由 backend/config/config.go 的 envBindings 覆盖：
+#
+#      DATABASE_HOST / DATABASE_PORT / DATABASE_USER
+#      DATABASE_PASSWORD / DATABASE_DBNAME
+#      REDIS_HOST / REDIS_PORT / REDIS_PASSWORD
+#      JWT_SECRET
+#
+#    compose 从同目录的 .env 读取这些变量（见 .env.example）。
+#
+# 与 config.example.yaml 的差异：主机名用 compose 服务名（postgres / redis），
+# 而非 localhost。
+# ============================================================================
+
+server:
+  port: 8080
+  mode: release
+  read_timeout: 10s
+  write_timeout: 10s
+
+database:
+  host: postgres          # ← compose 服务名；可被 DATABASE_HOST 覆盖
+  port: 5432
+  user: aicamera
+  password: ""            # ← 由 DATABASE_PASSWORD 注入，此处留空
+  dbname: ai_camera_dev
+  sslmode: disable
+  max_idle_conns: 10
+  max_open_conns: 50
+  conn_max_lifetime: 1h
+
+redis:
+  host: redis             # ← compose 服务名；可被 REDIS_HOST 覆盖
+  port: 6379
+  password: ""            # ← 由 REDIS_PASSWORD 注入
+  db: 0
+  pool_size: 10
+
+jwt:
+  secret: ""              # ← 由 JWT_SECRET 注入（compose 中该项为必填）
+  expire_hours: 7200
+
+casbin:
+  model_path: config/rbac_model.conf
+  auto_load_interval: 5m
+
+media:
+  upload_dir: /app/uploads
+  base_url: "/uploads"
+
+thirdparty:
+  getui:
+    app_id: ""
+    app_key: ""
+    app_secret: ""
+    master_secret: ""
+  sms:
+    secret_id: ""
+    secret_key: ""
+    sdk_app_id: ""
+    sign_name: ""
+
+swagger:
+  # 开源部署默认开启接口文档，便于对接；如需关闭改为 false
+  enabled: true
+
+log:
+  level: info
+  format: json
+  output: console
+  max_size: 100
+  max_backups: 30
+  max_age: 7

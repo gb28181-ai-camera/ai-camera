@@ -107,30 +107,59 @@ ai-camera/
 
 ## 快速开始
 
-### 后端（Go）
+### 一键部署（Docker Compose，开源版）
 
 ```bash
-# 1. 准备配置（config/config.yaml 已被 gitignore，需自行创建）
-#    参考 backend/config/config.yaml，至少配置 server.port 与 database 段
+# 1. 准备环境变量（.env 已被 gitignore，勿提交）
+cp .env.example .env
+#    必须填写：POSTGRES_PASSWORD、JWT_SECRET（生成：openssl rand -base64 48）
 
-# 2. 启动开发服务（默认 8080，读 config/config.yaml）
+# 2. 起基础设施（PostgreSQL 16 + PostGIS + pgvector，以及 Redis）
+docker compose up -d
+
+# 3. 起全部服务（额外启动 backend + frontend）
+docker compose up -d --profile full
+
+# 4. 访问
+#    管理后台  http://localhost:8080/admin/
+#    官网      http://localhost:8080/
+#    接口文档  http://localhost:8080/swagger/
+```
+
+- 两个数据库 `ai_camera_dev`（开发）与 `ai_camera_test`（测试）在首次启动时自动创建，并各自装好 **PostGIS**（GIS 定位与移动位置轨迹）与 **pgvector**（向量检索）扩展。
+- 详见 [deploy/postgres/](deploy/postgres/) 与 [docker-compose.yml](docker-compose.yml)。
+
+### 后端（Go，本地开发）
+
+```bash
+# 1. 起本地数据库（本地调试使用本地库，无需外部依赖）
+docker compose up -d
+
+# 2. 准备配置（config.yaml 已被 gitignore，从模板复制）
+cp backend/config/config.example.yaml backend/config/config.yaml
+#    填入 database.password（与 .env 的 POSTGRES_PASSWORD 一致），
+#    或用环境变量免改文件：export DATABASE_PASSWORD=xxx
+
+# 3. 启动开发服务（默认 8080）
 cd backend && go run ./cmd/server/main.go
 
-# 3. 启动测试服务（8081，读 config-test.yaml）
+# 4. 启动测试服务（8081）
 export CONFIG_PATH="config/config-test.yaml" && cd backend && go run ./cmd/server/main.go
 
-# 4. 编译
+# 5. 编译
 cd backend && go build -o server ./cmd/server/main.go
 
-# 5. 生成 Swagger 文档（前端代码生成的前置步骤）
+# 6. 生成 Swagger 文档（前端代码生成的前置步骤）
 cd backend && bash scripts/gen-swagger.sh
 
-# 6. 运行测试（必须指向测试库）
+# 7. 运行测试（必须指向测试库，先导出一次连接信息）
+export TEST_DB_HOST=localhost TEST_DB_PORT=5432 TEST_DB_USER=aicamera \
+       TEST_DB_PASSWORD='<.env 中的 POSTGRES_PASSWORD>' TEST_DB_NAME=ai_camera_test
 cd backend && go run ./tests/testutil/resetdb/main.go
-cd backend && TEST_DB_HOST=192.168.1.227 TEST_DB_PORT=5432 TEST_DB_USER=boticz \
-  TEST_DB_PASSWORD='<测试库密码>' TEST_DB_NAME=ai_camera_test \
-  go test ./tests/... -count=1 -timeout 180s
+cd backend && go test ./tests/... -count=1 -p 1 -timeout 600s
 ```
+
+> 后端配置支持**环境变量覆盖**（容器化部署用），映射见 [backend/config/config.go](backend/config/config.go) 的 `envBindings`。
 
 ### 前端（React / Electron）
 
@@ -162,12 +191,17 @@ cd app && flutter analyze   # 要求 0 error 0 warning
 
 ### 数据库
 
+**本地调试使用本地 PostgreSQL**（Docker Compose 提供），不依赖远程实例。
+
 | 环境 | 数据库 | MCP Server | 用途 |
 |:---|:---|:---|:---|
 | 开发 | `ai_camera_dev` | `postgres_ai_camera_dev` | 日常编码自测（**仅供查阅表结构**） |
 | 测试 | `ai_camera_test` | `postgres_ai_camera_test` | 后端单测、接口测试、冒烟测试 |
 
-PostgreSQL 地址：`192.168.1.227:5432`。**测试必须使用测试库**，禁止操作开发库。
+- 连接地址：`localhost:5432`（`docker compose up -d` 起的容器），用户 `aicamera`，密码见 `.env`。
+- 镜像在 PostgreSQL 16 基础上装好了 **PostGIS** 与 **pgvector** 两个扩展，见 [deploy/postgres/](deploy/postgres/)。
+- MCP 配置：`cp .mcp.json.example .mcp.json` 后填入密码（`.mcp.json` 已被 gitignore）。
+- **测试必须使用测试库**，禁止操作开发库。
 
 ---
 

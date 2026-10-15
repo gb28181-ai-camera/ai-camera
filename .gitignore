@@ -16,9 +16,10 @@ backend/config/config-test.yaml
 # MCP Server 配置内嵌数据库连接串（含明文密码与内网 IP），禁止提交
 .mcp.json
 .mcp.local.json
-# 环境变量文件（前端两个 .env 只有 API 地址，单独白名单）
+# 环境变量文件（前端两个 .env 只有 API 地址；.env.example 是模板，均可提交）
 .env
 .env.*
+!.env.example
 !frontend/.env
 !frontend/.env.production
 # GB28181 / 流媒体 / 语音 Agent 后续引入的本地密钥

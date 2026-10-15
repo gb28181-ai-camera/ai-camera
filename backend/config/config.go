@@ -41,16 +41,25 @@ type DatabaseConfig struct {
 	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
 }
 
-// DSN 构造 PostgreSQL 连接串。
+// DSN 构造 libpq 关键字/值格式的 PostgreSQL 连接串。
+//
+// ⚠️ 密码为空时必须**整个省略** password 键，不能输出 `password=`。
+// pgx 解析关键字/值格式时，空值会让其吞掉其后的键 —— 实测表现：
+// 报错里 `database=` 为空、实际连不上目标库，且错误信息指向 database
+// 而非 password，极难定位。配置模板里 password 留空是常见情形
+// （由环境变量注入），故必须在此处兜住。
 func (c *DatabaseConfig) DSN() string {
 	sslmode := c.SSLMode
 	if sslmode == "" {
 		sslmode = "disable"
 	}
-	return fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s TimeZone=Asia/Shanghai",
-		c.Host, c.Port, c.User, c.Password, c.DBName, sslmode,
-	)
+
+	dsn := fmt.Sprintf("host=%s port=%d user=%s", c.Host, c.Port, c.User)
+	if c.Password != "" {
+		dsn += " password=" + c.Password
+	}
+	return fmt.Sprintf("%s dbname=%s sslmode=%s TimeZone=Asia/Shanghai",
+		dsn, c.DBName, sslmode)
 }
 
 // RedisConfig Redis 连接配置（预留：验证码、令牌黑名单、实时推送）。
@@ -122,7 +131,35 @@ type SwaggerConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 }
 
+// envBindings 允许用环境变量覆盖 YAML 中的配置项。
+//
+// 用途：容器化部署（docker compose / K8s）时，数据库地址与密码随环境变化，
+// 不应写进镜像或提交进仓库。YAML 仍是配置的基线，环境变量存在时覆盖之。
+//
+// 命名规则 `<段>_<键>` 全大写，如 database.password → DATABASE_PASSWORD。
+// 显式绑定而非 AutomaticEnv：后者对嵌套键与 Unmarshal 的行为在不同 viper 版本
+// 间不一致，显式绑定可预期。
+var envBindings = map[string]string{
+	"server.port":       "SERVER_PORT",
+	"server.mode":       "SERVER_MODE",
+	"database.host":     "DATABASE_HOST",
+	"database.port":     "DATABASE_PORT",
+	"database.user":     "DATABASE_USER",
+	"database.password": "DATABASE_PASSWORD",
+	"database.dbname":   "DATABASE_DBNAME",
+	"redis.host":        "REDIS_HOST",
+	"redis.port":        "REDIS_PORT",
+	"redis.password":    "REDIS_PASSWORD",
+	"jwt.secret":        "JWT_SECRET",
+	"media.upload_dir":  "MEDIA_UPLOAD_DIR",
+	"media.base_url":    "MEDIA_BASE_URL",
+	"log.level":         "LOG_LEVEL",
+	"swagger.enabled":   "SWAGGER_ENABLED",
+}
+
 // LoadConfig 使用 viper 读取 yaml 配置文件并反序列化为 Config。
+//
+// 读取顺序：YAML 为基线，envBindings 中列出的键可由环境变量覆盖。
 func LoadConfig(path string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
@@ -130,6 +167,13 @@ func LoadConfig(path string) (*Config, error) {
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+	}
+
+	// 环境变量覆盖
+	for key, env := range envBindings {
+		if err := v.BindEnv(key, env); err != nil {
+			return nil, fmt.Errorf("绑定环境变量 %s 失败: %w", env, err)
+		}
 	}
 
 	var cfg Config
