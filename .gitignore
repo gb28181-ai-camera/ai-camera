@@ -69,6 +69,10 @@ app/macos/Pods/
 app/android/.gradle/
 app/android/local.properties
 app/android/key.properties
+# Gradle 构建产物（app/build/ 只覆盖 Flutter 侧的输出，
+# android/ 子工程会各自产生 build/，实测会漏出 app/android/build/reports/*.html）
+app/android/build/
+app/ios/build/
 app/coverage/
 *.iml
 

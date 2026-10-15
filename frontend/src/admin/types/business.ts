@@ -4,7 +4,8 @@
  * 约定：
  * - 接口出入参类型一律取自 `api/generated/definitions/*`（如 `RiskRecord`、`PageRiskReq`），
  *   本文件只补充「页面视图层」需要的类型、字典与纯函数，不重复定义接口结构。
- * - 禁止 `as any`：所有列表数据都通过生成的强类型读取。
+ * - 禁止强制类型转换绕过检查：所有列表数据都通过生成的强类型读取。
+ *   （此处刻意不写出该断言的字面量，以免被仓库的 `grep -rn` 机检误报为违规。）
  */
 import dayjs from 'dayjs'
 import type { EChartsOption } from 'echarts'

@@ -1,0 +1,428 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"flag"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/boticz/ai-camera-backend/tools/gbsim/manscdp"
+	"github.com/boticz/ai-camera-backend/tools/gbsim/ps"
+	"github.com/boticz/ai-camera-backend/tools/gbsim/sipua"
+)
+
+const samplePath = "testdata/sample.h264"
+
+func sampleConfig() *Config {
+	return &Config{
+		DeviceID:   "34020000001320000001",
+		DeviceName: "东门球机",
+		SIPServer:  "127.0.0.1:5060",
+		SIPDomain:  "3402000000",
+		Password:   "sim-secret",
+		LocalIP:    "127.0.0.1",
+		LocalPort:  5062,
+		Transport:  "udp",
+		Expires:    3600,
+		Channels:   2,
+		Mode:       ModeUDP,
+		Charset:    defaultCharset,
+	}
+}
+
+func silentLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// TestSampleFileIsValidAnnexBH264 校验内置样本码流满足交付要求：
+// 以起始码开头、含 SPS/PPS、能被本项目自己的解析器切出 NAL。
+func TestSampleFileIsValidAnnexBH264(t *testing.T) {
+	nals, err := loadH264Sample(samplePath)
+	if err != nil {
+		t.Fatalf("样本校验失败：%v", err)
+	}
+	if len(nals) < 10 {
+		t.Fatalf("样本 NAL 数量过少：%d", len(nals))
+	}
+
+	var sps, pps, idr, nonIDR int
+	for _, nal := range nals {
+		switch ps.NALType(nal) {
+		case ps.NALTypeSPS:
+			sps++
+		case ps.NALTypePPS:
+			pps++
+		case ps.NALTypeIDR:
+			idr++
+		case ps.NALTypeNonIDR:
+			nonIDR++
+		}
+	}
+	if sps == 0 || pps == 0 {
+		t.Fatalf("样本缺少 SPS/PPS：SPS=%d PPS=%d", sps, pps)
+	}
+	if idr == 0 || nonIDR == 0 {
+		t.Fatalf("样本缺少 I/P 帧：IDR=%d 非IDR=%d", idr, nonIDR)
+	}
+
+	info, err := os.Stat(samplePath)
+	if err != nil {
+		t.Fatalf("读取样本文件信息失败：%v", err)
+	}
+	if info.Size() > 1<<20 {
+		t.Fatalf("样本文件超过 1MB：%d 字节", info.Size())
+	}
+
+	// 样本必须能被完整封装成 PS 并逐字节还原
+	var buf bytes.Buffer
+	m := ps.NewMuxer(&buf)
+	if _, err := m.WriteAnnexBStream(mustRead(t, samplePath), 0, 3600); err != nil {
+		t.Fatalf("封装样本失败：%v", err)
+	}
+	if int64(buf.Len()) <= info.Size() {
+		t.Fatalf("PS 输出应大于原始码流（含头开销），实际 %d vs %d", buf.Len(), info.Size())
+	}
+	t.Logf("样本校验通过：%d 字节 / %d 个 NAL / SPS=%d PPS=%d IDR=%d 非IDR=%d / PS 输出 %d 字节",
+		info.Size(), len(nals), sps, pps, idr, nonIDR, buf.Len())
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取 %s 失败：%v", path, err)
+	}
+	return b
+}
+
+// TestLoadH264SampleRejectsBadInput 覆盖样本校验的失败分支。
+func TestLoadH264SampleRejectsBadInput(t *testing.T) {
+	dir := t.TempDir()
+	cases := map[string][]byte{
+		"过短":           {0x00, 0x00},
+		"无起始码":         {0xFF, 0xFF, 0xFF, 0xFF, 0x67},
+		"有起始码但无SPSPPS": {0x00, 0x00, 0x00, 0x01, 0x41, 0x9A, 0x00},
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(dir, name+".h264")
+			if err := os.WriteFile(p, content, 0o600); err != nil {
+				t.Fatalf("写临时样本失败：%v", err)
+			}
+			if _, err := loadH264Sample(p); err == nil {
+				t.Fatalf("期望校验失败：%s", name)
+			}
+		})
+	}
+	if _, err := loadH264Sample(filepath.Join(dir, "不存在.h264")); err == nil {
+		t.Fatal("文件不存在时应当报错")
+	}
+}
+
+// TestBuildChannels 验证通道编码推导：类型位 132→131，序号从 1 开始。
+func TestBuildChannels(t *testing.T) {
+	cfg := sampleConfig()
+	cfg.Channels = 3
+	channels := cfg.BuildChannels()
+	if len(channels) != 3 {
+		t.Fatalf("通道数量不符：%d", len(channels))
+	}
+	want := []string{
+		"34020000001310000001",
+		"34020000001310000002",
+		"34020000001310000003",
+	}
+	for i, ch := range channels {
+		if ch.DeviceID != want[i] {
+			t.Errorf("第 %d 个通道编码：want %s got %s", i, want[i], ch.DeviceID)
+		}
+		if len(ch.DeviceID) != 20 {
+			t.Errorf("通道编码必须是 20 位：%s", ch.DeviceID)
+		}
+	}
+	if channels[0].Name != "东门球机通道1" {
+		t.Errorf("通道名不符：%q", channels[0].Name)
+	}
+}
+
+// TestDispatcherCatalogSinglePage 验证单页目录响应的 SN 回带、SumNum 与中文通道名。
+func TestDispatcherCatalogSinglePage(t *testing.T) {
+	cfg := sampleConfig()
+	d := &messageDispatcher{cfg: cfg, channels: cfg.BuildChannels(), logger: silentLogger()}
+
+	query, err := manscdp.Encode(&manscdp.Query{
+		CmdType: manscdp.CmdCatalog, SN: 123, DeviceID: cfg.DeviceID,
+	}, cfg.Charset)
+	if err != nil {
+		t.Fatalf("构造查询失败：%v", err)
+	}
+	replies := d.Handle(query, sipua.ContentTypeMANSCDP)
+	if len(replies) != 1 {
+		t.Fatalf("期望 1 条目录响应，实际 %d", len(replies))
+	}
+
+	var got manscdp.Catalog
+	if err := manscdp.Decode(replies[0], cfg.Charset, &got); err != nil {
+		t.Fatalf("解析目录响应失败：%v", err)
+	}
+	if got.CmdType != manscdp.CmdCatalog {
+		t.Errorf("CmdType 不符：%q", got.CmdType)
+	}
+	if got.SN != 123 {
+		t.Errorf("SN 应回带查询的 SN，want 123 got %d", got.SN)
+	}
+	if got.DeviceID != cfg.DeviceID {
+		t.Errorf("DeviceID 不符：%q", got.DeviceID)
+	}
+	if got.SumNum != 2 || got.DeviceList.Num != 2 {
+		t.Errorf("SumNum/Num 不符：%d/%d", got.SumNum, got.DeviceList.Num)
+	}
+	if len(got.DeviceList.Items) != 2 {
+		t.Fatalf("目录项数量不符：%d", len(got.DeviceList.Items))
+	}
+	first := got.DeviceList.Items[0]
+	if first.Name != "东门球机通道1" {
+		t.Errorf("中文通道名经 GB2312 往返后不一致：%q", first.Name)
+	}
+	if first.DeviceID != "34020000001310000001" {
+		t.Errorf("通道编码不符：%q", first.DeviceID)
+	}
+	if first.ParentID != cfg.DeviceID {
+		t.Errorf("ParentID 应为父设备编码：%q", first.ParentID)
+	}
+	if first.CivilCode != "34020000" {
+		t.Errorf("CivilCode 应取编码前 8 位：%q", first.CivilCode)
+	}
+	if first.PTZType != 1 {
+		t.Errorf("PTZType 不符：%d", first.PTZType)
+	}
+}
+
+// TestDispatcherCatalogChunking 验证大目录按 SumNum 分片（§13.3.2 的 R9 场景）。
+func TestDispatcherCatalogChunking(t *testing.T) {
+	cfg := sampleConfig()
+	cfg.Channels = catalogPageSize*2 + 7
+	d := &messageDispatcher{cfg: cfg, channels: cfg.BuildChannels(), logger: silentLogger()}
+
+	replies := d.catalogReplies(55)
+	if len(replies) != 3 {
+		t.Fatalf("期望分 3 片，实际 %d", len(replies))
+	}
+	total := 0
+	for i, r := range replies {
+		var page manscdp.Catalog
+		if err := manscdp.Decode(r, cfg.Charset, &page); err != nil {
+			t.Fatalf("解析第 %d 片失败：%v", i, err)
+		}
+		if page.SN != 55 {
+			t.Errorf("第 %d 片的 SN 应与查询一致：%d", i, page.SN)
+		}
+		if page.SumNum != cfg.Channels {
+			t.Errorf("第 %d 片的 SumNum 应为总数 %d，实际 %d", i, cfg.Channels, page.SumNum)
+		}
+		if page.DeviceList.Num != len(page.DeviceList.Items) {
+			t.Errorf("第 %d 片的 Num(%d) 与实际条数(%d) 不符",
+				i, page.DeviceList.Num, len(page.DeviceList.Items))
+		}
+		total += page.DeviceList.Num
+	}
+	if total != cfg.Channels {
+		t.Fatalf("分片条数合计 %d ≠ 总通道数 %d", total, cfg.Channels)
+	}
+	// 最后一页应当是 7 条（2*100 + 7）
+	last := replies[len(replies)-1]
+	var page manscdp.Catalog
+	if err := manscdp.Decode(last, cfg.Charset, &page); err != nil {
+		t.Fatalf("解析末页失败：%v", err)
+	}
+	if page.DeviceList.Num != 7 {
+		t.Fatalf("末页条数应为 7，实际 %d", page.DeviceList.Num)
+	}
+}
+
+// TestDispatcherAnswersDeviceInfoAndStatus 验证设备信息与设备状态查询的响应。
+func TestDispatcherAnswersDeviceInfoAndStatus(t *testing.T) {
+	cfg := sampleConfig()
+	d := &messageDispatcher{cfg: cfg, channels: cfg.BuildChannels(), logger: silentLogger()}
+
+	query := func(cmdType string) []byte {
+		b, err := manscdp.Encode(&manscdp.Query{CmdType: cmdType, SN: 9, DeviceID: cfg.DeviceID}, cfg.Charset)
+		if err != nil {
+			t.Fatalf("构造查询失败：%v", err)
+		}
+		return b
+	}
+
+	replies := d.Handle(query(manscdp.CmdDeviceInfo), "")
+	if len(replies) != 1 {
+		t.Fatalf("设备信息查询应回 1 条，实际 %d", len(replies))
+	}
+	var info manscdp.DeviceInfo
+	if err := manscdp.Decode(replies[0], cfg.Charset, &info); err != nil {
+		t.Fatalf("解析设备信息失败：%v", err)
+	}
+	if info.DeviceName != cfg.DeviceName || info.Channel != 2 || info.Result != "OK" {
+		t.Fatalf("设备信息内容不符：%+v", info)
+	}
+
+	replies = d.Handle(query(manscdp.CmdDeviceStatus), "")
+	if len(replies) != 1 {
+		t.Fatalf("设备状态查询应回 1 条，实际 %d", len(replies))
+	}
+	var status manscdp.DeviceStatus
+	if err := manscdp.Decode(replies[0], cfg.Charset, &status); err != nil {
+		t.Fatalf("解析设备状态失败：%v", err)
+	}
+	if status.Online != "ONLINE" || status.Encode != "H264" {
+		t.Fatalf("设备状态内容不符：%+v", status)
+	}
+}
+
+// TestDispatcherDropsMalformedBody 畸形正文必须被丢弃且不 panic（R1 的隔离性要求）。
+func TestDispatcherDropsMalformedBody(t *testing.T) {
+	cfg := sampleConfig()
+	d := &messageDispatcher{cfg: cfg, channels: cfg.BuildChannels(), logger: silentLogger()}
+	for _, body := range [][]byte{nil, {}, []byte("not xml"), []byte("<Response><CmdType>")} {
+		if got := d.Handle(body, ""); got != nil {
+			t.Errorf("畸形报文应返回 nil，实际 %d 条", len(got))
+		}
+	}
+	// 未实现的指令也应安静丢弃
+	unknown, _ := manscdp.Encode(&manscdp.Query{CmdType: "RecordInfo", SN: 1}, cfg.Charset)
+	if got := d.Handle(unknown, ""); got != nil {
+		t.Errorf("未实现指令应返回 nil，实际 %d 条", len(got))
+	}
+}
+
+// TestDispatcherEmptyCatalogStillReplies 空目录也必须回一条 SumNum=0，否则平台一直等超时。
+func TestDispatcherEmptyCatalogStillReplies(t *testing.T) {
+	cfg := sampleConfig()
+	d := &messageDispatcher{cfg: cfg, logger: silentLogger()} // channels 为空
+	replies := d.catalogReplies(3)
+	if len(replies) != 1 {
+		t.Fatalf("空目录应回 1 条，实际 %d", len(replies))
+	}
+	var page manscdp.Catalog
+	if err := manscdp.Decode(replies[0], cfg.Charset, &page); err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if page.SumNum != 0 || page.DeviceList.Num != 0 {
+		t.Fatalf("空目录的 SumNum/Num 应为 0：%d/%d", page.SumNum, page.DeviceList.Num)
+	}
+}
+
+// TestParseFlagsHelp --help 必须能正常输出用法并返回 ErrHelp。
+func TestParseFlagsHelp(t *testing.T) {
+	var out bytes.Buffer
+	_, err := parseFlags([]string{"--help"}, &out)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("--help 应返回 flag.ErrHelp，实际 %v", err)
+	}
+	if !strings.Contains(out.String(), "gbsim") || !strings.Contains(out.String(), "--device-id") {
+		t.Fatalf("--help 输出应包含用法与参数说明，实际：%s", out.String())
+	}
+}
+
+// TestParseFlagsHappyPath 验证完整参数解析。
+func TestParseFlagsHappyPath(t *testing.T) {
+	var out bytes.Buffer
+	cfg, err := parseFlags([]string{
+		"--device-id", "34020000001320000001",
+		"--sip-server", "127.0.0.1:5060",
+		"--sip-domain", "3402000000",
+		"--password", "p",
+		"--channels", "4",
+		"--mode", "udp",
+		"--stream-file", "testdata/sample.h264",
+		"--risk-interval", "45s",
+		"--verbose",
+	}, &out)
+	if err != nil {
+		t.Fatalf("解析失败：%v\n%s", err, out.String())
+	}
+	if cfg.DeviceID != "34020000001320000001" || cfg.Channels != 4 || cfg.Mode != ModeUDP {
+		t.Fatalf("解析结果不符：%+v", cfg)
+	}
+	if cfg.StreamFile != "testdata/sample.h264" {
+		t.Fatalf("stream-file 不符：%q", cfg.StreamFile)
+	}
+	if cfg.RiskInterval.String() != "45s" {
+		t.Fatalf("risk-interval 不符：%s", cfg.RiskInterval)
+	}
+	if !cfg.Verbose {
+		t.Fatal("verbose 未生效")
+	}
+}
+
+// TestParseFlagsValidation 覆盖参数校验的失败分支。
+func TestParseFlagsValidation(t *testing.T) {
+	baseArgs := []string{
+		"--device-id", "34020000001320000001",
+		"--sip-server", "127.0.0.1:5060",
+		"--sip-domain", "3402000000",
+	}
+	with := func(extra ...string) []string {
+		return append(append([]string{}, baseArgs...), extra...)
+	}
+	cases := map[string][]string{
+		"缺 device-id": {"--sip-server", "127.0.0.1:5060", "--sip-domain", "3402000000"},
+		"device-id 非 20 位": {
+			"--device-id", "340200", "--sip-server", "127.0.0.1:5060", "--sip-domain", "3402000000",
+		},
+		"device-id 含非数字": {
+			"--device-id", "3402000000132000000X", "--sip-server", "127.0.0.1:5060", "--sip-domain", "3402000000",
+		},
+		"缺 sip-server": {"--device-id", "34020000001320000001", "--sip-domain", "3402000000"},
+		"sip-server 无端口": {
+			"--device-id", "34020000001320000001", "--sip-server", "127.0.0.1", "--sip-domain", "3402000000",
+		},
+		"缺 sip-domain":         {"--device-id", "34020000001320000001", "--sip-server", "127.0.0.1:5060"},
+		"channels 为 0":         with("--channels", "0"),
+		"mode 非法":              with("--mode", "sctp"),
+		"transport 非法":         with("--transport", "sctp"),
+		"transport tcp 本批次未支持": with("--transport", "tcp"),
+		"charset 非法":           with("--charset", "BIG5"),
+		"expires 非正":           with("--expires", "0"),
+		"local-port 越界":        with("--local-port", "70000"),
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			if _, err := parseFlags(args, &out); err == nil {
+				t.Fatalf("期望参数校验失败：%v", args)
+			}
+			// 参数错误时也应打印用法
+			if out.Len() == 0 {
+				t.Error("参数错误时应打印用法")
+			}
+		})
+	}
+}
+
+// TestConfigResolveLocalIP 验证本地 IP 探测：显式配置优先，否则按路由探测。
+func TestConfigResolveLocalIP(t *testing.T) {
+	cfg := sampleConfig()
+	cfg.LocalIP = "10.1.2.3"
+	got, err := cfg.ResolveLocalIP()
+	if err != nil {
+		t.Fatalf("显式配置时不应报错：%v", err)
+	}
+	if got != "10.1.2.3" {
+		t.Fatalf("显式配置应原样返回：%q", got)
+	}
+
+	cfg.LocalIP = ""
+	cfg.SIPServer = "127.0.0.1:5060"
+	got, err = cfg.ResolveLocalIP()
+	if err != nil {
+		t.Fatalf("回环地址探测失败：%v", err)
+	}
+	if got != "127.0.0.1" {
+		t.Fatalf("探测回环应得到 127.0.0.1，实际 %q", got)
+	}
+}

@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS ac_gb_channel (
     stream_id         VARCHAR(100),
     record_plan_id    BIGINT,
     enable_broadcast  BOOLEAN       DEFAULT FALSE,
-    -- 设备上报的属性（对应「设备参数」页面；WVP 的 wvp_device_channel 有 89 列，
+    -- 设备上报的属性（对应「设备参数」页面；WVP 的 wvp_device_channel 有 85 列，
     -- 此处保留国标 2016 常用项。若后续需完整对齐，按 WVP 逐列补齐）
     block             VARCHAR(20),
     safety_way        VARCHAR(50),
@@ -179,6 +179,7 @@ COMMENT ON COLUMN ac_gb_channel.stream_id       IS '绑定流 ID';
 COMMENT ON COLUMN ac_gb_channel.record_plan_id  IS '绑定录像计划';
 COMMENT ON COLUMN ac_gb_channel.enable_broadcast IS '是否允许语音广播';
 COMMENT ON COLUMN ac_gb_channel.sync_dt         IS '最近一次目录同步时间';
+COMMENT ON COLUMN ac_gb_channel.password        IS '设备上报的通道密码（敏感，接口返回时脱敏）';
 COMMENT ON COLUMN ac_gb_channel.dept_id         IS '所属部门（数据权限）';
 
 

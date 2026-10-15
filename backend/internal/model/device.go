@@ -39,6 +39,29 @@ type Device struct {
 	// 物联网卡
 	IotCardID *int64 `gorm:"column:iot_card_id;comment:物联网卡ID" json:"iot_card_id"`
 
+	// ── 国标接入（GB28181，v0.2.0 新增 13 列）──────────────────────
+	//
+	// ⚠️ gb_device_id 与 device_code 是**两个不同的 ID 命名空间**：
+	//   device_code 为业务编号（如 CAM_001），供 /web/devices/:id/heartbeat 使用；
+	//   gb_device_id 为 20 位国标编码，是 SIP From 头携带的值。
+	// 二者不得互相复用。gb_device_id 为空的设备不参与 SIP（信令层回 403）。
+	// 唯一约束为**部分唯一索引**（WHERE gb_device_id IS NOT NULL AND deleted_at IS NULL），
+	// 无法用 GORM tag 表达，由 DDL 脚本创建；AutoMigrate 只负责列本身。
+	// 依据：docs/开发文档/数据库设计/sql/ddl/09-国标视频.sql 第 0 节。
+	GbDeviceID     string     `gorm:"column:gb_device_id;size:20;comment:国标20位编码,SIP From头携带" json:"gb_device_id"`
+	SipPassword    string     `gorm:"column:sip_password;size:100;comment:设备SIP Digest密码(敏感,接口返回时脱敏)" json:"sip_password"`
+	SipRealm       string     `gorm:"column:sip_realm;size:50;comment:SIP鉴权域,默认取gb28181.sip_domain" json:"sip_realm"`
+	SipTransport   string     `gorm:"column:sip_transport;size:10;default:UDP;comment:SIP传输 UDP/TCP" json:"sip_transport"`
+	StreamMode     string     `gorm:"column:stream_mode;size:20;default:UDP;comment:媒体传输 UDP/TCP-PASSIVE/TCP-ACTIVE" json:"stream_mode"`
+	Charset        string     `gorm:"column:charset;size:20;default:GB2312;comment:XML报文编码 GB2312/UTF-8" json:"charset"`
+	RegisterStatus string     `gorm:"column:register_status;size:20;default:pending;index;comment:注册状态 pending/activated/rejected" json:"register_status"`
+	RegisterDT     *time.Time `gorm:"column:register_dt;comment:首次注册成功时间" json:"register_dt"`
+	SipExpires     *time.Time `gorm:"column:sip_expires;index;comment:SIP注册过期时间" json:"sip_expires"`
+	MediaServerID  string     `gorm:"column:media_server_id;size:50;default:auto;comment:绑定媒体节点,auto为自动选择" json:"media_server_id"`
+	ChannelCount   int64      `gorm:"column:channel_count;default:0;comment:通道数(冗余,列表展示用)" json:"channel_count"`
+	LocalIP        string     `gorm:"column:local_ip;size:50;comment:设备级源IP覆盖(多网卡场景)" json:"local_ip"`
+	SDPIP          string     `gorm:"column:sdp_ip;size:50;comment:设备级SDP IP覆盖(NAT场景)" json:"sdp_ip"`
+
 	// 运行时状态（设备心跳/平台探测更新）
 	Status       string     `gorm:"column:status;size:20;default:offline;comment:运行状态 online/offline" json:"status"`
 	Battery      int        `gorm:"column:battery;comment:电量百分比" json:"battery"`

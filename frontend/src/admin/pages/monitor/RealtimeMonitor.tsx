@@ -6,6 +6,7 @@ import RegionSelect from '../../components/RegionSelect'
 import DeviceSelect from '../../components/DeviceSelect'
 import EmptyState from '../../components/EmptyState'
 import StatusTag from '../../components/StatusTag'
+import LivePlayer from '../../components/LivePlayer'
 import type { Device } from '../../api/generated/definitions/Device'
 
 /** 分屏布局：窗口数量 */
@@ -104,13 +105,15 @@ const RealtimeMonitor: React.FC = () => {
             >
               {device ? (
                 device.stream_url && device.status !== 'offline' ? (
-                  <video
-                    src={device.stream_url}
-                    autoPlay
-                    muted
+                  // 播放器内核统一走 LivePlayer。
+                  // 现有 `device.stream_url` 是整串地址，按扩展名自动选内核（mp4/HLS → 原生）；
+                  // 接入国标后应改为传 httpBase + stream（{gbDeviceId}_{gbChannelId}），
+                  // 且视频墙按设计 §7.4 指定 protocol="flv" 铺格子（WebRTC 连接数有限）
+                  <LivePlayer
+                    url={device.stream_url}
+                    objectFit="cover"
                     controls
-                    playsInline
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                    style={{ width: '100%', height: '100%' }}
                   />
                 ) : (
                   <div style={{ color: '#bfbfbf', textAlign: 'center' }}>

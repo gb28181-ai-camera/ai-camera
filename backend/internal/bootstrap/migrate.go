@@ -68,6 +68,32 @@ func AutoMigrate() {
 		&model.RiskNotifySetting{},
 		&model.ThirdPartyConfig{},
 		&model.WebhookConfig{},
+
+		// ── 国标视频（GB/T 28181，v0.2.0）──
+		// 注意：ac_gb_platform_group / ac_gb_platform_region 为纯关联表（无 active / 无 dept_id），
+		// 仍在列表中以便 AutoMigrate 建表与索引。GbSipLog 不嵌 BaseModel（追加写日志表）。
+		&model.GbChannel{},
+		&model.GbGroup{},
+		&model.GbMediaServer{},
+		&model.GbStreamProxy{},
+		&model.GbStreamPush{},
+		&model.GbCloudRecord{},
+		&model.GbRecordPlan{},
+		&model.GbRecordPlanItem{},
+		&model.GbAlarm{},
+		&model.GbMobilePosition{},
+		&model.GbSubscribe{},
+		&model.GbSipLog{},
+		&model.VoiceSession{},
+		&model.VoiceProvider{},
+		&model.GbPlatform{},
+		&model.GbPlatformChannel{},
+		&model.GbPlatformGroup{},
+		&model.GbPlatformRegion{},
+
+		// ── JT/T 1078 车载终端（v0.2.0，三期范围）──
+		&model.JtTerminal{},
+		&model.JtChannel{},
 	}
 
 	if err := globalDB.AutoMigrate(models...); err != nil {
