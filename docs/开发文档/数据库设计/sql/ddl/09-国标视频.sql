@@ -39,7 +39,7 @@ ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS gb_device_id      VARCHAR(20);
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS sip_password      VARCHAR(100);
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS sip_realm         VARCHAR(50);
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS sip_transport     VARCHAR(10)  DEFAULT 'UDP';
-ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS stream_mode       VARCHAR(20)  DEFAULT 'TCP-PASSIVE';
+ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS stream_mode       VARCHAR(20)  DEFAULT 'UDP';
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS charset           VARCHAR(20)  DEFAULT 'GB2312';
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS register_status   VARCHAR(20)  DEFAULT 'pending';
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS register_dt       TIMESTAMPTZ;
@@ -493,7 +493,7 @@ COMMENT ON COLUMN ac_gb_record_plan_item.end_time   IS '结束时间 HH:mm:ss';
 -- ================================================================
 
 -- ----------------------------------------------------------------
--- ac_gb_alarm 国标报警（设备主动上报，与 ai 告警 ac_alarm 区分）
+-- ac_gb_alarm 国标报警（设备主动上报，与平台侧 ac_alarm_record 区分）
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS ac_gb_alarm (
     id                BIGSERIAL     PRIMARY KEY,
