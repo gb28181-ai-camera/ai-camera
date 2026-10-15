@@ -26,6 +26,24 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- 用途说明（中文）：iOS 首次调用麦克风/相机时，系统弹窗展示该文案。
+	     缺少任一条，App 调用对应能力会直接崩溃，且无法通过审核。 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音对讲：在对讲时采集您的语音并发送到监控设备。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍照巡检：拍摄现场照片并上传，作为巡检记录留存。</string>
+	<!-- 开发/测试期后端走 http（局域网 http://192.168.x.x:8080）。
+	     这里使用 Apple 官方的「窄例外」NSAllowsLocalNetworking：
+	     仅放行局域网 / .local 域名的明文流量，**不**设置 NSAllowsArbitraryLoads，
+	     因此公网方向的 http 仍被 ATS 拦截（不是「全局放开」）。
+	     正式环境后端切 https 后，整段 NSAppTransportSecurity 可直接删除。
+	     若需更严格的「仅 Debug 生效」，需改由 Xcode 的 INFOPLIST_PREPROCESS 按
+	     构建配置裁剪 plist —— 需 macOS 上验证，暂不在本仓库启用。 -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

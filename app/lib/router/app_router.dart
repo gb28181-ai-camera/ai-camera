@@ -6,6 +6,9 @@ import '../pages/alarm/alarm_handle_page.dart';
 import '../pages/alarm/alarm_list_page.dart';
 import '../pages/device/device_detail_page.dart';
 import '../pages/device/device_list_page.dart';
+// ⚠️ 临时：播放器共存 Spike 页面（见 player_spike_page.dart 顶部说明），验证完连同
+// 下方 `/spike/player` 路由一并删除。
+import '../pages/device/player_spike_page.dart';
 import '../pages/home/home_page.dart';
 import '../pages/inspect/inspect_task_detail_page.dart';
 import '../pages/inspect/inspect_task_list_page.dart';
@@ -182,6 +185,14 @@ class AppRouter {
           name: 'notifications',
           builder: (BuildContext context, GoRouterState state) =>
               const NotificationListPage(),
+        ),
+
+        // ⚠️ 临时：播放器共存 Spike（验证完连同 import 一并删除）。
+        GoRoute(
+          path: '/spike/player',
+          name: 'playerSpike',
+          builder: (BuildContext context, GoRouterState state) =>
+              const PlayerSpikePage(),
         ),
       ],
       errorBuilder: (BuildContext context, GoRouterState state) => Scaffold(

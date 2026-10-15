@@ -2,6 +2,19 @@
     <!-- 访问后端 API 与视频流 -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
+    <!-- 语音对讲（GB28181 前端设备的半双工对讲，见 v0.2.0 设计 §8.1.1）：
+         采集麦克风。runtime 权限，首次使用时由系统弹窗申请。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- 语音对讲的音频路由（切换听筒/扬声器、控制音量），flutter_webrtc 音频会话需要 -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+
+    <!-- 拍照巡检（预留）：仅当 App 内确实提供「拍摄现场照片并上传」时保留，
+         否则应移除，避免应用商店把「有摄像头」当作安装前提。
+         注意：实时播放页的「抓图」是截取视频帧，不需要本权限。 -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- 声明相机为「非必需」，使无摄像头的设备仍可安装 -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+
     <application
         android:label="AI Camera"
         android:name="${applicationName}"

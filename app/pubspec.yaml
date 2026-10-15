@@ -15,6 +15,10 @@ dependencies:
   shared_preferences: ^2.3.0
   intl: ^0.19.0
   flutter_dva: ^1.0.9
+  flutter_webrtc: ^1.6.2+hotfix.4
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
 
 dev_dependencies:
   flutter_test:
