@@ -2,7 +2,41 @@
 
 > 项目: AI Camera 智能监控平台
 > 当前版本: v0.1.0
-> 最后更新: 2026-09-21
+> 下一版本: v0.2.0（设计评审稿，未开工）
+> 最后更新: 2026-10-15
+
+---
+
+## v0.2.0 — 设备接入与国标视频平台（规划中，未交付）
+
+> 状态: **设计评审稿** · 设计文档: [v0.2.0 设备接入与国标视频/00-设计与工作量评估.md](v0.2.0%20设备接入与国标视频/00-设计与工作量评估.md)
+
+**目标**：把平台从「纯管理」推进到「能接真实相机、能看真实画面」。落地 GB28181 设备接入、SIP 信令、
+ZLMediaKit 媒体链路、Pipecat 语音 Agent，并让 Web 与 App 两端都能看实时画面、控云台、查回放。
+
+**核心需求与落点**：
+
+| 需求 | 落点 |
+|:--|:--|
+| 设备注册、激活 | `ac_device` 新增 `gb_device_id` / `sip_password` / `register_status` 等 13 列 + 激活状态机 |
+| **SIP 设备必须是设备管理里已有的设备，否则拒绝接入** | SIP 信令层收到 REGISTER 直查 `ac_device.gb_device_id`，查不到即回 **403 Forbidden** 并记 `ac_gb_sip_log` |
+| ZLMediaKit 推流 + Pipecat 语音 Agent | ZLM 独占 RTP/PS 与转协议；Pipecat 走 Docker，STT/LLM/TTS 可后台动态配置 |
+| App 看画面/回放/云台/AI 事件 | 新增 `flutter_webrtc` + `media_kit` 播放器与 6 个页面，走 `/app/gb/*` |
+| 开源版 docker compose 部署 + 本地数据库 | 仓库根 `docker-compose.yml`（profiles 区分用法）；`deploy/postgres/` 提供 PostgreSQL 16 + PostGIS + pgvector |
+
+**已交付（本次）**：
+
+- 设计文档 `docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md`（17 节，含六条经代码核实的技术结论、18 张表设计、测试策略、11 条风险、验收标准、文档回写清单）
+- DDL 脚本 `docs/开发文档/数据库设计/sql/ddl/09-国标视频.sql`（18 张新表 + `ac_device` 扩展 13 列）
+- `docker-compose.yml` + `deploy/postgres/`（PostgreSQL 16 + PostGIS + pgvector 自定义镜像）
+- 配置模板 `config.example.yaml` / `config-test.example.yaml` / `config.compose.yaml` / `.env.example` / `.mcp.json.example`
+- 后端配置支持**环境变量覆盖**（`envBindings`），容器化部署密钥不落盘
+- 修复 `DSN()` 在密码为空时输出 `password=` 导致 pgx 吞掉后续键的 bug
+
+**工作量**：**460 人天**，分三期 —— 一期 232（设备接入与实时视频）、二期 121（录像与语音）、三期 107（级联与全量平替）。
+> 估算经历三次上修：255 → 386 → 442 → 460。详见设计文档 §14 与风险 R0。
+
+**已知前置阻塞**：样本视频（本机无 ffmpeg）、Docker daemon 未启动、需至少 1 台真实 GB28181 相机做一期验收。
 
 ---
 
