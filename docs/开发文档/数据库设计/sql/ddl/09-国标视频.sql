@@ -1,5 +1,5 @@
 -- ================================================================
--- 09-国标视频 - DDL（18 张表 + ac_device 扩展）
+-- 09-国标视频 - DDL（20 张表 + ac_device 扩展）
 -- AI Camera 智能监控平台 · v0.2.0（设计稿，尚未实施）
 -- 覆盖：国标通道 / 媒体节点 / 上级平台 / 级联通道 / 拉流代理 / 推流
 --       / 云端录像 / 录像计划 / 录像计划明细 / 国标报警 / 移动位置
@@ -111,6 +111,38 @@ CREATE TABLE IF NOT EXISTS ac_gb_channel (
     stream_id         VARCHAR(100),
     record_plan_id    BIGINT,
     enable_broadcast  BOOLEAN       DEFAULT FALSE,
+    -- 设备上报的属性（对应「设备参数」页面；WVP 的 wvp_device_channel 有 89 列，
+    -- 此处保留国标 2016 常用项。若后续需完整对齐，按 WVP 逐列补齐）
+    block             VARCHAR(20),
+    safety_way        VARCHAR(50),
+    register_way      VARCHAR(20),
+    cert_num          VARCHAR(50),
+    certifiable       BIGINT,
+    err_code          BIGINT,
+    end_time          BIGINT,
+    secrecy           BIGINT,
+    ip_address        VARCHAR(50),
+    port              BIGINT,
+    password          VARCHAR(100),
+    longitude         DOUBLE PRECISION,
+    latitude          DOUBLE PRECISION,
+    position_type     BIGINT,
+    room_type         BIGINT,
+    use_type          BIGINT,
+    supply_light_type BIGINT,
+    direction_type    BIGINT,
+    resolution        VARCHAR(50),
+    download_speed    VARCHAR(50),
+    sub_count         BIGINT,
+    gps_time          TIMESTAMPTZ,
+    stream_identification VARCHAR(100),
+    map_level         BIGINT,
+    -- 用户定制值：WVP 用「gb_* 存设备上报原值、无前缀列存用户定制值」的双列语义。
+    -- 本期**不保留**该语义（简化为单列，用户改名直接覆盖），已在设计文档 §11+ 记为「行为不同」。
+    -- 若要恢复，需为 name/manufacturer/model/owner/civil_code/address/parental/parent_id
+    -- 各补一个 gb_* 列。
+    is_custom         BOOLEAN       DEFAULT FALSE,
+
     -- 目录同步
     sync_dt           TIMESTAMPTZ,
     remark            VARCHAR(500),
@@ -227,8 +259,12 @@ CREATE TABLE IF NOT EXISTS ac_gb_media_server (
     secret                VARCHAR(100),
     rtp_enable            BOOLEAN       DEFAULT TRUE,
     rtp_port_range        VARCHAR(50)   DEFAULT '30000-30500',
+    rtp_proxy_port        BIGINT,
+    jtt_proxy_port        BIGINT,
     send_rtp_port_range   VARCHAR(50),
-    record_assist_port    BIGINT,
+    -- 云端录像的合并/切片/打包下载由独立的 Assist 服务承担（WVP 为独立进程，
+    -- 默认端口 18081）。0 表示未启用；此时云端录像只支持单文件直接下载。
+    record_assist_port    BIGINT        DEFAULT 0,
     -- 录像
     record_path           VARCHAR(500),
     record_day            BIGINT        DEFAULT 7,
@@ -737,6 +773,16 @@ CREATE TABLE IF NOT EXISTS ac_gb_platform (
     catalog_group     BIGINT        DEFAULT 0,
     register_way      VARCHAR(20)   DEFAULT 'local',
     as_message_channel BOOLEAN      DEFAULT FALSE,
+    -- 上级平台的 XML 编码。结论六（GB2312 转码）在级联出/入向同样适用，
+    -- 不存该值则与 UTF-8 上级平台级联必然乱码。默认 GB2312（对齐 WVP PlatformController:118）
+    character_set     VARCHAR(50)   DEFAULT 'GB2312',
+    ptz               BOOLEAN       DEFAULT TRUE,
+    rtcp              BOOLEAN       DEFAULT FALSE,
+    server_id         VARCHAR(50),
+    manufacturer      VARCHAR(100),
+    model             VARCHAR(100),
+    address           VARCHAR(255),
+    secrecy           BIGINT        DEFAULT 0,
     catalog_with_platform BOOLEAN   DEFAULT TRUE,
     catalog_with_group BIGINT       DEFAULT 0,
     catalog_with_region BIGINT      DEFAULT 0,
@@ -802,6 +848,54 @@ COMMENT ON COLUMN ac_gb_platform_channel.platform_id  IS '上级平台 ID';
 COMMENT ON COLUMN ac_gb_platform_channel.channel_id   IS '本地通道 ID';
 COMMENT ON COLUMN ac_gb_platform_channel.custom_device_id IS '在该上级使用的国标编码，唯一';
 COMMENT ON COLUMN ac_gb_platform_channel.custom_name  IS '定制名称（覆盖本地名称）';
+
+
+-- ----------------------------------------------------------------
+-- ac_gb_platform_group 级联平台 ↔ 业务分组（决定「按分组推送目录」的可见范围）
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ac_gb_platform_group (
+    id                BIGSERIAL     PRIMARY KEY,
+    deleted_at        TIMESTAMPTZ,
+    created_by        VARCHAR(50),
+    created_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    updated_by        VARCHAR(50),
+    updated_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    platform_id       BIGINT        NOT NULL,
+    group_id          BIGINT        NOT NULL
+);
+
+-- 唯一约束与 WVP 的 uk_wvp_platform_group_platform_id_group_id 对齐
+CREATE UNIQUE INDEX IF NOT EXISTS uk_ac_gb_platform_group_platform_group
+    ON ac_gb_platform_group (platform_id, group_id);
+CREATE INDEX IF NOT EXISTS idx_ac_gb_platform_group_deleted_at ON ac_gb_platform_group (deleted_at);
+
+COMMENT ON TABLE  ac_gb_platform_group             IS '级联平台与业务分组的可见范围映射';
+COMMENT ON COLUMN ac_gb_platform_group.platform_id IS '上级平台 ID（ac_gb_platform）';
+COMMENT ON COLUMN ac_gb_platform_group.group_id    IS '业务分组 ID（ac_gb_group）';
+
+
+-- ----------------------------------------------------------------
+-- ac_gb_platform_region 级联平台 ↔ 区域（决定「按区域推送目录」的可见范围）
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ac_gb_platform_region (
+    id                BIGSERIAL     PRIMARY KEY,
+    deleted_at        TIMESTAMPTZ,
+    created_by        VARCHAR(50),
+    created_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    updated_by        VARCHAR(50),
+    updated_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    platform_id       BIGINT        NOT NULL,
+    region_id         BIGINT        NOT NULL
+);
+
+-- 唯一约束与 WVP 的 uk_wvp_platform_region_platform_id_group_id 对齐
+CREATE UNIQUE INDEX IF NOT EXISTS uk_ac_gb_platform_region_platform_region
+    ON ac_gb_platform_region (platform_id, region_id);
+CREATE INDEX IF NOT EXISTS idx_ac_gb_platform_region_deleted_at ON ac_gb_platform_region (deleted_at);
+
+COMMENT ON TABLE  ac_gb_platform_region             IS '级联平台与区域的可见范围映射';
+COMMENT ON COLUMN ac_gb_platform_region.platform_id IS '上级平台 ID（ac_gb_platform）';
+COMMENT ON COLUMN ac_gb_platform_region.region_id   IS '区域 ID（ac_region）';
 
 
 -- ================================================================
@@ -883,7 +977,7 @@ COMMENT ON COLUMN ac_jt_channel.name          IS '通道名称';
 COMMENT ON COLUMN ac_jt_channel.has_audio     IS '是否支持音频';
 
 -- ================================================================
--- DDL 结束（18 张新表 + ac_device 扩展 13 列）
+-- DDL 结束（20 张新表 + ac_device 扩展 13 列）
 --
 -- 配套变更（不在本文件，但必须同步执行）：
 --   1. docs/开发文档/数据库设计/sql/init/01-初始数据.sql

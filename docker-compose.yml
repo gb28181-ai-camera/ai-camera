@@ -153,7 +153,9 @@ services:
   #   networks: [ai-camera]
   #
   # sipsvc:                  # GB28181 信令服务 —— 与 backend 同属一个工程、同一个镜像
-  #   profiles: [gb28181]    # ★必须固定 1 副本：多副本会让 Digest nonce 缓存分裂 → 无限 401 循环
+  #   profiles: [gb28181]    # 一期固定 1 副本：TCP 连接与 SIP 事务/会话状态是节点本地的，
+  #                          #   且设备注册后绑定 server_id，跨节点命令路由一期不做。
+  #                          #   （注：与 Digest nonce 无关 —— WVP 的服务端 Digest 是无状态的）
   #   image: ai-camera-backend:latest   # ← 复用 backend 的镜像，不单独构建
   #   command: ["/app/ai-camera-sipsvc"]  # ← 同一镜像内的另一个入口
   #   container_name: ai-camera-sipsvc
