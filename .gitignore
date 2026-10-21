@@ -84,3 +84,9 @@ app/coverage/
 backend/docs/web/
 backend/docs/app/
 frontend/e2e/screenshots/
+
+# Python（deploy/pipecat）
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/

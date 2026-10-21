@@ -1,0 +1,31 @@
+# Pipecat 语音 Agent 控制面依赖
+#
+# 版本策略：
+#   - pipecat-ai 固定 1.13.0（已核对该版本的服务类/模块路径，见 factory.py）；
+#   - 其余依赖给出兼容区间，避免小版本升级被锁死；
+#   - provider 的 SDK 按需安装：没装只会让 /test 报「未安装」，
+#     不会阻止控制面启动。
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.9,<3.0
+
+# 语音管线框架（核心）
+pipecat-ai[anthropic]==1.13.0
+anthropic>=0.49,<2.0
+openai>=1.74,<4.0
+
+# 默认零密钥 TTS（设计 §8.2）
+edge-tts>=6.1,<8.0
+
+# 默认本地 STT（设计 §8.2：local_whisper / faster-whisper）
+# 体积较大（含 ctranslate2）。若部署环境不需要本地识别，可注释掉本行，
+# /test 与 /session/start 会明确提示「未安装 faster-whisper」。
+faster-whisper>=1.1,<2.0
+
+# ── 可选 provider SDK（按需取消注释）──────────────────────────
+# deepgram-sdk>=6.1.1,<8.0          # stt_provider=deepgram
+# azure-cognitiveservices-speech>=1.47,<2.0   # stt/tts_provider=azure
+# elevenlabs>=1.0                    # tts_provider=elevenlabs
+# ollama>=0.4                        # llm_provider=ollama（另需可用的 Ollama 服务）
+# webrtcvad>=2.0.10                  # vad_provider=webrtcvad

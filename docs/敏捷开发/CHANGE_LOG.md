@@ -44,8 +44,9 @@ ZLMediaKit 媒体链路、Pipecat 语音 Agent，并让 Web 与 App 两端都能
 | 部署 | ZLM 接入 compose；单端口收流实测贯通（PS→H264+AAC→HTTP-FLV）；PG 含 PostGIS + pgvector | ✅ |
 | 模拟器 | `tools/gbsim`：注册/心跳/目录/INVITE/SDP/PS 推流，82 单测 + `-race` | ✅ |
 | **Wave 1** | **SIP 信令服务**（`cmd/sipsvc`：白名单 403、服务端 Digest、MANSCDP、Catalog、SSRC、INVITE/BYE）、**ZLM 客户端 + 10 个 hook**、**设备/通道/媒体节点/分组/订阅/信令日志 CRUD** | ✅ |
-| Wave 2 | 播放/云台/语音 + 回放/录像/报警/位置/级联配置 + `/app/gb` | 🚧 |
-| Wave 3 | React 页面、Flutter 页面、E2E、权限 SQL 对齐、文档收口 | ⏳ |
+| Wave 2 | 播放/云台/语音 + 回放/录像/报警/位置/级联配置 + `/app/gb` | ✅ |
+| Wave 3 | React 19 页 + Flutter 4 页 + Playwright 21 例 + 权限 SQL 对齐（117 条）+ 文档收口 | ✅ |
+| 语音控制面 | `deploy/pipecat`：控制面（配置下发/会话/连通性检查）、G.711↔PCM16、compose `voice` profile | ✅（音频桥接未接通） |
 
 **Wave 1 实测结论**（已同步到设计文档 §6.2b）：
 
@@ -56,9 +57,21 @@ ZLMediaKit 媒体链路、Pipecat 语音 Agent，并让 Web 与 App 两端都能
 - **Digest 只能作用于 REGISTER**：设备的 Keepalive / Catalog 响应 MESSAGE 不带凭证
 - **目录分片必须按字节**：2 个通道的目录报文就已触到 sipgo 的 UDP MTU 上限
 
-**待办**：`ac_menu_api` 种子与契约路由尚未对齐（Wave 2 路由补齐后统一处理）；真机验收（一期硬门槛）。
+**已知限制与待办**（均为显式边界，不是遗漏）：
 
-**已知前置阻塞**：需至少 1 台真实 GB28181 相机做一期验收。
+| 项 | 状态 |
+|:--|:--|
+| 真机验收 | ⏳ 一期硬门槛，需至少 1 台真实 GB28181 相机（模拟器只能做回归夹具） |
+| 语音音频链路 | ⏳ `deploy/pipecat` 控制面已落地，但音频桥接为 `not_connected`；Web/App 的对讲能建会话、听不到声音 |
+| 级联信令 | ⏳ 只做平台/通道/分组/区域配置与映射，不发起 REGISTER、不推 Catalog、不处理上级 INVITE |
+| 推流 | ⏳ Start/Stop 只维护状态，不向外部真实推流 |
+| 录像计划 | ⏳ 只做配置入库，无定时调度 |
+| 下载任务 | ⏳ 仅进程内存，重启丢失；进度依赖 ZLM `on_record_mp4` 回调 |
+| `ac_gb_subscribe` | ⏳ 无通道字段，订阅只能到设备级 |
+| 二维码 | ⏳ 前端未引入二维码库，激活凭证以文本 + 复制展示 |
+| `useForm` 控制台告警 | ⏳ 多个 GB 页面的 Modal 在关闭态创建表单；功能无影响，E2E 已窄过滤 |
+| K8s 清单 | ⏳ 仅提供 compose 与运行约束 |
+| `01-数据字典` / `02-表关系全景图` | ✅ 已补 18 张表 |
 
 ---
 

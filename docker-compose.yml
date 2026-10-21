@@ -245,19 +245,30 @@ services:
   #   backend 可多副本，sipsvc 必须单副本（设备注册后绑定到具体节点）。
   #   若不需要水平扩展 backend，可改为内嵌模式：设置 GB28181_EMBEDDED=true
   #   并只跑 backend 一个服务，此时 SIP 监听随 API 进程一起启动。
+  # ══════════════════════════════════════════════════════════════════
+  # 语音 Agent（profile: voice）
+  # ══════════════════════════════════════════════════════════════════
   #
-  # pipecat:                 # 语音 Agent（Python）—— 仅内网暴露，不对外
-  #   profiles: [voice]
-  #   build:
-  #     context: ./deploy/pipecat
-  #   container_name: ai-camera-pipecat
-  #   restart: unless-stopped
-  #   expose:
-  #     - "9000"               # 仅容器网络内可达
-  #   environment:
-  #     PIPECAT_TOKEN: ${PIPECAT_TOKEN:?请在 .env 中设置 PIPECAT_TOKEN}
-  #     LLM_API_KEY: ${LLM_API_KEY:-}
-  #   networks: [ai-camera]
+  # Pipecat 控制面只做配置/会话/pipeline 装配，**音频桥接尚未接通**
+  # （/health 返回 audio_bridge=not_connected），详见 deploy/pipecat/README.md。
+  # 仅内网暴露：后台「Pipecat 控制面地址」填 http://pipecat:8090。
+  # 不映射宿主机端口。
+  pipecat:
+    profiles: [voice]
+    build:
+      context: ./deploy/pipecat
+    container_name: ai-camera-pipecat
+    restart: unless-stopped
+    environment:
+      # ⚠️ 这里**不能**用 `${PIPECAT_TOKEN:?}`：Compose 会对文件里所有服务做插值，
+      # 即使该 profile 未启用。那样会导致「没配 Pipecat token 就连
+      # `docker compose up -d` 起基础设施都失败」。
+      # 真正的 fail-fast 在控制面内部：token 为空时进程拒绝启动（见 main.py）。
+      PIPECAT_TOKEN: ${PIPECAT_TOKEN:-}
+      TZ: Asia/Shanghai
+    expose:
+      - "8090"
+    networks: [ai-camera]
 
 volumes:
   pgdata:
