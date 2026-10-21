@@ -9,6 +9,10 @@ import '../pages/device/device_list_page.dart';
 // ⚠️ 临时：播放器共存 Spike 页面（见 player_spike_page.dart 顶部说明），验证完连同
 // 下方 `/spike/player` 路由一并删除。
 import '../pages/device/player_spike_page.dart';
+import '../pages/gb/gb_alarm_page.dart';
+import '../pages/gb/gb_device_list_page.dart';
+import '../pages/gb/gb_live_page.dart';
+import '../pages/gb/gb_playback_page.dart';
 import '../pages/home/home_page.dart';
 import '../pages/inspect/inspect_task_detail_page.dart';
 import '../pages/inspect/inspect_task_list_page.dart';
@@ -185,6 +189,34 @@ class AppRouter {
           name: 'notifications',
           builder: (BuildContext context, GoRouterState state) =>
               const NotificationListPage(),
+        ),
+
+        // ── 国标监控（GB/T 28181）：设备/通道浏览 → 实时播放 ──
+        GoRoute(
+          path: '/gb/devices',
+          name: 'gbDevices',
+          builder: (BuildContext context, GoRouterState state) =>
+              const GbDeviceListPage(),
+        ),
+        GoRoute(
+          path: '/gb/live',
+          name: 'gbLive',
+          builder: (BuildContext context, GoRouterState state) =>
+              const GbLivePage(),
+        ),
+        // 录像回放：可带 ?channelId=&name= 直接进入；不带参数时页面内选择通道。
+        GoRoute(
+          path: '/gb/playback',
+          name: 'gbPlayback',
+          builder: (BuildContext context, GoRouterState state) =>
+              const GbPlaybackPage(),
+        ),
+        // AI 监测事件（国标报警，只读）。
+        GoRoute(
+          path: '/gb/alarms',
+          name: 'gbAlarms',
+          builder: (BuildContext context, GoRouterState state) =>
+              const GbAlarmPage(),
         ),
 
         // ⚠️ 临时：播放器共存 Spike（验证完连同 import 一并删除）。
