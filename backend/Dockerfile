@@ -16,7 +16,10 @@ COPY . .
 ENV GOOS=linux
 ENV CGO_ENABLED=0
 ENV GOARCH=amd64
-RUN go build -ldflags="-w -s" -o /app/ai-camera-api ./cmd/server/main.go
+# 同一镜像内产出两个入口：HTTP API 与 SIP 信令服务。
+# 二者共享 model/repository/service，但扩缩容诉求相反（见 docker-compose.yml 注释）。
+RUN go build -ldflags="-w -s" -o /app/ai-camera-api ./cmd/server/main.go && \
+    go build -ldflags="-w -s" -o /app/ai-camera-sipsvc ./cmd/sipsvc/main.go
 
 # ── 运行阶段 ──
 FROM alpine:latest
@@ -30,6 +33,7 @@ ENV TZ=Asia/Shanghai
 WORKDIR /app
 
 COPY --from=builder /app/ai-camera-api .
+COPY --from=builder /app/ai-camera-sipsvc .
 COPY --from=builder /build/static ./static
 COPY --from=builder /build/docs ./docs
 COPY --from=builder /build/config/rbac_model.conf ./config/rbac_model.conf

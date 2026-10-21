@@ -41,6 +41,8 @@ func registerAppRoutes(r *gin.Engine) {
 
 	appAuthH := handler.NewAuthHandler()
 	appH := handler.NewAppHandler()
+	// 国标视频（GB/T 28181）：薄封装 handler，业务逻辑复用 /web/gb 的 service 层。
+	appGbH := handler.NewAppGbHandler()
 
 	// ── 公开接口 ──
 	a := r.Group("/app")
@@ -84,5 +86,36 @@ func registerAppRoutes(r *gin.Engine) {
 		aAuth.GET("/profile", appH.GetProfile)
 		aAuth.PUT("/profile", appH.UpdateProfile)
 		aAuth.PUT("/profile/password", appH.ChangePassword)
+
+		// ── 国标视频（GB/T 28181）────────────────────────────
+		// 契约 §10.12：13 个移动端接口。复用 /web/gb 的 service 层，
+		// handler 只做鉴权上下文取用、参数解析与字段裁剪。
+		gb := aAuth.Group("/gb")
+		{
+			// 设备与通道
+			gb.GET("/devices", appGbH.PageDevices)
+			gb.GET("/channels", appGbH.PageChannels)
+
+			// 实时播放
+			gb.POST("/play/:channelId", appGbH.Play)
+			gb.POST("/play/:channelId/stop", appGbH.StopPlay)
+			gb.POST("/play/:channelId/snapshot", appGbH.Snapshot)
+
+			// 云台（带外 MESSAGE）
+			gb.POST("/ptz/:channelId", appGbH.Ptz)
+
+			// 录像查询与回放
+			gb.GET("/playback/records", appGbH.QueryRecord)
+			gb.POST("/playback", appGbH.StartPlayback)
+			gb.POST("/playback/control", appGbH.ControlPlayback)
+			gb.POST("/playback/stop", appGbH.StopPlayback)
+
+			// 语音对讲
+			gb.POST("/talk/:channelId/start", appGbH.StartTalk)
+			gb.POST("/talk/:channelId/stop", appGbH.StopTalk)
+
+			// 国标报警
+			gb.GET("/alarms", appGbH.PageAlarms)
+		}
 	}
 }

@@ -432,5 +432,10 @@ func registerWebRoutes(r *gin.Engine) {
 			gb.GET("/sip-logs/stats", gbSipLogH.Stats)
 			gb.GET("/sip-logs/:id", gbSipLogH.Get)
 		}
+
+		// 播放 / 云台 / 语音：路由较多，拆到 gb_live.go
+		registerGbLiveRoutes(wAuth)
+		// 回放 / 录像 / 报警 / 位置 / 流代理 / 级联 / 语音 Agent：拆到 gb_ops.go
+		registerGbOpsRoutes(wAuth)
 	}
 }

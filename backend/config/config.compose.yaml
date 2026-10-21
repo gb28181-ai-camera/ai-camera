@@ -65,6 +65,30 @@ thirdparty:
     sdk_app_id: ""
     sign_name: ""
 
+gb28181:
+  # 是否启动 SIP 信令服务。compose 中由独立的 sipsvc 容器承载（副本固定 1）；
+  # 若不想起独立容器，可改为 embedded=true 让 backend 进程内嵌启动。
+  enabled: false
+  embedded: false
+  charset: GB2312
+  sip:
+    listen_ip: 0.0.0.0
+    port: 5060
+    transport: UDP            # UDP / TCP / BOTH
+    # ★ 设备可达的地址。容器内无法自动推断宿主机 IP，
+    #   部署时必须用 GB28181_SIP_ADVERTISE_IP 覆盖成局域网地址。
+    advertise_ip: 127.0.0.1
+    domain: 3402000000
+    realm: 3402000000
+    server_id: 34020000002000000001
+    server_name: AI Camera
+    register_expires: 3600
+    nonce_secret: ""          # 留空 = 开发模式固定串；生产请注入随机值
+  media:
+    # SDP 里通告给设备的收流地址（ZLM 单端口）
+    public_ip: 127.0.0.1
+    rtp_proxy_port: 10000
+
 swagger:
   # 开源部署默认开启接口文档，便于对接；如需关闭改为 false
   enabled: true

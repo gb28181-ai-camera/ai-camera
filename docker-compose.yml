@@ -20,8 +20,9 @@
 #   8080  前端入口(nginx)   8081  后端 API（仅 profile full）
 #   5060  SIP(UDP/TCP，v0.2.0)     30000-30500/udp  RTP(v0.2.0)
 #
-# ⚠️ GB28181 相关服务（sipsvc / RTP 端口段 / ZLMediaKit 呼叫回源）尚未实现，
-#    属 v0.2.0 范围，见 docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md
+# GB28181（profile: gb28181）：zlm + sipsvc。ZLM 用单端口收流（只发布 10000），
+# 因此**不需要** 30000-30500 端口段。设计与实测见
+# docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md §2.2
 # ============================================================================
 
 name: ai-camera
@@ -170,38 +171,51 @@ services:
       - "host.docker.internal:host-gateway"
     networks: [ai-camera]
 
-  # sipsvc / pipecat 仍为 v0.2.0 规划服务，代码尚未实现，见下：
-  #
-  # sipsvc:                  # GB28181 信令服务 —— 与 backend 同属一个工程、同一个镜像
-  #   profiles: [gb28181]    # 一期固定 1 副本：TCP 连接与 SIP 事务/会话状态是节点本地的，
-  #                          #   且设备注册后绑定 server_id，跨节点命令路由一期不做。
-  #                          #   （注：与 Digest nonce 无关 —— WVP 的服务端 Digest 是无状态的）
-  #   image: ai-camera-backend:latest   # ← 复用 backend 的镜像，不单独构建
-  #   command: ["/app/ai-camera-sipsvc"]  # ← 同一镜像内的另一个入口
-  #   container_name: ai-camera-sipsvc
-  #   restart: unless-stopped
-  #   depends_on:
-  #     backend:  { condition: service_started }   # 由其构建出镜像
-  #     postgres: { condition: service_healthy }
-  #     redis:    { condition: service_healthy }
-  #   ports:
-  #     - "5060:5060/udp"      # SIP UDP
-  #     - "5060:5060/tcp"      # SIP TCP
-  #   environment:
-  #     TZ: Asia/Shanghai
-  #     CONFIG_PATH: config/config.compose.yaml
-  #     # 与 backend 相同的环境变量注入
-  #     DATABASE_HOST: postgres
-  #     DATABASE_USER: ${POSTGRES_USER:-aicamera}
-  #     DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
-  #     DATABASE_DBNAME: ${POSTGRES_DB:-ai_camera_dev}
-  #     REDIS_HOST: redis
-  #     REDIS_PASSWORD: ${REDIS_PASSWORD:-aicamera_redis}
-  #   networks: [ai-camera]
-  #
+  # GB28181 信令服务 —— 与 backend 同属一个工程、同一个镜像（backend/Dockerfile
+  # 产出两个入口）。一期固定 1 副本：TCP 连接与 SIP 事务/会话状态是节点本地的，
+  # 且设备注册后绑定 server_id，跨节点命令路由一期不做。
+  sipsvc:
+    profiles: [gb28181]
+    image: ai-camera-backend:latest   # 复用 backend 的镜像，不单独构建
+    command: ["/app/ai-camera-sipsvc"]
+    container_name: ai-camera-sipsvc
+    restart: unless-stopped
+    depends_on:
+      # 只等基础设施：镜像由 backend 构建，但不必等它启动
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    ports:
+      - "${SIP_PORT:-5060}:5060/udp"
+      - "${SIP_PORT:-5060}:5060/tcp"
+    environment:
+      TZ: Asia/Shanghai
+      CONFIG_PATH: config/config.yaml
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_USER: ${POSTGRES_USER:-aicamera}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      DATABASE_DBNAME: ${POSTGRES_DB:-ai_camera_dev}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-aicamera_redis}
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET，参考 .env.example}
+      GB28181_ENABLED: "true"
+      GB28181_SIP_LISTEN_IP: 0.0.0.0
+      GB28181_SIP_PORT: "5060"
+      GB28181_SIP_ADVERTISE_IP: ${SIP_ADVERTISE_IP:-127.0.0.1}
+      GB28181_SIP_DOMAIN: ${SIP_DOMAIN:-3402000000}
+      GB28181_SIP_SERVER_ID: ${SIP_PLATFORM_ID:-34020000002000000001}
+      GB28181_SIP_NONCE_SECRET: ${SIP_NONCE_SECRET:-}
+      # ★ SDP 里通告给设备的收流地址，必须是设备可达的宿主机地址
+      GB28181_MEDIA_PUBLIC_IP: ${SIP_ADVERTISE_IP:-127.0.0.1}
+      GB28181_MEDIA_RTP_PROXY_PORT: "${ZLM_RTP_PORT:-10000}"
+    volumes:
+      - ./backend/config/config.compose.yaml:/app/config/config.yaml:ro
+    networks: [ai-camera]
+
   # 说明：SIP 与 HTTP API 分成两个服务，只因扩缩容诉求相反 ——
   #   backend 可多副本，sipsvc 必须单副本（设备注册后绑定到具体节点）。
-  #   若不需要水平扩展 backend，可改为内嵌模式：设置 gb28181.embedded=true
+  #   若不需要水平扩展 backend，可改为内嵌模式：设置 GB28181_EMBEDDED=true
   #   并只跑 backend 一个服务，此时 SIP 监听随 API 进程一起启动。
   #
   # pipecat:                 # 语音 Agent（Python）—— 仅内网暴露，不对外
