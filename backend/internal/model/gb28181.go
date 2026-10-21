@@ -489,8 +489,11 @@ type VoiceSession struct {
 	AgentEnabled  *bool      `gorm:"column:agent_enabled;default:false;comment:是否接入语音Agent(Pipecat)" json:"agent_enabled"`
 	StartDT       *time.Time `gorm:"column:start_dt;comment:开始时间" json:"start_dt"`
 	EndDT         *time.Time `gorm:"column:end_dt;comment:结束时间" json:"end_dt"`
-	Status        string     `gorm:"column:status;size:20;default:active;index;comment:状态 active/ended/failed" json:"status"`
-	EndReason     string     `gorm:"column:end_reason;size:500;comment:结束原因" json:"end_reason"`
+	// 状态取值：active / stopped / failed。
+	// 注意是 **stopped** 不是 ended —— 以 voice_service.go 的实际写入为准，
+	// 早期注释写的 ended 从未被使用。
+	Status    string `gorm:"column:status;size:20;default:active;index;comment:状态 active/stopped/failed" json:"status"`
+	EndReason string `gorm:"column:end_reason;size:500;comment:结束原因" json:"end_reason"`
 
 	DeptID *int64 `gorm:"column:dept_id;index;comment:所属部门(数据权限)" json:"dept_id"`
 
