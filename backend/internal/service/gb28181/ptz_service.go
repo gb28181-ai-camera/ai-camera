@@ -204,6 +204,25 @@ func (s *GbPtzService) DeletePreset(ctx context.Context, channelID int64, preset
 	return nil
 }
 
+// GotoPreset 调用预置位（PTZCmd 0x82）。
+//
+// 与 AddPreset 的区别只在命令码：0x81 是「把当前位置存为该预置位」，
+// 0x82 是「转到该预置位」。缺了 0x82，预置位功能只有存没有用。
+func (s *GbPtzService) GotoPreset(ctx context.Context, channelID int64, presetID int) error {
+	if presetID < 1 || presetID > 255 {
+		return ErrGbPtzPresetIDInvalid
+	}
+	ch, dev, err := loadLiveChannelAndDevice(ctx, s.channelRepo, channelID)
+	if err != nil {
+		return err
+	}
+	ctl := control.Default()
+	if ctl == nil {
+		return ErrSipServiceUnavailable
+	}
+	return sendPtzCommand(ctx, ctl, dev, ch, buildValuePTZCmd(ptzCmdPresetCall, presetID))
+}
+
 // Cruise 巡航控制（0x85 启动 / 0x86 停止）。
 func (s *GbPtzService) Cruise(ctx context.Context, channelID int64, req *request.GbPtzCruiseReq) error {
 	if req == nil || req.GroupID < 1 || req.GroupID > 255 {

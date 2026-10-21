@@ -31,6 +31,7 @@ func registerGbLiveRoutes(wAuth *gin.RouterGroup) {
 		gb.GET("/ptz/:channelId/presets", ptzH.ListPresets)
 		gb.POST("/ptz/:channelId/presets", ptzH.AddPreset)
 		gb.DELETE("/ptz/:channelId/presets/:presetId", ptzH.DeletePreset)
+		gb.POST("/ptz/:channelId/presets/:presetId/goto", ptzH.GotoPreset)
 		gb.POST("/ptz/:channelId/cruise", ptzH.Cruise)
 		gb.POST("/ptz/:channelId/scan", ptzH.Scan)
 		gb.POST("/ptz/:channelId/wiper", ptzH.Wiper)

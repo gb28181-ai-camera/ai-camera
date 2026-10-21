@@ -421,3 +421,17 @@ func TestGbVoiceSessionNotFound(t *testing.T) {
 		}
 	})
 }
+
+// TestGotoPresetIDValidation 预置位编号越界必须在触达数据库/信令前就被拒绝。
+//
+// 这条守的是「预置位只有存、没有用」的回归：GotoPreset 是 PTZCmd 0x82，
+// 与 AddPreset(0x81) 只差一个命令码，写错时不会报错、设备也不会动。
+func TestGotoPresetIDValidation(t *testing.T) {
+	svc := gbsvc.NewGbPtzService()
+	ctx := context.Background()
+	for _, id := range []int{0, -1, 256, 999} {
+		if err := svc.GotoPreset(ctx, 1, id); !errors.Is(err, gbsvc.ErrGbPtzPresetIDInvalid) {
+			t.Fatalf("presetID=%d 应返回 ErrGbPtzPresetIDInvalid，实际 %v", id, err)
+		}
+	}
+}

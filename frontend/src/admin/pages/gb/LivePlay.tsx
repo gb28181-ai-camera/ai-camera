@@ -329,8 +329,11 @@ const LivePlay: React.FC = () => {
   const handlePtzPreset = (action: PtzPresetAction, presetIndex: number) => {
     if (!ptzChannelId) return
     if (action === 'goto') {
-      // 本期后端只提供预置位设置 / 删除，没有「调用预置位」端点，不能复用云台方向接口
-      message.info('本期接口仅支持预置位设置与删除，暂不支持调用预置位')
+      // 调用预置位走 PTZCmd 0x82，与设置(0x81)/删除(0x83)是三条独立命令码。
+      // 必须有这个分支，否则「预置位」只有存没有用。
+      void GbPtzController.gotoGbPtzPreset(ptzChannelId, presetIndex).catch(() => {
+        /* 拦截器已提示 */
+      })
       return
     }
     if (action === 'set') {

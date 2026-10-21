@@ -2261,6 +2261,9 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/a
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 616, 108, 'GET', '/app/gb/alarms', '移动端分页查询国标报警', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/app/gb/alarms');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 617, 12211, 'POST', '/web/gb/ptz/:channelId/presets/:presetId/goto', '调用预置位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/ptz/:channelId/presets/:presetId/goto');
 
 -- ── 12.6 角色授权：super_admin（角色 1）──────────────────────
 --     国标菜单 / 按钮的 permission_code 以 gb: 前缀标识，

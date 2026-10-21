@@ -158,6 +158,38 @@ func (h *GbPtzHandler) DeletePreset(c *gin.Context) {
 	utils.Success(c, nil)
 }
 
+// GotoPreset 调用预置位
+//
+// @Summary      调用预置位
+// @Description  PTZCmd 0x82；preset_id 取值 1-255。设备转到该预置位。
+// @Description  没有这个端点时「预置位」只有设置与删除、无法调用，功能是不完整的。
+// @Tags         GbPtz
+// @Accept       json
+// @Produce      json
+// @Param        channelId  path      int  true  "通道ID"
+// @Param        presetId   path      int  true  "预置位编号"
+// @Success      200  {object}  response.BaseResponse
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Failure      503  {object}  response.BaseResponse
+// @Router       /web/gb/ptz/{channelId}/presets/{presetId}/goto [post]
+// @ID           gotoGbPtzPreset
+func (h *GbPtzHandler) GotoPreset(c *gin.Context) {
+	channelID, ok := gbChannelIDParam(c)
+	if !ok {
+		return
+	}
+	presetID, ok := gbPresetIDParam(c)
+	if !ok {
+		return
+	}
+	if err := h.svc.GotoPreset(c.Request.Context(), channelID, presetID); err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbChannelNotFound, gbsvc.ErrGbDeviceNotFound)
+		return
+	}
+	utils.Success(c, nil)
+}
+
 // Cruise 巡航控制
 //
 // @Summary      巡航控制

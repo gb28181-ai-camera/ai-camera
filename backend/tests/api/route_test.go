@@ -75,6 +75,7 @@ var contractGbRoutes = []string{
 	"GET /web/gb/ptz/:channelId/presets",
 	"POST /web/gb/ptz/:channelId/presets",
 	"DELETE /web/gb/ptz/:channelId/presets/:presetId",
+	"POST /web/gb/ptz/:channelId/presets/:presetId/goto",
 	"POST /web/gb/ptz/:channelId/cruise",
 	"POST /web/gb/ptz/:channelId/scan",
 	"POST /web/gb/ptz/:channelId/wiper",

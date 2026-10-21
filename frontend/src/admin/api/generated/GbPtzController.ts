@@ -66,6 +66,17 @@ export class GbPtzController {
       });
     }
 
+    static gotoGbPtzPresetPath: string = "/web/gb/ptz/{channelId}/presets/{presetId}/goto";
+    /// 调用预置位
+    static async gotoGbPtzPreset(channelId: string | number, presetId: string | number, headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/ptz/${channelId}/presets/${presetId}/goto`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: null,
+        headers,
+      });
+    }
+
     static scanGbPtzPath: string = "/web/gb/ptz/{channelId}/scan";
     /// 自动扫描控制
     static async scanGbPtz(channelId: string | number, data: GbPtzScanReq, headers?: any): Promise<BaseResponse> {
