@@ -106,6 +106,29 @@ const ROUTES: { path: string; page: LazyPage }[] = [
   { path: 'inspect/task', page: lazy(() => import('./pages/inspect/InspectTaskList')) },
   { path: 'inspect/record', page: lazy(() => import('./pages/inspect/InspectRecordList')) },
 
+  // 国标视频（GB/T 28181）
+  // path 必须与菜单种子的 ac_menu.path 一一对应（去掉前导 /）：侧边栏按菜单 path 跳转，
+  // 对不上就是「点了菜单进 404」。
+  { path: 'gb/device/list', page: lazy(() => import('./pages/gb/GbDeviceList')) },
+  { path: 'gb/device/channel', page: lazy(() => import('./pages/gb/GbChannelList')) },
+  { path: 'gb/device/activation', page: lazy(() => import('./pages/gb/DeviceActivationList')) },
+  { path: 'gb/device/subscribe', page: lazy(() => import('./pages/gb/GbSubscribeList')) },
+  { path: 'gb/media/live', page: lazy(() => import('./pages/gb/LivePlay')) },
+  { path: 'gb/media/playback', page: lazy(() => import('./pages/gb/Playback')) },
+  { path: 'gb/media/download', page: lazy(() => import('./pages/gb/RecordDownload')) },
+  { path: 'gb/media/cloud-record', page: lazy(() => import('./pages/gb/CloudRecordList')) },
+  { path: 'gb/media/record-plan', page: lazy(() => import('./pages/gb/RecordPlanList')) },
+  { path: 'gb/alarm/list', page: lazy(() => import('./pages/gb/GbAlarmList')) },
+  { path: 'gb/alarm/position', page: lazy(() => import('./pages/gb/MobilePosition')) },
+  { path: 'gb/ops/media-server', page: lazy(() => import('./pages/gb/MediaServerList')) },
+  { path: 'gb/ops/stream-proxy', page: lazy(() => import('./pages/gb/StreamProxyList')) },
+  { path: 'gb/ops/stream-push', page: lazy(() => import('./pages/gb/StreamPushList')) },
+  { path: 'gb/ops/sip-log', page: lazy(() => import('./pages/gb/SipLogList')) },
+  { path: 'gb/platform/list', page: lazy(() => import('./pages/gb/PlatformList')) },
+  { path: 'gb/platform/channel', page: lazy(() => import('./pages/gb/PlatformChannelList')) },
+  { path: 'gb/org/group', page: lazy(() => import('./pages/gb/GbGroupTree')) },
+  { path: 'gb/org/voice-agent', page: lazy(() => import('./pages/gb/VoiceAgentConfig')) },
+
   // 统计分析
   { path: 'stats/risk', page: lazy(() => import('./pages/stats/RiskStats')) },
   { path: 'stats/alarm', page: lazy(() => import('./pages/stats/AlarmStats')) },
