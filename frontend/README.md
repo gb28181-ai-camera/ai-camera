@@ -3,7 +3,7 @@
 AI 智能监控平台前端。**一个 npm 工程、三个构建目标**：管理后台（Web）、官网介绍页（Web）、
 桌面端（Electron 渲染进程）。
 
-> 当前版本: **v0.1.0** | 最后更新: 2026-09-21
+> 当前版本: **v0.2.0** | 最后更新: 2026-10-21
 
 ---
 
@@ -12,10 +12,13 @@ AI 智能监控平台前端。**一个 npm 工程、三个构建目标**：管�
 - 🖥️ **三端构建** —— 同一份工程通过三套 Vite 配置产出管理后台（base `/admin/`）、官网（base `/`）与 Electron 渲染进程（base `./`）
 - 🌐 **官网介绍页** —— `website.html` 第二入口，深色科技风；全部视觉由 CSS 渐变与内联 SVG 实现，**不引用任何外部静态资源**
 - 🔐 **权限控制** —— JWT + Zustand 持久化；后端菜单树驱动侧边栏，`permission_code` 驱动按钮显隐
-- 🎥 **视频监控网格** —— 实时监控页支持单屏 / 4 宫格 / 9 宫格切换（当前为占位播放器）
+- 🎥 **视频监控网格** —— 实时监控页支持单屏 / 4 宫格 / 9 宫格切换；国标实时播放走
+  `LivePlayer`（WebRTC/WHEP 优先 → `mpegts.js` HTTP-FLV 兜底 → HLS 保底）
+- 📡 **国标视频（GB/T 28181）** —— 19 个管理页面：设备/通道、实时播放与云台、回放/下载、
+  云端录像、录像计划、报警、移动位置、媒体节点、拉流代理、推流、信令日志、级联、语音 Agent
 - 📊 **可视化大屏** —— `/screen` 大屏聚合视图，轮询 `/web/stats/screen` 刷新
 - 🖨️ **图表分析** —— ECharts（`echarts` + `echarts-for-react`）实现风险统计、告警统计、流量趋势、设备状态分布
-- 🧩 **自动生成 API 客户端** —— 20 个 Controller + 205 个类型定义由 Swagger 生成，**严禁手写 API 请求代码**
+- 🧩 **自动生成 API 客户端** —— 41 个 Controller + 394 个类型定义由 Swagger 生成，**严禁手写 API 请求代码**
 - 📐 **公共组件体系** —— PageContainer / SearchBar / ActionButtons / SelectorModal / OptionSelect / RegionSelect / DynamicIcon / EmptyState
 - 🧪 **双测试体系** —— Vitest + MSW（单测，无需后端）/ Playwright（E2E，真实后端 + `e2e-xxx-modal` 定位规范）
 - 📦 **多平台打包** —— Electron Forge 7 支持 NSIS（Windows）/ DMG（macOS）/ DEB + RPM + ZIP（Linux）
@@ -133,15 +136,15 @@ frontend/
 │   └── README.md                 # 代码生成说明
 │
 └── src/
-    ├── admin/                    # ── 管理后台（39 个页面）──
+    ├── admin/                    # ── 管理后台（63 个页面，含 19 个国标页面）──
     │   ├── main.tsx              # 挂载入口
     │   ├── App.tsx               # 路由与布局装配
     │   ├── index.css             # 全局样式与主题变量
     │   ├── api/
     │   │   ├── request.ts        # Axios 实例 + JWT 注入 + 统一错误处理
     │   │   └── generated/        # ★ 自动生成，严禁手工编辑
-    │   │       ├── XxxController.ts   # 20 个控制器（静态方法）
-    │   │       └── definitions/       # 205 个类型定义（RPageXxx / RXxxList / RXxx）
+    │   │       ├── XxxController.ts   # 41 个控制器（静态方法，含 19 个国标相关）
+    │   │       └── definitions/       # 394 个类型定义（RPageXxx / RXxxList / RXxx）
     │   ├── components/           # 公共组件
     │   │   ├── PageContainer.tsx    # 页面统一容器（标题 / 面包屑 / 操作区）
     │   │   ├── SearchBar.tsx        # 列表页统一搜索栏
@@ -150,10 +153,13 @@ frontend/
     │   │   ├── OptionSelect.tsx     # 下拉选项（对接 ROptionList）
     │   │   ├── RegionSelect.tsx     # 区域选择器
     │   │   ├── DynamicIcon.tsx      # 菜单图标动态渲染
-    │   │   └── EmptyState.tsx       # 空状态占位
+    │   │   ├── EmptyState.tsx       # 空状态占位
+    │   │   ├── VideoPlayer.tsx      # v0.1.0 原生 <video> 播放（mp4 / 已有流地址）
+    │   │   └── LivePlayer.tsx       # 国标直播内核（WHEP / mpegts.js FLV / HLS）
     │   ├── layouts/
     │   │   └── MainLayout.tsx    # 主布局（侧边栏 + 顶栏 + 内容区）
     │   ├── pages/                # 业务页面（按模块分目录）
+    │   │   └── gb/               # 19 个国标视频页面（设备/通道/播放/录像/报警/运维/级联）
     │   ├── store/
     │   │   └── authStore.ts      # Zustand 认证 store（token / 用户信息 / 权限码持久化）
     │   └── types/
@@ -285,6 +291,52 @@ const options = regionRes.data ?? []
 
 ---
 
+## 国标视频页面与播放器（v0.2.0）
+
+### 页面
+
+19 个页面位于 `src/admin/pages/gb/`，路由与后端菜单 seed 逐字对应（见
+[`docs/开发文档/页面功能和接口/13-国标视频页面与接口.md`](../docs/开发文档/页面功能和接口/13-国标视频页面与接口.md)）：
+
+| 目录 | 页面 |
+|:---|:---|
+| 设备与通道 | 国标设备、国标通道、设备激活、订阅记录 |
+| 播放与录像 | 实时播放、录像回放、录像下载、云端录像、录像计划 |
+| 报警与位置 | 国标报警、移动位置 |
+| 流媒体运维 | 媒体节点、拉流代理、推流、信令日志 |
+| 国标级联 | 上级平台、级联通道 |
+| 组织与语音 | 业务分组、语音 Agent |
+
+API 客户端为 `GbDeviceController`、`GbChannelController`、`GbPlayController`、`GbPtzController`、
+`GbPlaybackController`、`GbCloudRecordController`、`GbRecordPlanController`、`GbAlarmController`、
+`GbPositionController`、`GbMediaServerController`、`GbStreamProxyController`、`GbStreamPushController`、
+`GbPlatformController`、`GbGroupController`、`GbSubscribeController`、`GbSipLogController`、
+`GbVoiceController`、`VoiceAgentController`，以及 ZLM 回调用 `MediaHookController`。
+
+### 播放器策略
+
+`src/admin/components/LivePlayer.tsx`：
+
+| 优先级 | 协议 | 用途 |
+|:---:|:---|:---|
+| 1 | WebRTC（WHEP） | 选中窗格、云台操作、语音对讲；延迟 200–500 ms |
+| 2 | HTTP-FLV（`mpegts.js`） | 视频墙铺格子；WebRTC 失败自动回落 |
+| 3 | HLS | 保底；Chromium / Electron 需 `hls.js`（当前未安装） |
+
+- 入参支持完整 URL（`url`）或 `httpBase + app + stream` 三件套；
+- 组件**只消费播放地址**，不调用后端接口；地址来自 `POST /web/gb/play/:channelId`；
+- 流名规则：`app=rtp`、`stream=%08X(ssrc)` 大写；不要用 `{deviceId}_{channelId}` 自行拼流名；
+- `mpegts.js` 以动态 `import()` 加载，避免首屏包体增大。
+
+### 测试现状
+
+- 国标页面当前**没有** Vitest 专用用例，`src/test/handlers.ts` 也**没有** `/web/gb/*` mock；
+- E2E 已有 `e2e/smoke/11a-gb-device.spec.ts` ~ `11d-gb-platform-voice.spec.ts`（共 20 个页面级用例），
+  `99-all-list-page.spec.ts` 已包含 19 条 `/gb/*` 路由；
+- 页面已定义 35 个 `e2e-gb-*` class（清单见页面文档 §7），新增 E2E 时应直接复用。
+
+---
+
 ## 环境检测
 
 同一份管理后台代码同时运行在 Web 与 Electron 中，通过两个标志判断当前环境。
@@ -334,6 +386,7 @@ if (window.electronAPI !== undefined) {
 | Zustand | ^4.5.0 | 轻量状态管理（`authStore`） |
 | Axios | ^1.7.0 | HTTP 客户端（`api/request.ts` + JWT 拦截器） |
 | ECharts | ^5.5.0 | 图表（`echarts-for-react` 包装） |
+| mpegts.js | ^1.8.2 | 国标 HTTP-FLV 兜底播放（替代已停维护的 flv.js） |
 | dayjs | ^1.11.0 | 日期处理 |
 | Less | ^4.6.7 | 样式预处理（antd 定制） |
 | Electron | ^33.0.0 | 桌面端运行时 |

@@ -8,13 +8,18 @@
 
 对标产品：AI摄像头操作手册（见 [docs/需求文档/](docs/需求文档/)），本仓库按该手册的功能结构实现。
 
-当前版本 **v0.1.0（基础功能开发）**，未进入敏捷开发。开发必须严格按照 `docs/` 中的设计文档进行。设计总览参考 [docs/00-系统设计总览.md](docs/00-系统设计总览.md)，进度参考 [docs/敏捷开发/CHANGE_LOG.md](docs/敏捷开发/CHANGE_LOG.md)。
+当前版本 **v0.2.0（设备接入与国标视频，开发中）**；v0.1.0 为基础功能开发基线，未进入敏捷开发。开发必须严格按照 `docs/` 中的设计文档进行。设计总览参考 [docs/00-系统设计总览.md](docs/00-系统设计总览.md)，进度参考 [docs/敏捷开发/CHANGE_LOG.md](docs/敏捷开发/CHANGE_LOG.md)。
 
 ## 仓库布局
 
 ```
 ai-camera/
 ├── backend/          # Go API 服务 (Gin + GORM + PostgreSQL + Casbin)
+│   ├── cmd/
+│   │   ├── server/   # HTTP API 入口（/web、/app、/media/hook）
+│   │   └── sipsvc/   # GB/T 28181 SIP 信令入口（单副本；可 embedded 内嵌）
+│   ├── internal/gb28181/  # 国标协议栈（sipserver / protocol / auth / device / ...）
+│   └── tools/gbsim/  # GB28181 智能相机模拟器（测试夹具，非生产代码）
 ├── frontend/         # React 19 + Vite + Ant Design + Electron
 │   └── src/
 │       ├── admin/    # 管理后台（控制台）
@@ -68,8 +73,21 @@ cd backend && go run ./cmd/server/main.go
 # 启动测试服务
 export CONFIG_PATH="config/config-test.yaml" && cd backend && go run ./cmd/server/main.go
 
+# 国标 SIP 信令服务（独立进程，副本固定 1）
+cd backend && go run ./cmd/sipsvc/main.go
+
+# 国标单进程联调（SIP 内嵌进 API 进程，HTTP 触发的播放/云台/回放才可用）
+cd backend && GB28181_ENABLED=true GB28181_EMBEDDED=true go run ./cmd/server/main.go
+
+# 国标模拟器（联调 / 回归）
+cd backend && go run ./tools/gbsim \
+  --device-id 34020000001320000001 --sip-server 127.0.0.1:5060 \
+  --sip-domain 3402000000 --password '<设备 SIP 密码>' \
+  --channels 2 --stream-file testdata/sample.h264 --verbose
+
 # 编译
 cd backend && go build -o server ./cmd/server/main.go
+cd backend && go build -o sipsvc ./cmd/sipsvc/main.go
 
 # 生成 Swagger 文档
 cd backend && bash scripts/gen-swagger.sh
@@ -171,6 +189,39 @@ config/                     # Viper 配置加载 + config.yaml（gitignored）
 - **关联表查询**：列表涉及多张表关联时，必须展示关联表的**名称字段**，不能只展示 ID 字段。
 - **设备展示字段**：设备编号 `device.device_code`、设备名称 `device.name`、所属区域 `region.name`。
 
+#### 国标模块分层（v0.2.0）
+
+`backend/internal/gb28181/` 是**协议栈**，`backend/internal/service/gb28181/` 是**业务层**，
+两者不要混写。协议栈各包职责：
+
+| 包 | 职责 | 不该做的事 |
+|---|---|---|
+| `sipserver/` | sipgo 封装、请求分发、出向指令、INVITE/ACK/BYE、SDP 构造 | 不碰 RTP/PS；不直接写业务表 |
+| `protocol/manscdp/` | MANSCDP XML 编解码（Catalog / DeviceInfo / Alarm / PTZ / RecordInfo） | 不做字符集之外的业务判断 |
+| `protocol/sdp/` | 点播 / 回放 / 语音 SDP 构造与解析 | 不决定流名策略 |
+| `auth/` | 白名单 + 服务端 Digest + 无状态 nonce | **不对 MESSAGE 强制 Digest**（真机不带 Authorization） |
+| `device/` | 注册 / 心跳 / 目录多片重组 / 过期扫描 / 信令日志 | 不删除设备或通道 |
+| `session/` | INVITE Dialog（ACK / BYE / INFO） | 不做媒体收发 |
+| `ssrc/` | 10 位 SSRC 分配与回收 | — |
+| `mediaserver/` | ZLMediaKit REST 客户端、播放地址拼接 | **单端口模式不得调用 `openRtpServer`** |
+| `hook/` | ZLM 10 个回调、secret 校验、节点在线、活跃流 | 不在 `on_stream_changed` 写录像索引 |
+| `play/` | 点播 / 回放编排（INVITE → 等 ZLM 建流 → 返回地址） | 不解复用 RTP/PS |
+| `control/` | HTTP 业务层 ↔ SIP 实现的接口（`Default()` / `Set()`） | 不承载业务逻辑 |
+
+架构不变量：
+
+1. **SIP 进程只发信令**，RTP/PS 由 ZLM 直接接收；Go 侧不做 RTP 重组 / PS 解析 / 转码。
+2. **流名**：`app` 恒为 `rtp`，`stream = %08X(ssrc)` 大写；`{deviceId}_{channelId}` 不是流名。
+3. **PTZ 走带外 MESSAGE，回放控制走带内 INFO + MANSRTSP**，两者不复用发送函数。
+4. **四个敏感字段脱敏**：`ac_device.sip_password`、`ac_gb_media_server.secret`、
+   `ac_gb_platform.password`、`ac_gb_channel.password`。
+5. **`/media/hook/*` 不挂 authMW / casbinMW**，用 ZLM secret 校验。
+6. **分进程限制**：`cmd/server` 与 `cmd/sipsvc` 分开跑时 API 进程 `control.Default()` 为 nil，
+   HTTP 触发的播放 / 云台 / 回放不可用；联调与单容器部署用 `gb28181.embedded=true`。
+
+国标页面的 e2e class 统一 `e2e-gb-*`；页面清单见
+[docs/开发文档/页面功能和接口/13-国标视频页面与接口.md](docs/开发文档/页面功能和接口/13-国标视频页面与接口.md)。
+
 ### 前端：API 代码生成流程
 
 ```
@@ -230,7 +281,7 @@ config/                     # Viper 配置加载 + config.yaml（gitignored）
   - 错误示例：`page.locator('.ant-modal').last()`、`page.locator('.ant-modal-footer button.ant-btn-primary')`
 - **新增 Modal 必须添加 e2e class**：任何新建的 Ant Design `<Modal>` 组件，必须添加 `className="e2e-xxx-modal"` 属性，用于 E2E 测试定位。
 - **SelectorModal 已支持 className 传递**：`<SelectorModal className="e2e-xxx">` 会将 class 应用到 Modal（`.e2e-xxx`）和触发按钮（`.e2e-xxx-btn`），测试中可分别使用。
-- **现有 e2e class 清单**（以 `frontend/src/admin/` 源码实测为准，共 49 个 + 新增 1 个）：
+- **现有 e2e class 清单**（以 `frontend/src/admin/` 源码实测为准，共 **99** 个：非国标 64 个 + 国标 35 个；下表列出主要项，国标为全量）：
   - 基础信息：`e2e-region-modal`、`e2e-risk-type-modal`、`e2e-alarm-type-modal`
   - 资源管理：`e2e-device-modal`、`e2e-device-mode-modal`、`e2e-device-mode-switch-modal`、`e2e-iot-card-modal`、`e2e-iot-card-replace-modal`、`e2e-iot-card-replace-device-btn`、`e2e-voice-config-modal`、`e2e-voice-preview-modal`
   - 设备选择器（`DeviceSelect` / `SelectorModal`）：`e2e-device-select`（下拉框）、`e2e-device-select-modal`（弹窗）、`e2e-device-select-btn`（触发按钮）
@@ -241,8 +292,10 @@ config/                     # Viper 配置加载 + config.yaml（gitignored）
   - 告警设置：`e2e-alarm-setting-modal`、`e2e-risk-notify-modal`、`e2e-webhook-modal`（消息推送配置）
   - 系统：`e2e-config-modal`、`e2e-user-modal`、`e2e-user-resetpwd-modal`、`e2e-role-modal`、`e2e-role-menu-modal`、`e2e-role-dept-modal`、`e2e-role-post-modal`、`e2e-role-user-modal`、`e2e-role-dataperm-modal`、`e2e-menu-modal`、`e2e-menu-api-modal`、`e2e-menu-api-table`、`e2e-dept-modal`、`e2e-org-modal`（与 `e2e-dept-modal` 同挂一个 Modal 的别名）、`e2e-dept-tree`、`e2e-post-modal`、`e2e-operation-log-modal`、`e2e-notification-modal`
   - 个人中心：`e2e-profile-apikey-modal`
+  - 国标视频（35 个）：`e2e-gb-device-table`、`e2e-gb-device-detail-modal`、`e2e-gb-device-subscribe-modal`、`e2e-gb-device-activation-modal`、`e2e-gb-channel-table`、`e2e-gb-channel-edit-modal`、`e2e-gb-channel-region-modal`、`e2e-gb-channel-group-modal`、`e2e-gb-activation-table`、`e2e-gb-activation-modal`、`e2e-gb-subscribe-table`、`e2e-gb-subscribe-create-modal`、`e2e-gb-channel-tree`、`e2e-gb-snapshot-modal`、`e2e-gb-cloud-play-modal`、`e2e-gb-download-modal`、`e2e-gb-record-plan-modal`、`e2e-gb-record-plan-bind-modal`、`e2e-gb-alarm-detail-modal`、`e2e-gb-alarm-handle-modal`、`e2e-gb-alarm-snap-modal`、`e2e-gb-position-subscribe-modal`、`e2e-gb-media-server-modal`、`e2e-gb-media-server-check-modal`、`e2e-gb-media-server-info-modal`、`e2e-gb-stream-proxy-modal`、`e2e-gb-stream-push-modal`、`e2e-gb-sip-log-drawer`、`e2e-gb-platform-modal`、`e2e-gb-platform-groups-modal`、`e2e-gb-platform-regions-modal`、`e2e-gb-platform-channel-add-modal`、`e2e-gb-platform-channel-modal`、`e2e-gb-group-tree`、`e2e-gb-group-modal`
 
-> **说明**：上表由 `grep -rhoE "e2e-[a-z0-9-]+" frontend/src/admin/ | sort -u` 实测得出。
+> **说明**：上表由 `grep -rhoE "e2e-[a-z0-9-]+" frontend/src/admin/ | sort -u` 实测得出
+> （2026-10-21：总计 99 个；其中国标 35 个，可用 `grep -rhoE "e2e-gb-[a-z0-9-]+" ...` 单独核对）。
 > 其中 `e2e-dept-tree`、`e2e-menu-api-table` 为表格/树容器类，`e2e-device-select` 为下拉框类，
 > `e2e-device-select-btn`、`e2e-iot-card-replace-device-btn` 为触发按钮类，非 Modal 本体的 class。
 > 「第三方平台」下的个推（`GetuiConfig`）与短信（`SmsConfig`）页面为**单卡片表单，不含 Modal**，

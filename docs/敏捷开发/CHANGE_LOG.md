@@ -26,8 +26,8 @@ ZLMediaKit 媒体链路、Pipecat 语音 Agent，并让 Web 与 App 两端都能
 
 **已交付（本次）**：
 
-- 设计文档 `docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md`（17 节，含**六条经代码核实的技术结论**、**20 张表设计**、测试策略、**15 条风险**、15 条验收标准、文档回写清单）。已经过**两轮独立评审**并据其修订
-- DDL 脚本 `docs/开发文档/数据库设计/sql/ddl/09-国标视频.sql`（**20 张新表** + `ac_device` 扩展 13 列）
+- 设计文档 `docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md`（17 节，含**六条经代码核实的技术结论**、**18 张表设计**、测试策略、**15 条风险**、15 条验收标准、文档回写清单）。已经过**两轮独立评审**并据其修订
+- DDL 脚本 `docs/开发文档/数据库设计/sql/ddl/09-国标视频.sql`（**18 张新表** + `ac_device` 扩展 13 列）
 - `docker-compose.yml` + `deploy/postgres/`（PostgreSQL 16 + PostGIS + pgvector 自定义镜像）
 - 配置模板 `config.example.yaml` / `config-test.example.yaml` / `config.compose.yaml` / `.env.example` / `.mcp.json.example`
 - 后端配置支持**环境变量覆盖**（`envBindings`），容器化部署密钥不落盘

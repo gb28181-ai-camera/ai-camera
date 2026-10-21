@@ -1,9 +1,10 @@
 # AI Camera 后端服务
 
-Go 后端 API 服务：Gin + GORM + PostgreSQL + Casbin，按 `Handler → Service → Repository → Model`
-四层架构实现 AI Camera 智能监控平台的全部业务能力。
+Go 后端服务：Gin + GORM + PostgreSQL + Casbin，按 `Handler → Service → Repository → Model`
+四层架构实现 AI Camera 智能监控平台的全部业务能力；v0.2.0 增加 GB/T 28181 信令入口
+（`cmd/sipsvc`）与 ZLMediaKit 媒体适配。
 
-> 当前版本: **v0.1.0** | 最后更新: 2026-09-21
+> 当前版本: **v0.2.0** | 最后更新: 2026-10-21
 
 ---
 
@@ -31,8 +32,10 @@ Go 后端 API 服务：Gin + GORM + PostgreSQL + Casbin，按 `Handler → Servi
 ```
 backend/
 ├── cmd/
-│   └── server/
-│       └── main.go                  # 入口：router 装配 + HTTP 启停 + 优雅退出（10s）
+│   ├── server/
+│   │   └── main.go                  # 入口：router 装配 + HTTP 启停 + 优雅退出（10s）
+│   └── sipsvc/
+│       └── main.go                  # GB28181 SIP 信令入口（副本固定 1；可 embedded 内嵌）
 ├── config/
 │   ├── config.go                    # 配置结构体 + viper 加载 + DSN 拼接
 │   ├── config.yaml                  # 开发环境配置（gitignored，端口 8080）
@@ -45,17 +48,32 @@ backend/
 │   ├── api/
 │   │   ├── router/
 │   │   │   ├── router.go            # SetupRouter()：Engine + Recovery + 操作日志 + /health
-│   │   │   ├── web.go               # /web 全部路由（355 行）
-│   │   │   ├── app.go               # /app 移动端路由（88 行）
+│   │   │   ├── web.go               # /web 基础路由 + 国标设备/通道/媒体/分组/日志
+│   │   │   ├── gb_live.go           # 国标播放 / 云台 / 语音路由（16 条）
+│   │   │   ├── gb_ops.go            # 国标回放/录像/报警/位置/流/级联/语音 Agent（共 49 条）
+│   │   │   ├── media.go             # ZLM 10 个回调（独立组，无 JWT/Casbin）
+│   │   │   ├── app.go               # /app 移动端路由（含 /app/gb 13 条）
 │   │   │   └── swagger.go           # Swagger UI + 两份 JSON 的静态文件服务
 │   │   ├── handler/
-│   │   │   ├── web/                 # 22 个管理端 Handler（按领域分组）
-│   │   │   └── app/                 # 2 个移动端 Handler（auth_handler / app_handler）
+│   │   │   ├── web/                 # 42 个管理端 Handler（含 18 个 gb_* / voice_agent）
+│   │   │   └── app/                 # 3 个移动端 Handler（auth / app / gb）
 │   │   └── middleware/
 │   │       ├── auth.go              # AuthMiddleware + CasbinMiddleware
 │   │       ├── api_key_auth.go      # ApiKeyAuth（X-Api-Key → SHA256 → ac_api_key）
 │   │       └── operation_log.go     # 增删改操作写入 ac_operation_log
-│   ├── service/                     # 24 个 Service（10 个领域子目录）
+│   ├── gb28181/                     # ★ 国标信令与媒体适配（v0.2.0）
+│   │   ├── sipserver/               # sipgo 封装、请求分发、INVITE、SDP 构造
+│   │   ├── protocol/manscdp/        # MANSCDP XML 编解码（Catalog/Alarm/PTZ/RecordInfo）
+│   │   ├── protocol/sdp/            # 点播 / 回放 / 语音 SDP
+│   │   ├── auth/                    # 白名单 + 服务端 Digest + 无状态 nonce
+│   │   ├── device/                  # 注册 / 心跳 / 目录重组 / 过期扫描 / 信令日志
+│   │   ├── session/                 # INVITE Dialog（ACK / BYE / INFO）
+│   │   ├── ssrc/                    # 10 位 SSRC 分配
+│   │   ├── mediaserver/             # ZLMediaKit REST 客户端 + 播放地址
+│   │   ├── hook/                    # ZLM 10 个回调 + secret 校验 + 活跃流
+│   │   ├── play/                    # 点播 / 回放编排
+│   │   └── control/                 # HTTP 层 ↔ SIP 实现的接口（Default/Set）
+│   ├── service/                     # 45 个 Service 文件（11 个领域子目录）
 │   │   ├── system/                  # 认证/个人中心/用户/角色/菜单/部门/岗位/配置/日志/通知
 │   │   ├── basic/                   # 区域 / 风险类型 / 告警类型
 │   │   ├── device/                  # 设备 / 设备模式 / 物联网卡 / 语音配置
@@ -65,9 +83,10 @@ backend/
 │   │   ├── upgrade/                 # 固件类型 / 固件 / AI 模型 / 升级下发 / 计划 / 记录
 │   │   ├── setting/                 # 告警设置 / 风险通知设置 / 个推 / 短信 / 消息推送
 │   │   ├── stats/                   # 看板 / 风险统计 / 告警统计 / 大屏 / 流量 / 设备状态
-│   │   └── app/                     # 移动端全部业务
-│   ├── repository/                  # 23 个数据访问文件
-│   ├── model/                       # 9 个模型文件 / 38 张表（ac_ 前缀）
+│   │   ├── gb28181/                 # 国标设备/通道/播放/云台/回放/录像/报警/位置/流/级联
+│   │   └── app/                     # 移动端全部业务（含 /app/gb 薄封装）
+│   ├── repository/                  # 27 个数据访问文件
+│   ├── model/                       # 10 个模型文件 / 56 张表（ac_ 前缀）
 │   │   ├── base.go                  # BaseModel + Context 注入 + 审计字段钩子
 │   │   ├── system.go                # 16 张系统管理表
 │   │   ├── basic.go                 # 3 张基础信息表
@@ -76,10 +95,11 @@ backend/
 │   │   ├── inspect.go               # 2 张巡检表
 │   │   ├── upgrade.go               # 5 张升级管理表
 │   │   ├── notify.go                # 3 张告警设置表
-│   │   └── webhook.go               # 1 张消息推送表（ac_webhook_config）
+│   │   ├── webhook.go               # 1 张消息推送表（ac_webhook_config）
+│   │   └── gb28181.go               # 18 张国标视频表（通道/媒体/录像/报警/级联/语音）
 │   └── dto/
-│       ├── request/                 # 18 个请求结构体文件
-│       └── response/                # 22 个响应结构体文件
+│       ├── request/                 # 21 个请求结构体文件
+│       └── response/                # 26 个响应结构体文件
 ├── pkg/
 │   ├── auth/jwt.go                  # JWT 签发与解析
 │   ├── database/postgres.go         # GORM 连接与连接池
@@ -95,7 +115,15 @@ backend/
 │   └── publish.sh                   # kubectl rollout restart（--prod 切生产集群）
 ├── static/
 │   └── swagger-ui/index.html        # Swagger UI 页面
+├── tools/
+│   └── gbsim/                       # ★ GB28181 智能相机模拟器（测试夹具，非生产代码）
+│       ├── main.go                  # CLI：REGISTER / Keepalive / Catalog / INVITE / RTP
+│       ├── sipua/                   # SIP UA、Digest、INVITE 会话
+│       ├── manscdp/                 # 模拟器侧 MANSCDP 编解码
+│       ├── ps/ rtp/ sdp/            # PS 封装、RTP 分包、SDP 解析
+│       └── testdata/sample.h264     # H.264 Annex-B 样本
 ├── tests/
+│   ├── gb28181/                     # 国标服务层测试（31 个）
 │   └── testutil/
 │       ├── testutil.go              # WithTx(t, fn)：事务隔离 + 自动回滚
 │       ├── resetdb/main.go          # 清空测试库（跑测试前必做）
@@ -248,11 +276,21 @@ cd backend && bash scripts/gen-swagger.sh
 
 ## API 路由总览
 
-后端共 **200 个端点**，分为 `/web/*`（管理后台，178 个）与 `/app/*`（移动端，20 个）两套，
-外加 `/health` 与两个登录接口。以 `docs/开发文档/后端开发/00-接口契约.md` 的第 3 节
-「路由总表」为准（契约先冻结后实现）。
+后端共注册 **339 个端点**（v0.2.0 实测）：
 
-入口文件：[`internal/api/router/web.go`](internal/api/router/web.go)、[`internal/api/router/app.go`](internal/api/router/app.go)
+| 分组 | 数量 | 说明 |
+|:---|:---:|:---|
+| `/web/*` | 295 | 管理后台 + 官网；含 105 条国标接口 |
+| `/app/*` | 33 | 移动端；含 13 条 `/app/gb/*` |
+| `/media/hook/*` | 10 | ZLM 回调（独立中间件组） |
+| `/health` | 1 | 内联端点，不经过鉴权 |
+
+其中 v0.1.0 的端点以 `docs/开发文档/后端开发/00-接口契约.md` 第 3 节为准，
+v0.2.0 的国标端点以第 10 节为准（契约先冻结后实现）。
+
+入口文件：[`internal/api/router/web.go`](internal/api/router/web.go)、[`internal/api/router/app.go`](internal/api/router/app.go)、
+[`internal/api/router/gb_live.go`](internal/api/router/gb_live.go)、[`internal/api/router/gb_ops.go`](internal/api/router/gb_ops.go)、
+[`internal/api/router/media.go`](internal/api/router/media.go)
 
 ### 1. 公开接口
 
@@ -670,6 +708,57 @@ type UploadResp struct {
 > **注意**：`/app/*` 与 `/web/*` 是**并列的两套端点**，共用同一份 Service 与数据权限逻辑。
 > 因此 App 与管理后台看到的同一份数据（风险、告警、巡检、设备）**可见性完全一致**。
 
+### 15. 国标视频（v0.2.0，前缀 `/web/gb`、`/app/gb`、`/media/hook`）
+
+国标模块共 **128 条路由**（与 `backend/tests/api/route_test.go` 的 `contractGbRoutes` 逐条对齐）：
+
+| 分组 | 前缀 | 数量 | 说明 |
+|:---|:---|:---:|:---|
+| 国标业务 | `/web/gb` | **100** | 设备/通道、播放/云台/语音、回放下载、云端录像、录像计划、报警、位置、媒体节点、拉流代理、推流、级联、分组、订阅、信令日志 |
+| 语音 Agent | `/web/settings/voice-agent` | **5** | 复用 `ac_thirdparty_config`（`Category='voice_agent'`） |
+| 移动端 | `/app/gb` | **13** | 薄封装，复用 `/web/gb` service 层 |
+| ZLM 回调 | `/media/hook` | **10** | 独立中间件组，`secret` 校验，**无 JWT / Casbin** |
+
+关键子路由：
+
+| 方法 | 路径 | 描述 |
+|:---|:---|:---|
+| GET | `/web/gb/devices` | 国标设备分页（仅 `gb_device_id` 非空） |
+| POST | `/web/gb/devices/:id/activation` | 生成激活凭证（幂等） |
+| POST | `/web/gb/devices/:id/sync-channel` | 下发 Catalog 查询 |
+| GET | `/web/gb/channels` | 国标通道分页 |
+| POST | `/web/gb/play/:channelId` | 开始实时播放，返回 WebRTC/FLV/HLS 地址 |
+| POST | `/web/gb/ptz/:channelId` | 云台控制（带外 MESSAGE） |
+| POST | `/web/gb/playback` | 开始回放 |
+| POST | `/web/gb/playback/control` | 回放控制（带内 INFO + MANSRTSP） |
+| GET | `/web/gb/cloud-records` | 云端录像分页 |
+| GET | `/web/gb/sip-logs` | 信令日志（不走 DataScope） |
+| POST | `/media/hook/on_publish` | ZLM 推流鉴权（拒绝返回 `{"code":-1}`） |
+
+> 字段级定义见 `docs/开发文档/后端开发/00-接口契约.md` §15。
+> `architecture` 不变量：SIP 进程只发信令，RTP/PS 由 ZLM 处理（`internal/gb28181/sipserver` 包注释）。
+
+启动：
+
+```bash
+# 独立信令进程（副本固定 1）
+cd backend && go run ./cmd/sipsvc
+
+# 开发期 / 单容器：把 SIP 内嵌进 API 进程
+GB28181_ENABLED=true GB28181_EMBEDDED=true go run ./cmd/server/main.go
+
+# 国标模拟器（联调 / 回归）
+cd backend && go run ./tools/gbsim \
+  --device-id 34020000001320000001 \
+  --sip-server 127.0.0.1:5060 \
+  --sip-domain 3402000000 \
+  --password '<设备 SIP 密码>' \
+  --channels 2 --stream-file testdata/sample.h264 --verbose
+```
+
+> ⚠️ 分进程部署时，API 进程的 `control.Default()` 为 nil，播放 / 云台 / 回放等
+> HTTP 触发的 SIP 命令不可用；需改用单进程内嵌，或等待跨进程 RPC（本期未实现）。
+
 ### 路由分组与中间件
 
 | 分组 | 中间件 | 端点数 | 说明 |
@@ -1082,6 +1171,7 @@ cd backend && go get github.com/xxx/xxx && go mod tidy
 
 # 主要依赖（go.mod 直接依赖）
 #   github.com/gin-gonic/gin          v1.12.0
+#   github.com/emiago/sipgo           v1.6.0      （国标 SIP）
 #   github.com/casbin/casbin/v2       v2.135.0
 #   github.com/casbin/gorm-adapter/v3 v3.0.2
 #   github.com/golang-jwt/jwt/v5      v5.3.1
@@ -1090,6 +1180,7 @@ cd backend && go get github.com/xxx/xxx && go mod tidy
 #   github.com/swaggo/swag/v2         v2.0.0-rc5
 #   go.uber.org/zap                   v1.28.0
 #   golang.org/x/crypto               v0.52.0
+#   golang.org/x/text                 v0.37.0     （GB2312 ↔ UTF-8）
 #   gopkg.in/natefinch/lumberjack.v2  v2.2.1
 #   gorm.io/driver/postgres           v1.5.11
 #   gorm.io/gorm                      v1.25.12
@@ -1106,9 +1197,9 @@ go env -w GOPROXY=https://goproxy.cn,direct
 
 ## 相关文档
 
-- [../docs/开发文档/后端开发/00-接口契约.md](../docs/开发文档/后端开发/00-接口契约.md) — **v0.1.0 冻结版契约**（200 条路由 + 四层签名）
+- [../docs/开发文档/后端开发/00-接口契约.md](../docs/开发文档/后端开发/00-接口契约.md) — **接口契约**（v0.1.0 §3 + v0.2.0 国标 §10/§15，共 339 个注册端点）
 - [../docs/需求文档/00-需求总览.md](../docs/需求文档/00-需求总览.md) — 功能边界、状态常量、权限矩阵、非功能需求
-- [../docs/开发文档/数据库设计/sql/ddl/](../docs/开发文档/数据库设计/sql/ddl/) — DDL 脚本（38 张表）
+- [../docs/开发文档/数据库设计/sql/ddl/](../docs/开发文档/数据库设计/sql/ddl/) — DDL 脚本（56 张业务表）
 - [../docs/部署文档/01-部署与运维.md](../docs/部署文档/01-部署与运维.md) — Docker 镜像、K8s 清单、CI/CD、运维命令
 - [../docs/部署文档/02-监控与容灾.md](../docs/部署文档/02-监控与容灾.md) — 业务指标埋点清单、告警规则、容灾方案
 - [../docs/敏捷开发/v0.1.0 基础功能开发/待完成事项.md](../docs/敏捷开发/v0.1.0%20基础功能开发/待完成事项.md) — 待接入能力清单
