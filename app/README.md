@@ -62,9 +62,11 @@ app/
 │   │   ├── api_service.dart           # HTTP 门面：注入 Bearer、统一错误处理
 │   │   └── generated/
 │   │       ├── AuthController.dart    # POST /app/auth/login
-│   │       ├── AppController.dart     # 其余全部 /app/* 端点
+│   │       ├── AppController.dart     # 其余 /app/* 端点
+│   │       ├── GbController.dart      # /app/gb/* 国标视频端点（13 个）
 │   │       └── definitions/
 │   │           ├── Definition.dart    # 数据模型（与后端 JSON tag 一一对应）
+│   │           ├── AppGb.dart         # 国标设备/通道/播放/回放/报警模型
 │   │           ├── Response.dart      # {code,message,data} 包装与强类型响应
 │   │           └── LoginReq.dart      # 各请求体
 │   ├── utils/
@@ -77,8 +79,8 @@ app/
 │   │   ├── empty_state.dart           # 空态与错误态
 │   │   ├── stat_card.dart             # 统计卡 / 进度统计卡 / 状态标签
 │   │   └── entity_list_page.dart      # 通用分页列表 + 卡片 + 信息行 + 远程图片
-│   └── pages/                         # 14 个页面，按领域分目录
-└── test/                              # 27 个用例
+│   └── pages/                         # 21 个页面，按领域分目录（含 gb/ 国标视频 4 页）
+└── test/                              # 51 个用例
 ```
 
 ---
@@ -192,6 +194,27 @@ flutter analyze                               # 静态检查（要求 0 error 0 
 | PUT | `/app/profile` | `updateProfileUsingPut` | `REmptyResponse` |
 | PUT | `/app/profile/password` | `changePasswordUsingPut` | `REmptyResponse` |
 
+**国标视频（`GbController.dart`）**
+
+| 方法 | 路径 | Controller 方法 | 响应类型 |
+|---|---|---|---|
+| GET | `/app/gb/devices` | `devicesUsingGet` | `RAppGbDevicePage` |
+| GET | `/app/gb/channels` | `channelsUsingGet` | `RAppGbChannelPage` |
+| POST | `/app/gb/play/:channelId` | `playUsingPost` | `RAppGbPlay` |
+| POST | `/app/gb/play/:channelId/stop` | `stopPlayUsingPost` | `REmptyResponse` |
+| POST | `/app/gb/play/:channelId/snapshot` | `snapshotUsingPost` | `RAppGbSnapshot` |
+| POST | `/app/gb/ptz/:channelId` | `ptzUsingPost` | `REmptyResponse` |
+| GET | `/app/gb/playback/records` | `recordsUsingGet` | `RAppGbRecordQuery` |
+| POST | `/app/gb/playback` | `startPlaybackUsingPost` | `RAppGbPlayback` |
+| POST | `/app/gb/playback/control` | `controlPlaybackUsingPost` | `REmptyResponse` |
+| POST | `/app/gb/playback/stop` | `stopPlaybackUsingPost` | `REmptyResponse` |
+| POST | `/app/gb/talk/:channelId/start` | `startTalkUsingPost` | `RAppGbVoiceSession` |
+| POST | `/app/gb/talk/:channelId/stop` | `stopTalkUsingPost` | `REmptyResponse` |
+| GET | `/app/gb/alarms` | `alarmsUsingGet` | `RAppGbAlarmPage` |
+
+> 移动端返回的是**裁剪后**的结构（`AppGb.dart`），不含 `sip_password`、国标内部字段等。
+> 若需增加字段，改后端 `internal/dto/response/app_gb.go` 与本文件对应模型，两处保持一致。
+
 ### 调用规范
 
 - **必须走生成的 Controller**：禁止在页面中手写 URL 或直接 `import` Dio 发请求；
@@ -287,8 +310,22 @@ radio = max(414 / 短边, 1)        ← 钳制为 1，即只缩不放
 | `/inspect-tasks/detail?id=` | 巡检任务详情 | 独立路由 |
 | `/devices/detail?id=` | 设备详情 | 独立路由 |
 | `/notifications` | 通知列表 | 独立路由 |
+| `/gb/devices` | 国标设备/通道 | 按设备懒加载展开通道 |
+| `/gb/live?channelId=&name=` | 国标实时播放 | WebRTC(WHEP) 优先 + HTTP-FLV 回退；含云台与对讲入口 |
+| `/gb/playback?channelId=&name=` | 国标录像回放 | 未带 channelId 时先选通道 |
+| `/gb/alarms` | AI / 国标报警 | 只读列表 + 详情弹层 |
 
 详情页参数通过 `?id=` 查询串传递，页面内用 `int.tryParse` 解析，解析失败展示错误态。
+
+### 国标播放的两次「失败要能看见」
+
+实现上刻意做了两件事，因为它们对应的是**静默失败**：
+
+1. **WebRTC 的成功判据不是「answer 返回 200」，而是 10 秒内 `onTrack` 收到视频轨。**
+   H.265 在部分 Android 机型上会协商成功、ICE 也连上，但永远没有视频帧 ——
+   只看 answer 会得到一个「播放中」的黑屏。
+2. **无论从哪条路径失败，都要显示具体原因并回退 FLV**；两条都失败时显示两段原因与重试按钮，
+   不允许黑屏无提示。
 
 ---
 
@@ -323,6 +360,19 @@ radio = max(414 / 短边, 1)        ← 钳制为 1，即只缩不放
 
 6. **列表状态在切换底部 Tab 后重置**：`ShellRoute` 不保留各 Tab 的页面状态，
    切换即重新拉取。如需保留，可后续改为 `StatefulShellRoute.indexedStack`。
+
+### 国标视频的已知边界（v0.2.0）
+
+1. **对讲只有会话控制，没有音频采集回推**：`startTalk/stopTalk` 会建立会话，
+   但 App 侧的麦克风采集与 RTP 回推尚未接入（需要原生音频推流 + `RECORD_AUDIO` 权限），
+   界面上也标注了「需真机验证」。真正能听见声音要等二期语音模块。
+2. **回放进度为本地估算**：后端没有「当前播放位置」查询接口，进度按墙钟 × 倍速推算；
+   seek 的精度取决于设备的 MANSRTSP 支持。
+3. **报警页只读**：不提供抓图、处理、删除 —— 这些操作在 Web 后台完成。
+4. **回放页的播放器代码是实时页的最小副本**：实时页的播放内核与云台/对讲/抓图强耦合，
+   在未做统一抽取前先复制一份并保持同步；后续重构时应抽成公共组件并删除副本。
+5. **iOS 工程未改动**：`flutter_webrtc` 通常需要 `NSCameraUsageDescription` /
+   `NSMicrophoneUsageDescription`，按项目约定 iOS 侧由用户自行处理。
 
 ---
 
