@@ -155,8 +155,13 @@ func TestBuildChannels(t *testing.T) {
 }
 
 // TestDispatcherCatalogSinglePage 验证单页目录响应的 SN 回带、SumNum 与中文通道名。
+//
+// 用 1 个通道是有意的：分片按**字节预算**（catalogByteBudget=700），
+// 单条目录项已约 460 字节，2 条就会拆成两片 —— 多片场景由
+// TestDispatcherCatalogChunking 覆盖。
 func TestDispatcherCatalogSinglePage(t *testing.T) {
 	cfg := sampleConfig()
+	cfg.Channels = 1
 	d := &messageDispatcher{cfg: cfg, channels: cfg.BuildChannels(), logger: silentLogger()}
 
 	query, err := manscdp.Encode(&manscdp.Query{
@@ -183,10 +188,10 @@ func TestDispatcherCatalogSinglePage(t *testing.T) {
 	if got.DeviceID != cfg.DeviceID {
 		t.Errorf("DeviceID 不符：%q", got.DeviceID)
 	}
-	if got.SumNum != 2 || got.DeviceList.Num != 2 {
+	if got.SumNum != 1 || got.DeviceList.Num != 1 {
 		t.Errorf("SumNum/Num 不符：%d/%d", got.SumNum, got.DeviceList.Num)
 	}
-	if len(got.DeviceList.Items) != 2 {
+	if len(got.DeviceList.Items) != 1 {
 		t.Fatalf("目录项数量不符：%d", len(got.DeviceList.Items))
 	}
 	first := got.DeviceList.Items[0]
@@ -208,17 +213,25 @@ func TestDispatcherCatalogSinglePage(t *testing.T) {
 }
 
 // TestDispatcherCatalogChunking 验证大目录按 SumNum 分片（§13.3.2 的 R9 场景）。
+//
+// 断言的是**行为契约**而非固定片数：每片编码后不超过 catalogByteBudget、
+// 各片条数合计等于总通道数、SN/SumNum 一致。片数取决于通道名长度等
+// 编码细节，写死片数会让这个用例在改文案时无谓失败。
 func TestDispatcherCatalogChunking(t *testing.T) {
 	cfg := sampleConfig()
-	cfg.Channels = catalogPageSize*2 + 7
+	cfg.Channels = 25
 	d := &messageDispatcher{cfg: cfg, channels: cfg.BuildChannels(), logger: silentLogger()}
 
 	replies := d.catalogReplies(55)
-	if len(replies) != 3 {
-		t.Fatalf("期望分 3 片，实际 %d", len(replies))
+	if len(replies) < 2 {
+		t.Fatalf("25 通道的目录应分成多片，实际 %d 片", len(replies))
 	}
 	total := 0
 	for i, r := range replies {
+		if len(r) > catalogByteBudget {
+			t.Errorf("第 %d 片正文 %d 字节，超过预算 %d（UDP 下会被 sipgo 拒绝发送）",
+				i, len(r), catalogByteBudget)
+		}
 		var page manscdp.Catalog
 		if err := manscdp.Decode(r, cfg.Charset, &page); err != nil {
 			t.Fatalf("解析第 %d 片失败：%v", i, err)
@@ -233,19 +246,22 @@ func TestDispatcherCatalogChunking(t *testing.T) {
 			t.Errorf("第 %d 片的 Num(%d) 与实际条数(%d) 不符",
 				i, page.DeviceList.Num, len(page.DeviceList.Items))
 		}
+		if page.DeviceList.Num == 0 {
+			t.Errorf("第 %d 片为空片，分片逻辑有误", i)
+		}
 		total += page.DeviceList.Num
 	}
 	if total != cfg.Channels {
 		t.Fatalf("分片条数合计 %d ≠ 总通道数 %d", total, cfg.Channels)
 	}
-	// 最后一页应当是 7 条（2*100 + 7）
+	// 末页同样应满足 SN/SumNum 一致性（上面循环已覆盖），此处不再断言固定条数
 	last := replies[len(replies)-1]
 	var page manscdp.Catalog
 	if err := manscdp.Decode(last, cfg.Charset, &page); err != nil {
 		t.Fatalf("解析末页失败：%v", err)
 	}
-	if page.DeviceList.Num != 7 {
-		t.Fatalf("末页条数应为 7，实际 %d", page.DeviceList.Num)
+	if page.DeviceList.Num == 0 {
+		t.Fatalf("末页为空，分片逻辑有误")
 	}
 }
 

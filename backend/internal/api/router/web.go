@@ -71,6 +71,14 @@ func registerWebRoutes(r *gin.Engine) {
 	statsH := handler.NewStatsHandler()
 	uploadH := handler.NewUploadHandler()
 
+	// 国标视频（GB/T 28181）业务 CRUD 层
+	gbDeviceH := handler.NewGbDeviceHandler()
+	gbChannelH := handler.NewGbChannelHandler()
+	gbMediaServerH := handler.NewGbMediaServerHandler()
+	gbGroupH := handler.NewGbGroupHandler()
+	gbSubscribeH := handler.NewGbSubscribeHandler()
+	gbSipLogH := handler.NewGbSipLogHandler()
+
 	// ════════════════════════════════════════════════════════════════
 	// 公开接口（无需认证）
 	// ════════════════════════════════════════════════════════════════
@@ -373,6 +381,56 @@ func registerWebRoutes(r *gin.Engine) {
 			wtsg.GET("/screen", statsH.Screen)
 			wtsg.GET("/traffic", statsH.TrafficStats)
 			wtsg.GET("/device-status", statsH.DeviceStatus)
+		}
+
+		// ═══ 国标视频（GB/T 28181）═══
+		// 静态子路径（options / tree / stats）统一写在 /:id 之前。
+		gb := wAuth.Group("/gb")
+		{
+			// 国标设备
+			gb.GET("/devices", gbDeviceH.Page)
+			gb.GET("/devices/:id", gbDeviceH.Get)
+			gb.POST("/devices/:id/sync-channel", gbDeviceH.SyncChannel)
+			gb.POST("/devices/:id/subscribe", gbDeviceH.Subscribe)
+			gb.DELETE("/devices/:id/subscribe", gbDeviceH.Unsubscribe)
+			gb.POST("/devices/:id/activation", gbDeviceH.GenerateActivation)
+			gb.DELETE("/devices/:id", gbDeviceH.Delete)
+
+			// 国标通道
+			gb.GET("/channels", gbChannelH.Page)
+			gb.GET("/channels/options", gbChannelH.Options)
+			gb.GET("/channels/:id", gbChannelH.Get)
+			gb.PUT("/channels/:id", gbChannelH.Update)
+			gb.DELETE("/channels/:id", gbChannelH.Delete)
+			gb.PUT("/channels/:id/region", gbChannelH.UpdateRegion)
+			gb.PUT("/channels/:id/group", gbChannelH.UpdateGroup)
+			gb.POST("/channels/:id/reset", gbChannelH.Reset)
+
+			// 媒体节点（简单列表，非分页）
+			gb.GET("/media-servers", gbMediaServerH.List)
+			gb.POST("/media-servers", gbMediaServerH.Create)
+			gb.GET("/media-servers/:id", gbMediaServerH.Get)
+			gb.PUT("/media-servers/:id", gbMediaServerH.Update)
+			gb.DELETE("/media-servers/:id", gbMediaServerH.Delete)
+			gb.GET("/media-servers/:id/check", gbMediaServerH.Check)
+			gb.GET("/media-servers/:id/info", gbMediaServerH.ServerInfo)
+
+			// 业务分组（树）
+			gb.GET("/groups/tree", gbGroupH.Tree)
+			gb.GET("/groups", gbGroupH.List)
+			gb.POST("/groups", gbGroupH.Create)
+			gb.PUT("/groups/:id", gbGroupH.Update)
+			gb.DELETE("/groups/:id", gbGroupH.Delete)
+
+			// 订阅记录
+			gb.GET("/subscribes", gbSubscribeH.Page)
+			gb.POST("/subscribes", gbSubscribeH.Create)
+			gb.DELETE("/subscribes/:id", gbSubscribeH.Delete)
+
+			// 信令日志（无 dept_id，不走 DataScope）
+			gb.GET("/sip-logs", gbSipLogH.Page)
+			gb.GET("/sip-logs/stats", gbSipLogH.Stats)
+			gb.GET("/sip-logs/:id", gbSipLogH.Get)
 		}
 	}
 }

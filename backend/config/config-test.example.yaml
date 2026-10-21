@@ -65,6 +65,27 @@ thirdparty:
 swagger:
   enabled: true
 
+# ── GB28181 信令服务（cmd/sipsvc）────────────────────────────────
+# 测试环境端口与 HTTP（8081）错开；冒烟测试时用 gbsim 对 5060 注册。
+gb28181:
+  enabled: false
+  embedded: false
+  charset: GB2312
+  sip:
+    listen_ip: 0.0.0.0
+    port: 5060
+    transport: UDP
+    advertise_ip: ""
+    domain: 3402000000
+    realm: 3402000000
+    server_id: 34020000002000000001
+    server_name: AI Camera
+    register_expires: 3600
+    nonce_secret: "test-only-change-me"
+  media:
+    public_ip: 127.0.0.1
+    rtp_proxy_port: 10000
+
 log:
   level: info
   format: console

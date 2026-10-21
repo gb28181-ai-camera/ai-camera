@@ -147,14 +147,27 @@ services:
       - "${ZLM_RTP_PORT:-10000}:10000/udp"   # ★ 单端口模式：收流只用一个 UDP 端口
       - "${ZLM_RTP_PORT:-10000}:10000/tcp"   #   设备用 TCP-PASSIVE 时走这条
       - "8000:8000/udp"                      # WebRTC 收流端口
+    # ZLM 不做环境变量替换（实测 `${VAR}` 会原样保留），而 secret 与 hook 地址
+    # 必须随环境变化。故用一层入口脚本把模板渲染到容器可写层再启动。
+    # 见 deploy/zlm/render-config.sh 的说明。
+    entrypoint: ["/bin/sh", "/opt/media/render-config.sh"]
     volumes:
-      # 覆盖镜像默认配置。★ 必须用 rw（不能加 :ro）——
-      # ZLM 启动时会校验并回写 config.ini（实测：secret 短于 32 字符会被自动改写）。
-      # 用 :ro 会因写入失败而报错。
-      - ./deploy/zlm/config.ini:/opt/media/conf/config.ini
+      # 只读挂载模板：渲染结果写到容器内的 /opt/media/conf/config.ini，
+      # **不写回**宿主机文件，避免把某次部署的密钥固化进仓库。
+      - ./deploy/zlm/config.ini:/opt/media/conf/config.tmpl:ro
+      - ./deploy/zlm/render-config.sh:/opt/media/render-config.sh:ro
       - zlmrecord:/opt/media/bin/www/record
     environment:
       TZ: Asia/Shanghai
+      # 与 ac_gb_media_server.secret / ZLM 的 [api] secret 三处必须一致
+      ZLM_SECRET: ${ZLM_SECRET:?请在 .env 中设置 ZLM_SECRET，参考 .env.example}
+      # 平台回调基址。两种形态：
+      #   compose full：backend 发布在宿主机 8081 → 默认值即可（经 host-gateway 回连宿主机）
+      #   本地开发    ：backend 直接在宿主机 8080 跑 → 设 ZLM_HOOK_BASE=http://host.docker.internal:8080
+      ZLM_HOOK_BASE: ${ZLM_HOOK_BASE:-http://host.docker.internal:8081}
+    # Linux 宿主上 host.docker.internal 默认不存在，需显式映射到网关
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks: [ai-camera]
 
   # sipsvc / pipecat 仍为 v0.2.0 规划服务，代码尚未实现，见下：

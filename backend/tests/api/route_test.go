@@ -19,6 +19,66 @@ import (
 // 这是守门测试：改了契约却忘了加/删路由、或反过来，都会在这里报出来。
 // ════════════════════════════════════════════════════════════════
 
+// contractGbRoutes 契约 §10「v0.2.0 路由总表」中**已实现**的端点，格式 "METHOD /path"。
+//
+// 为什么不直接并进 contractRoutes：§3 是 v0.1.0 的冻结面，§10 是 v0.2.0 的增量面，
+// 分批落地。Wave 2（播放/云台/回放/语音/报警/级联）每完成一批就往这里追加，
+// 未实现的 §10 端点不列 —— 否则「契约有而路由无」会长期红灯，失去守门意义。
+var contractGbRoutes = []string{
+	// ── §10.1 国标设备与通道 ──
+	"GET /web/gb/devices",
+	"GET /web/gb/devices/:id",
+	"POST /web/gb/devices/:id/sync-channel",
+	"POST /web/gb/devices/:id/subscribe",
+	"DELETE /web/gb/devices/:id/subscribe",
+	"POST /web/gb/devices/:id/activation",
+	"DELETE /web/gb/devices/:id",
+	"GET /web/gb/channels",
+	"GET /web/gb/channels/options",
+	"GET /web/gb/channels/:id",
+	"PUT /web/gb/channels/:id",
+	"DELETE /web/gb/channels/:id",
+	"PUT /web/gb/channels/:id/region",
+	"PUT /web/gb/channels/:id/group",
+	"POST /web/gb/channels/:id/reset",
+
+	// ── §10.6 媒体节点（流代理/推流见 Wave 2）──
+	"GET /web/gb/media-servers",
+	"GET /web/gb/media-servers/:id",
+	"POST /web/gb/media-servers",
+	"PUT /web/gb/media-servers/:id",
+	"DELETE /web/gb/media-servers/:id",
+	"GET /web/gb/media-servers/:id/check",
+	"GET /web/gb/media-servers/:id/info",
+
+	// ── §10.8 业务分组与订阅 ──
+	"GET /web/gb/groups/tree",
+	"GET /web/gb/groups",
+	"POST /web/gb/groups",
+	"PUT /web/gb/groups/:id",
+	"DELETE /web/gb/groups/:id",
+	"GET /web/gb/subscribes",
+	"POST /web/gb/subscribes",
+	"DELETE /web/gb/subscribes/:id",
+
+	// ── §10.10 信令日志 ──
+	"GET /web/gb/sip-logs",
+	"GET /web/gb/sip-logs/:id",
+	"GET /web/gb/sip-logs/stats",
+
+	// ── §10.11 ZLM 回调（独立中间件组，无 JWT）──
+	"POST /media/hook/on_server_keepalive",
+	"POST /media/hook/on_server_started",
+	"POST /media/hook/on_publish",
+	"POST /media/hook/on_play",
+	"POST /media/hook/on_stream_changed",
+	"POST /media/hook/on_stream_none_reader",
+	"POST /media/hook/on_stream_not_found",
+	"POST /media/hook/on_send_rtp_stopped",
+	"POST /media/hook/on_rtp_server_timeout",
+	"POST /media/hook/on_record_mp4",
+}
+
 // contractRoutes 契约 §3 列出的全部端点，格式 "METHOD /path"。
 var contractRoutes = []string{
 	// ── §3.1 公开接口 ──
@@ -346,8 +406,8 @@ func TestRouteTable_MatchesContract(t *testing.T) {
 		}
 	})
 
-	want := make(map[string]bool, len(contractRoutes))
-	for _, key := range contractRoutes {
+	want := make(map[string]bool, len(contractRoutes)+len(contractGbRoutes))
+	for _, key := range append(append([]string{}, contractRoutes...), contractGbRoutes...) {
 		if want[key] {
 			t.Errorf("契约期望表内重复条目: %s", key)
 			continue

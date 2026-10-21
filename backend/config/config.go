@@ -18,6 +18,47 @@ type Config struct {
 	ThirdParty ThirdPartyConfig `mapstructure:"thirdparty"`
 	Log        LogConfig        `mapstructure:"log"`
 	Swagger    SwaggerConfig    `mapstructure:"swagger"`
+	GB28181    GB28181Config    `mapstructure:"gb28181"`
+}
+
+// GB28181Config GB28181 信令服务（cmd/sipsvc）配置。
+//
+// 设计依据：docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md §3.3。
+// 分为 SIP 信令与媒体通告两段：前者决定本平台在 SIP 域里的身份与监听地址，
+// 后者只影响下发给设备的 SDP（ZLM 的收流地址与端口）。
+type GB28181Config struct {
+	Enabled  bool               `mapstructure:"enabled"`
+	Embedded bool               `mapstructure:"embedded"` // true 时由 cmd/server 内嵌启动
+	Charset  string             `mapstructure:"charset"`  // 设备未配置 charset 时的缺省值
+	SIP      GB28181SIPConfig   `mapstructure:"sip"`
+	Media    GB28181MediaConfig `mapstructure:"media"`
+}
+
+// GB28181SIPConfig SIP 信令层配置。
+//
+// ListenIP 为 0.0.0.0 时监听全部网卡，但出向报文的 Via/Contact 需要一个
+// 设备可达的地址：优先用 advertise_ip，未配置则回落到 listen_ip。
+// 设备级的多网卡源地址覆盖见 ac_device.local_ip（SDP/源地址选择）。
+type GB28181SIPConfig struct {
+	ListenIP    string `mapstructure:"listen_ip"`
+	Port        int    `mapstructure:"port"`
+	Transport   string `mapstructure:"transport"` // UDP / TCP / BOTH
+	AdvertiseIP string `mapstructure:"advertise_ip"`
+	Domain      string `mapstructure:"domain"`
+	Realm       string `mapstructure:"realm"`
+	ServerID    string `mapstructure:"server_id"`
+	ServerName  string `mapstructure:"server_name"`
+	// RegisterExpires 是设备未在 REGISTER 里声明有效期时使用的缺省值（秒）。
+	RegisterExpires int `mapstructure:"register_expires"`
+	// NonceSecret 用于无状态 Digest nonce 的 HMAC 密钥。为空时退化为固定串，
+	// 仅适用于开发环境（重启后旧 nonce 失效是预期行为，设备会自动重注册）。
+	NonceSecret string `mapstructure:"nonce_secret"`
+}
+
+// GB28181MediaConfig 媒体通告配置（写进 INVITE 的 SDP，交给设备推流）。
+type GB28181MediaConfig struct {
+	PublicIP     string `mapstructure:"public_ip"`      // SDP c=/o= 通告给设备的 IP
+	RTPProxyPort int    `mapstructure:"rtp_proxy_port"` // ZLM 单端口模式的共享收流端口
 }
 
 // ServerConfig HTTP 服务配置。
@@ -155,6 +196,23 @@ var envBindings = map[string]string{
 	"media.base_url":    "MEDIA_BASE_URL",
 	"log.level":         "LOG_LEVEL",
 	"swagger.enabled":   "SWAGGER_ENABLED",
+
+	// GB28181 信令（cmd/sipsvc / 内嵌模式）
+	"gb28181.enabled":              "GB28181_ENABLED",
+	"gb28181.embedded":             "GB28181_EMBEDDED",
+	"gb28181.charset":              "GB28181_CHARSET",
+	"gb28181.sip.listen_ip":        "GB28181_SIP_LISTEN_IP",
+	"gb28181.sip.port":             "GB28181_SIP_PORT",
+	"gb28181.sip.transport":        "GB28181_SIP_TRANSPORT",
+	"gb28181.sip.advertise_ip":     "GB28181_SIP_ADVERTISE_IP",
+	"gb28181.sip.domain":           "GB28181_SIP_DOMAIN",
+	"gb28181.sip.realm":            "GB28181_SIP_REALM",
+	"gb28181.sip.server_id":        "GB28181_SIP_SERVER_ID",
+	"gb28181.sip.server_name":      "GB28181_SIP_SERVER_NAME",
+	"gb28181.sip.register_expires": "GB28181_SIP_REGISTER_EXPIRES",
+	"gb28181.sip.nonce_secret":     "GB28181_SIP_NONCE_SECRET",
+	"gb28181.media.public_ip":      "GB28181_MEDIA_PUBLIC_IP",
+	"gb28181.media.rtp_proxy_port": "GB28181_MEDIA_RTP_PROXY_PORT",
 }
 
 // LoadConfig 使用 viper 读取 yaml 配置文件并反序列化为 Config。

@@ -68,6 +68,29 @@ thirdparty:
 swagger:
   enabled: true
 
+# ── GB28181 信令服务（cmd/sipsvc）────────────────────────────────
+# 开发期可用 gb28181.embedded=true 让 cmd/server 内嵌启动同一组 goroutine，
+# 一条命令即可与 tools/gbsim 联调；生产建议独立进程（副本固定 1）。
+gb28181:
+  enabled: false
+  embedded: false
+  charset: GB2312
+  sip:
+    listen_ip: 0.0.0.0
+    port: 5060
+    transport: UDP            # UDP / TCP / BOTH
+    advertise_ip: ""          # 设备可达的本机 IP；留空则用 listen_ip
+    domain: 3402000000        # SIP 域（From/To 的 realm 部分）
+    realm: 3402000000
+    server_id: 34020000002000000001
+    server_name: AI Camera
+    register_expires: 3600
+    # 【需修改】生产环境务必更换，用于无状态 Digest nonce 的 HMAC
+    nonce_secret: "dev-only-change-me"
+  media:
+    public_ip: 127.0.0.1      # SDP c=/o= 中通告给设备的 IP（单端口模式下即 ZLM 地址）
+    rtp_proxy_port: 10000     # ZLM 单端口模式的共享收流端口
+
 log:
   level: info
   format: console

@@ -364,12 +364,20 @@ func nextSN(counter *atomic.Int64) int {
 	return int(counter.Add(1) % 65536)
 }
 
-// catalogPageSize 是单条目录响应 MESSAGE 里携带的最大通道数。
+// catalogByteBudget 是单条目录响应 MESSAGE 的正文预算（字节）。
 //
-// 目录响应按 SumNum 跨多条 MESSAGE 分片（§12.1）；取 100 是为了让
-// 单条 SIP MESSAGE 稳稳落在 UDP MTU 之内 —— sipgo 的 UDP 传输层在报文超过
-// UDPMTUSize-200 时会直接返回 ErrUDPMTUCongestion，分片不足会导致大目录设备同步失败。
-const catalogPageSize = 100
+// 为什么按**字节**而不是按条数分片：早先按 100 条/页，实测 --channels 2 时
+// 单条 GB2312 目录响应已约 950 字节，2 条就能顶到上限 —— 100 条纯属想当然。
+// sipgo 的 UDP 传输层在报文超过 UDPMTUSize-200（默认 1300）时直接返回
+// ErrUDPMTUCongestion，表现是「`--channels 2` 时目录一条都发不出去」。
+//
+// 取 700 是实测出来的，不是拍的：2 个通道的 GB2312 目录正文 950 字节，
+// 加上 SIP 头（From/To/Via/Call-ID/Content-Type 等约 350 字节）后整包约 1300，
+// 正好顶到 sipgo 的 UDPMTUSize-200 = 1300 上限并报错。
+// 正文预算必须按「整包」算，只盯正文大小会重蹈覆辙。
+// 注意：这是**模拟器**的稳健性措施；真实设备的目录分片策略由厂商决定，
+// 平台侧必须能处理任意分片，见 protocol/manscdp 的 (deviceID, SN) 重组。
+const catalogByteBudget = 700
 
 // messageDispatcher 把入向 MANSCDP 报文路由成对应的响应报文。
 //
@@ -413,10 +421,13 @@ func (d *messageDispatcher) one(body []byte) [][]byte {
 	return [][]byte{body}
 }
 
-// catalogReplies 构造目录响应，按 catalogPageSize 分片。
+// catalogReplies 构造目录响应，按编码后**字节数**分片。
 //
 // 分片复用的是**同一个 SN**（平台按 (deviceId, SN) 重组，§6.2 #3），
 // SumNum 恒为总通道数，DeviceList 的 Num 是本片条数。
+//
+// 每片至少放 1 条 —— 单条就超预算时宁可发超（让平台侧暴露问题），
+// 也不能因为「永远放不下」而丢掉通道、制造「设备少报通道」的假象。
 func (d *messageDispatcher) catalogReplies(sn int) [][]byte {
 	total := len(d.channels)
 	if total == 0 {
@@ -424,9 +435,19 @@ func (d *messageDispatcher) catalogReplies(sn int) [][]byte {
 		return d.one(d.encodeCatalog(sn, nil, 0))
 	}
 	var out [][]byte
-	for start := 0; start < total; start += catalogPageSize {
-		end := min(start+catalogPageSize, total)
-		out = append(out, d.encodeCatalog(sn, d.channels[start:end], total))
+	for start := 0; start < total; {
+		end := start + 1
+		body := d.encodeCatalog(sn, d.channels[start:end], total)
+		for end < total {
+			next := d.encodeCatalog(sn, d.channels[start:end+1], total)
+			if len(next) > catalogByteBudget {
+				break
+			}
+			end++
+			body = next
+		}
+		out = append(out, body)
+		start = end
 	}
 	return out
 }

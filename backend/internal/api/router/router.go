@@ -41,6 +41,9 @@ func SetupRouter() *gin.Engine {
 	// 注册移动端路由
 	registerAppRoutes(r)
 
+	// 注册 ZLMediaKit 回调路由（独立路由组，不挂 JWT/Casbin）
+	registerMediaRoutes(r)
+
 	// 注册 Swagger 文档路由
 	if cfg == nil || cfg.Swagger.Enabled {
 		registerSwaggerRoutes(r)

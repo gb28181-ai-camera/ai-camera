@@ -1,0 +1,671 @@
+// Package device 负责 GB28181 设备的注册、心跳、目录同步与信令日志。
+//
+// 状态模型（设计 §4.2）：
+//
+//	REGISTER 成功 → register_status='activated'、status='online'、sip_expires=now+expires
+//	Keepalive     → 刷新 last_beat_dt/status
+//	sip_expires 到期 → status='offline'（不删除设备，也不删通道）
+//
+// 目录同步按 (deviceID, SN) 重组多条 MESSAGE（设计 §6.2 #3）：
+// 设备把 SumNum 条通道拆成若干片，每片复用同一个 SN，收齐后才落库，
+// 避免半份目录覆盖出错误的 channel_count。
+package device
+
+import (
+	"context"
+	"log/slog"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/manscdp"
+	"github.com/boticz/ai-camera-backend/internal/model"
+)
+
+// Config 是设备管理器的参数。
+type Config struct {
+	// Domain 是 SIP 域（10 位），用于校验目录项是否落在本域前缀内。
+	Domain string
+	// DefaultExpires 是设备未声明 Expires 时的缺省注册有效期（秒）。
+	DefaultExpires int
+	// CatalogTimeout 是目录分片重组的最长等待时间，超时丢弃半份目录。
+	CatalogTimeout time.Duration
+	// SweepInterval 是过期扫描与半份目录清理的周期。
+	SweepInterval time.Duration
+	// LogBuffer 是信令日志写入队列长度；满时丢弃并计数，绝不阻塞主流程。
+	LogBuffer int
+}
+
+// Endpoint 是设备最近一次有效报文的源地址。
+//
+// 为什么放内存而不落库：ac_device 没有 host_address 列，且一期 SIP 固定单节点
+// （设计 §2.4）。进程重启后设备的下一条 REGISTER/Keepalive 会自动补齐。
+type Endpoint struct {
+	Addr      string
+	Transport string
+	UpdatedAt time.Time
+}
+
+// Manager 管理设备运行时状态。
+type Manager struct {
+	store Store
+	cfg   Config
+	log   *slog.Logger
+	now   func() time.Time
+
+	mu        sync.Mutex
+	endpoints map[string]Endpoint
+	catalogs  map[string]*catalogAccum
+
+	logCh   chan model.GbSipLog
+	dropped int64
+
+	stopOnce sync.Once
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
+	started  bool
+}
+
+// catalogAccum 是一份尚未收齐的目录。
+type catalogAccum struct {
+	sum   int
+	items []manscdp.CatalogItem
+	last  time.Time
+}
+
+// NewManager 构造设备管理器。
+func NewManager(store Store, cfg Config, logger *slog.Logger) *Manager {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if cfg.DefaultExpires <= 0 {
+		cfg.DefaultExpires = 3600
+	}
+	if cfg.CatalogTimeout <= 0 {
+		cfg.CatalogTimeout = 60 * time.Second
+	}
+	if cfg.SweepInterval <= 0 {
+		cfg.SweepInterval = 30 * time.Second
+	}
+	if cfg.LogBuffer <= 0 {
+		cfg.LogBuffer = 1024
+	}
+	return &Manager{
+		store:     store,
+		cfg:       cfg,
+		log:       logger,
+		now:       time.Now,
+		endpoints: map[string]Endpoint{},
+		catalogs:  map[string]*catalogAccum{},
+		logCh:     make(chan model.GbSipLog, cfg.LogBuffer),
+		stopCh:    make(chan struct{}),
+	}
+}
+
+// SetNow 覆盖时钟（单测用）。
+func (m *Manager) SetNow(f func() time.Time) {
+	if f != nil {
+		m.now = f
+	}
+}
+
+// Start 启动日志写入与过期扫描的后台协程。可重复调用。
+func (m *Manager) Start(ctx context.Context) {
+	m.mu.Lock()
+	if m.started {
+		m.mu.Unlock()
+		return
+	}
+	m.started = true
+	m.mu.Unlock()
+
+	m.wg.Add(2)
+	go m.logWorker(ctx)
+	go m.sweepLoop(ctx)
+}
+
+// Stop 停止后台协程并尽量把队列里的日志写完。
+func (m *Manager) Stop() {
+	m.stopOnce.Do(func() { close(m.stopCh) })
+	m.wg.Wait()
+}
+
+// Endpoint 返回设备最近的源地址。
+func (m *Manager) Endpoint(gbDeviceID string) (Endpoint, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ep, ok := m.endpoints[gbDeviceID]
+	return ep, ok
+}
+
+// SetEndpoint 记录设备的源地址（REGISTER / Keepalive / 任意入向报文）。
+func (m *Manager) SetEndpoint(gbDeviceID, addr, transport string) {
+	if gbDeviceID == "" || addr == "" {
+		return
+	}
+	m.mu.Lock()
+	m.endpoints[gbDeviceID] = Endpoint{
+		Addr:      addr,
+		Transport: strings.ToUpper(transport),
+		UpdatedAt: m.now(),
+	}
+	m.mu.Unlock()
+}
+
+// dropEndpoint 设备注销时清掉源地址。
+func (m *Manager) dropEndpoint(gbDeviceID string) {
+	m.mu.Lock()
+	delete(m.endpoints, gbDeviceID)
+	m.mu.Unlock()
+}
+
+// OnRegister 处理注册成功。
+//
+// 首次注册写 register_dt（只写一次）；每次成功注册都刷新 sip_expires 与在线状态。
+func (m *Manager) OnRegister(ctx context.Context, dev *model.Device, remote, transport string, expires int) error {
+	if dev == nil {
+		return nil
+	}
+	if expires <= 0 {
+		return m.OnUnregister(ctx, dev)
+	}
+	now := m.now()
+	fields := map[string]interface{}{
+		"register_status": model.GbRegisterStatusActivated,
+		"sip_expires":     now.Add(time.Duration(expires) * time.Second),
+		"status":          model.DeviceStatusOnline,
+		"last_beat_dt":    now,
+	}
+	if transport != "" {
+		fields["sip_transport"] = strings.ToUpper(transport)
+	}
+	if dev.RegisterDT == nil {
+		// 首次成功注册即「激活」时刻，后续重注册不覆盖。
+		fields["register_dt"] = now
+	}
+	if dev.Status != model.DeviceStatusOnline {
+		fields["online_dt"] = now
+	}
+	if err := m.store.UpdateDevice(ctx, dev.ID, fields); err != nil {
+		return err
+	}
+
+	// 同步内存副本，避免同一次请求后续逻辑读到旧值。
+	dev.RegisterStatus = model.GbRegisterStatusActivated
+	dev.Status = model.DeviceStatusOnline
+	exp := now.Add(time.Duration(expires) * time.Second)
+	dev.SipExpires = &exp
+	dev.LastBeatDT = &now
+	if dev.RegisterDT == nil {
+		dev.RegisterDT = &now
+	}
+	if transport != "" {
+		dev.SipTransport = strings.ToUpper(transport)
+	}
+	m.SetEndpoint(dev.GbDeviceID, remote, transport)
+	return nil
+}
+
+// OnUnregister 处理 Expires: 0 的注销。
+func (m *Manager) OnUnregister(ctx context.Context, dev *model.Device) error {
+	if dev == nil {
+		return nil
+	}
+	now := m.now()
+	fields := map[string]interface{}{
+		"status":      model.DeviceStatusOffline,
+		"sip_expires": nil,
+		"offline_dt":  now,
+	}
+	if err := m.store.UpdateDevice(ctx, dev.ID, fields); err != nil {
+		return err
+	}
+	dev.Status = model.DeviceStatusOffline
+	dev.SipExpires = nil
+	m.dropEndpoint(dev.GbDeviceID)
+	return nil
+}
+
+// MarkRejected 记录一次鉴权失败（设备已建档但 Digest 不通过）。
+//
+// 只写 register_status，不改 online/offline：设备可能仍在发心跳，
+// 直接判离线会与心跳逻辑打架；register_status=rejected 已足以让管理员看见问题。
+func (m *Manager) MarkRejected(ctx context.Context, dev *model.Device) error {
+	if dev == nil {
+		return nil
+	}
+	if err := m.store.UpdateDevice(ctx, dev.ID, map[string]interface{}{
+		"register_status": model.GbRegisterStatusRejected,
+	}); err != nil {
+		return err
+	}
+	dev.RegisterStatus = model.GbRegisterStatusRejected
+	return nil
+}
+
+// OnKeepalive 处理心跳：刷新 last_beat_dt 与在线状态。
+//
+// 心跳不延长 sip_expires —— 注册有效期只由 REGISTER 决定（设计 §4.2）。
+func (m *Manager) OnKeepalive(ctx context.Context, dev *model.Device, remote, transport string) error {
+	if dev == nil {
+		return nil
+	}
+	now := m.now()
+	fields := map[string]interface{}{
+		"last_beat_dt": now,
+		"status":       model.DeviceStatusOnline,
+	}
+	if dev.Status != model.DeviceStatusOnline {
+		fields["online_dt"] = now
+	}
+	if err := m.store.UpdateDevice(ctx, dev.ID, fields); err != nil {
+		return err
+	}
+	dev.Status = model.DeviceStatusOnline
+	dev.LastBeatDT = &now
+	m.SetEndpoint(dev.GbDeviceID, remote, transport)
+	return nil
+}
+
+// OnDeviceStatus 处理 DeviceStatus 查询响应。
+//
+// 只有设备明确给了 Online 取值时才改状态，避免把「响应缺字段」误判为离线。
+func (m *Manager) OnDeviceStatus(ctx context.Context, dev *model.Device, resp *manscdp.DeviceStatusResponse) error {
+	if dev == nil || resp == nil || resp.Online == "" {
+		return nil
+	}
+	now := m.now()
+	online := strings.EqualFold(resp.Online, "ONLINE")
+	fields := map[string]interface{}{"last_beat_dt": now}
+	if online {
+		fields["status"] = model.DeviceStatusOnline
+		if dev.Status != model.DeviceStatusOnline {
+			fields["online_dt"] = now
+		}
+	} else {
+		fields["status"] = model.DeviceStatusOffline
+		fields["offline_dt"] = now
+	}
+	if err := m.store.UpdateDevice(ctx, dev.ID, fields); err != nil {
+		return err
+	}
+	if online {
+		dev.Status = model.DeviceStatusOnline
+	} else {
+		dev.Status = model.DeviceStatusOffline
+	}
+	dev.LastBeatDT = &now
+	return nil
+}
+
+// OnCatalogResponse 接收一片目录响应；返回是否已收齐并落库。
+func (m *Manager) OnCatalogResponse(ctx context.Context, dev *model.Device, resp *manscdp.CatalogResponse) (bool, error) {
+	if dev == nil || resp == nil {
+		return false, nil
+	}
+	key := dev.GbDeviceID + "#" + strconv.Itoa(resp.SN)
+	now := m.now()
+
+	m.mu.Lock()
+	acc := m.catalogs[key]
+	if acc == nil {
+		acc = &catalogAccum{}
+		m.catalogs[key] = acc
+	}
+	if resp.SumNum > 0 {
+		acc.sum = resp.SumNum
+	}
+	acc.items = append(acc.items, resp.DeviceList.Items...)
+	acc.last = now
+
+	complete := false
+	switch {
+	case acc.sum > 0:
+		complete = len(acc.items) >= acc.sum
+	case resp.DeviceList.Num == 0 && len(resp.DeviceList.Items) == 0:
+		// 空目录也要落一次，否则 channel_count 会保留上一次的旧值。
+		complete = true
+	case resp.DeviceList.Num > 0:
+		complete = len(resp.DeviceList.Items) >= resp.DeviceList.Num
+	}
+	if !complete {
+		m.mu.Unlock()
+		return false, nil
+	}
+	items := acc.items
+	delete(m.catalogs, key)
+	m.mu.Unlock()
+
+	if err := m.persistCatalog(ctx, dev, items); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// persistCatalog 把收齐的目录项写入 ac_gb_channel，并回写 channel_count。
+func (m *Manager) persistCatalog(ctx context.Context, dev *model.Device, items []manscdp.CatalogItem) error {
+	now := m.now()
+	seen := make(map[string]struct{}, len(items))
+	saved := 0
+	skipped := 0
+
+	for _, item := range items {
+		id := strings.TrimSpace(item.DeviceID)
+		if id == "" {
+			skipped++
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+
+		// §4.4 第 3 条：目录项必须落在本设备的域前缀内，否则跳过并记日志，
+		// 不整体拒绝 —— 个别设备会混入上级平台/分组的编码，整体拒绝会丢整份目录。
+		if !m.acceptChannelID(dev, id) {
+			skipped++
+			m.log.Warn("目录项不在设备域前缀内，已跳过",
+				"gb_device_id", dev.GbDeviceID, "channel_id", id, "sn_source", "catalog")
+			continue
+		}
+
+		ch := &model.GbChannel{
+			DeviceID:     dev.ID,
+			DeviceCode:   dev.DeviceCode,
+			GbDeviceID:   dev.GbDeviceID,
+			GbChannelID:  id,
+			Name:         item.Name,
+			Manufacturer: item.Manufacturer,
+			Model:        item.Model,
+			Owner:        item.Owner,
+			CivilCode:    item.CivilCode,
+			Address:      item.Address,
+			Parental:     int64(item.Parental),
+			ParentID:     item.ParentID,
+			ChannelType:  int64(item.ChannelType),
+			PtzType:      int64(item.PTZType),
+			RegisterWay:  normalizeRegisterWay(item.RegisterWay),
+			Status:       normalizeChannelStatus(item.Status),
+			Longitude:    item.Longitude,
+			Latitude:     item.Latitude,
+			SyncDT:       &now,
+			DeptID:       dev.DeptID,
+		}
+		active := true
+		ch.Active = &active
+
+		// 设备上报只覆盖设备侧字段；用户在本平台改过的区域/分组/备注等必须保留，
+		// 否则每次目录同步都会把用户的整理工作清空。
+		if existing, err := m.store.FindChannel(ctx, id); err == nil && existing != nil {
+			ch.RegionID = existing.RegionID
+			ch.GroupID = existing.GroupID
+			ch.RecordPlanID = existing.RecordPlanID
+			ch.EnableBroadcast = existing.EnableBroadcast
+			ch.IsCustom = existing.IsCustom
+			ch.Remark = existing.Remark
+			if existing.Active != nil {
+				ch.Active = existing.Active
+			}
+		}
+
+		if err := m.store.UpsertChannel(ctx, ch); err != nil {
+			m.log.Error("写入目录通道失败", "channel_id", id, "error", err)
+			continue
+		}
+		saved++
+	}
+
+	count, err := m.store.CountChannels(ctx, dev.ID)
+	if err != nil {
+		return err
+	}
+	if err := m.store.UpdateDevice(ctx, dev.ID, map[string]interface{}{"channel_count": count}); err != nil {
+		return err
+	}
+	dev.ChannelCount = count
+
+	m.log.Info("目录同步完成",
+		"gb_device_id", dev.GbDeviceID, "items", len(items),
+		"saved", saved, "skipped", skipped, "channel_count", count)
+	return nil
+}
+
+// acceptChannelID 校验目录项归属。
+//
+// GB28181 的 20 位编码前 10 位是 SIP 域；同一设备的通道必须落在同一域下。
+// 设备编码本身可能是「设备」也可能是「通道」，两种都接受。
+func (m *Manager) acceptChannelID(dev *model.Device, channelID string) bool {
+	if len(channelID) != 20 {
+		return false
+	}
+	if channelID == dev.GbDeviceID {
+		return true
+	}
+	prefix := strings.TrimSpace(m.cfg.Domain)
+	if len(dev.GbDeviceID) >= 10 {
+		prefix = dev.GbDeviceID[:10]
+	}
+	if prefix == "" {
+		return true
+	}
+	return strings.HasPrefix(channelID, prefix)
+}
+
+// OnAlarm 处理设备主动上报的报警，落 ac_gb_alarm。
+func (m *Manager) OnAlarm(ctx context.Context, dev *model.Device, msg *manscdp.Alarm) error {
+	if dev == nil || msg == nil {
+		return nil
+	}
+	gbChannelID := strings.TrimSpace(msg.DeviceID)
+	var channelID *int64
+	if gbChannelID != "" && gbChannelID != dev.GbDeviceID {
+		if ch, err := m.store.FindChannel(ctx, gbChannelID); err == nil && ch != nil {
+			id := ch.ID
+			channelID = &id
+		}
+	}
+	method, _ := strconv.ParseInt(strings.TrimSpace(msg.AlarmMethod), 10, 64)
+	alarmTime := parseDeviceTime(msg.AlarmTime, m.now())
+	deviceID := dev.ID
+	alarm := &model.GbAlarm{
+		DeviceID:         &deviceID,
+		ChannelID:        channelID,
+		GbDeviceID:       dev.GbDeviceID,
+		GbChannelID:      gbChannelID,
+		AlarmPriority:    msg.AlarmPriority,
+		AlarmMethod:      method,
+		AlarmType:        msg.AlarmType,
+		AlarmTime:        &alarmTime,
+		AlarmDescription: msg.AlarmDescription,
+		Longitude:        msg.Longitude,
+		Latitude:         msg.Latitude,
+		DeptID:           dev.DeptID,
+	}
+	if err := m.store.CreateAlarm(ctx, alarm); err != nil {
+		return err
+	}
+	m.log.Info("收到国标报警", "gb_device_id", dev.GbDeviceID,
+		"channel_id", gbChannelID, "priority", msg.AlarmPriority, "type", msg.AlarmType)
+	return nil
+}
+
+// OnMobilePosition 处理移动位置上报，落 ac_gb_mobile_position。
+func (m *Manager) OnMobilePosition(ctx context.Context, dev *model.Device, msg *manscdp.MobilePosition) error {
+	if dev == nil || msg == nil {
+		return nil
+	}
+	gbChannelID := strings.TrimSpace(msg.DeviceID)
+	var channelID *int64
+	if gbChannelID != "" && gbChannelID != dev.GbDeviceID {
+		if ch, err := m.store.FindChannel(ctx, gbChannelID); err == nil && ch != nil {
+			id := ch.ID
+			channelID = &id
+		}
+	}
+	reportTime := parseDeviceTime(msg.Time, m.now())
+	deviceID := dev.ID
+	pos := &model.GbMobilePosition{
+		DeviceID:    &deviceID,
+		ChannelID:   channelID,
+		GbChannelID: gbChannelID,
+		ReportTime:  &reportTime,
+		Longitude:   msg.Longitude,
+		Latitude:    msg.Latitude,
+		Altitude:    msg.Altitude,
+		Speed:       msg.Speed,
+		Direction:   msg.Direction,
+		DeptID:      dev.DeptID,
+	}
+	return m.store.CreateMobilePosition(ctx, pos)
+}
+
+// LogSip 把一条信令日志投入异步队列。
+//
+// 设计约束：信令日志写入失败**不能影响主流程**。因此这里只做非阻塞投递，
+// 队列满时丢弃并累加计数（由调用方在退出前读 DroppedLogs 记录一条告警）。
+func (m *Manager) LogSip(entry model.GbSipLog) {
+	if entry.CreatedDT.IsZero() {
+		entry.CreatedDT = m.now()
+	}
+	if entry.Direction == "" {
+		entry.Direction = "in"
+	}
+	select {
+	case m.logCh <- entry:
+	default:
+		m.mu.Lock()
+		m.dropped++
+		m.mu.Unlock()
+	}
+}
+
+// DroppedLogs 返回因队列满被丢弃的日志条数。
+func (m *Manager) DroppedLogs() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.dropped
+}
+
+// ExpireOnce 执行一次过期扫描，返回置为离线的设备数。
+func (m *Manager) ExpireOnce(ctx context.Context) (int64, error) {
+	return m.store.MarkExpiredOffline(ctx, m.now())
+}
+
+// logWorker 串行写日志：单写者既避免并发写库压力，也保证日志顺序与报文顺序一致。
+func (m *Manager) logWorker(ctx context.Context) {
+	defer m.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			m.drainLogs()
+			return
+		case <-m.stopCh:
+			m.drainLogs()
+			return
+		case entry := <-m.logCh:
+			m.writeLog(entry)
+		}
+	}
+}
+
+// drainLogs 退出前尽量写完剩余日志，最多等 3 秒。
+func (m *Manager) drainLogs() {
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case entry := <-m.logCh:
+			m.writeLog(entry)
+		case <-deadline:
+			if n := m.DroppedLogs(); n > 0 {
+				m.log.Warn("信令日志队列有丢弃", "dropped", n)
+			}
+			return
+		default:
+			return
+		}
+	}
+}
+
+func (m *Manager) writeLog(entry model.GbSipLog) {
+	// 兜底 recover：这是后台协程，任何 panic 都会终止整个信令进程。
+	// 日志是排障手段，不能反过来成为故障源（设计要求「失败不能影响主流程」）。
+	defer func() {
+		if r := recover(); r != nil {
+			m.log.Error("写入信令日志时发生 panic，已忽略", "panic", r, "method", entry.Method)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := m.store.CreateSipLog(ctx, &entry); err != nil {
+		// 日志表写失败只告警，不重试、不影响信令。
+		m.log.Warn("写入 ac_gb_sip_log 失败", "error", err, "method", entry.Method, "call_id", entry.CallID)
+	}
+}
+
+// sweepLoop 周期执行过期扫描与半份目录清理。
+func (m *Manager) sweepLoop(ctx context.Context) {
+	defer m.wg.Done()
+	ticker := time.NewTicker(m.cfg.SweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			if n, err := m.ExpireOnce(ctx); err != nil {
+				m.log.Warn("注册过期扫描失败", "error", err)
+			} else if n > 0 {
+				m.log.Info("注册过期，设备置为离线", "count", n)
+			}
+			m.dropStaleCatalogs()
+		}
+	}
+}
+
+// dropStaleCatalogs 丢弃超时未收齐的目录分片，避免内存无限增长。
+func (m *Manager) dropStaleCatalogs() {
+	now := m.now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, acc := range m.catalogs {
+		if now.Sub(acc.last) > m.cfg.CatalogTimeout {
+			m.log.Warn("目录分片超时未收齐，已丢弃",
+				"key", key, "received", len(acc.items), "expected", acc.sum)
+			delete(m.catalogs, key)
+		}
+	}
+}
+
+// normalizeChannelStatus 把设备上报的通道状态统一成 ON/OFF。
+func normalizeChannelStatus(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "OFF", "OFFLINE", "0":
+		return model.GbStatusOff
+	default:
+		return model.GbStatusOn
+	}
+}
+
+// parseDeviceTime 解析设备时间；常见格式有带 T 与带空格两种，解析失败用兜底时间。
+func parseDeviceTime(s string, fallback time.Time) time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fallback
+	}
+	layouts := []string{
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05.000",
+		time.RFC3339,
+	}
+	for _, layout := range layouts {
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+			return t
+		}
+	}
+	return fallback
+}

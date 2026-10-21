@@ -2243,6 +2243,28 @@ SELECT 10, TRUE, 2, 'vad', 'silero', 'Silero VAD', '[{"key":"threshold","label":
 WHERE NOT EXISTS (SELECT 1 FROM ac_voice_provider WHERE category = 'vad' AND code = 'silero');
 
 
+-- ── 12.7b 默认流媒体节点（ac_gb_media_server）────────────────
+--     没有这一行时：ZLM 的 10 个 hook 全部因「找不到匹配 secret 的节点」被拒，
+--     表现为「ZLM 日志显示回调成功、平台侧却一条都没收到」——必须先有节点记录。
+--
+--     地址约定（本地开发形态：ZLM 在容器、backend 在宿主机）：
+--       ip         = 127.0.0.1  + http_port   = 8082  → backend 调 ZLM API
+--       stream_ip  = 127.0.0.1  + flv_port    = 8082  → 浏览器拉流
+--     compose full 形态下应改为 ip='zlm' + http_port=80（容器内网），
+--     或在后台「媒体节点」页面直接修改。
+--
+--     rtp_enable=FALSE 是**单端口模式**的标记（设计 §2.2）：
+--     不调 openRtpServer，设备统一向 rtp_proxy_port 打流。
+INSERT INTO ac_gb_media_server (id, active, name, server_id, type, ip, hook_ip, sdp_ip, stream_ip,
+    http_port, flv_port, ws_flv_port, secret, rtp_enable, rtp_proxy_port,
+    record_path, record_day, online, hook_alive_interval, default_server, auto_config,
+    remark, created_by, created_dt, updated_by, updated_dt)
+SELECT 1, TRUE, '本地 ZLMediaKit', 'ai-camera-zlm-01', 'zlm', '127.0.0.1', 'host.docker.internal', '127.0.0.1', '127.0.0.1',
+    8082, 8082, 8082, 'aicamera-zlm-dev-secret-0123456789', FALSE, 10000,
+    '/opt/media/bin/www/record', 7, FALSE, 15, TRUE, FALSE,
+    'seed 默认节点，与 deploy/zlm/config.ini 的 mediaServerId 对应', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_gb_media_server WHERE server_id = 'ai-camera-zlm-01');
+
 -- ── 12.8 重建 Casbin p 策略 + 序列对齐 ───────────────────────
 --     ac_menu_api 是 p 策略的唯一来源，新增接口必须重新派生，
 --     否则 super_admin 访问 /web/gb/* 会被 403 拒绝。
@@ -2254,3 +2276,4 @@ SELECT setval(pg_get_serial_sequence('ac_menu', 'id'),           COALESCE((SELEC
 SELECT setval(pg_get_serial_sequence('ac_menu_api', 'id'),       COALESCE((SELECT MAX(id) FROM ac_menu_api), 1));
 SELECT setval(pg_get_serial_sequence('ac_role_menu_rel', 'id'),  COALESCE((SELECT MAX(id) FROM ac_role_menu_rel), 1));
 SELECT setval(pg_get_serial_sequence('ac_voice_provider', 'id'), COALESCE((SELECT MAX(id) FROM ac_voice_provider), 1));
+SELECT setval(pg_get_serial_sequence('ac_gb_media_server', 'id'), COALESCE((SELECT MAX(id) FROM ac_gb_media_server), 1));
