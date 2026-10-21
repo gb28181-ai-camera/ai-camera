@@ -18,7 +18,8 @@ import { CloseCircleOutlined } from '@ant-design/icons'
  * 组件的职责边界：**只吃流地址参数，不调用任何后端接口**。播放地址由调用方
  * 从 `/web/gb/play`（或 v0.1.0 的 `device.stream_url`）拿到后传入。
  *
- * @example 单端口模式（§2.2）下 stream = `{gbDeviceId}_{gbChannelId}`
+ * @example 国标流名 = SSRC 的大写十六进制（如 `0BEBC201`），见设计 §2.2 与契约 §15.1。
+ *          `{deviceId}_{channelId}` 是 **WVP 的内部别名**，ZLM 不认识，不要用。
  * <LivePlayer httpBase="http://192.168.1.227:8080" app="rtp" stream="34020000001320000001_34020000001320000001" />
  *
  * @example 视频墙铺格子用 FLV
@@ -45,7 +46,7 @@ export interface LiveFirstFrameEvent {
 export interface LivePlayerProps {
   /** ZLM 应用名，单端口模式下恒为 `rtp`（§7.3），默认 `rtp` */
   app?: string
-  /** 流名；单端口模式为 `{gbDeviceId}_{gbChannelId}`（§2.2） */
+  /** 流名；国标场景为 SSRC 的大写十六进制（如 `0BEBC201`） */
   stream?: string
   /** 媒体服务对外地址根（ZLM 的 http 端口），如 `http://192.168.1.227:8080` */
   httpBase?: string

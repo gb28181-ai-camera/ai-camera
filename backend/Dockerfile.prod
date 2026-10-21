@@ -15,7 +15,11 @@ COPY . .
 ENV GOOS=linux
 ENV CGO_ENABLED=0
 ENV GOARCH=amd64
-RUN go build -ldflags="-w -s" -o /app/ai-camera-api ./cmd/server/main.go
+# 两个入口同一镜像：HTTP API 与 SIP 信令服务。
+# 生产默认建议单容器内嵌（GB28181_EMBEDDED=true），
+# 独立 sipsvc 只有在实现了跨进程命令通道后才有意义（见部署文档 §9.6）。
+RUN go build -ldflags="-w -s" -o /app/ai-camera-api ./cmd/server/main.go && \
+    go build -ldflags="-w -s" -o /app/ai-camera-sipsvc ./cmd/sipsvc/main.go
 
 # ── 运行阶段 ──
 FROM alpine:latest
@@ -28,7 +32,9 @@ ENV TZ=Asia/Shanghai
 WORKDIR /
 
 COPY --from=builder /app/ai-camera-api .
+COPY --from=builder /app/ai-camera-sipsvc .
 
-EXPOSE 8080
+# 8080 HTTP API；5060 SIP（内嵌模式下由同一进程监听）
+EXPOSE 8080 5060/udp 5060/tcp
 
 ENTRYPOINT ["/ai-camera-api"]

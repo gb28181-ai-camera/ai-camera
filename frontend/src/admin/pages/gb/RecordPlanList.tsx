@@ -456,12 +456,12 @@ const RecordPlanList: React.FC = () => {
               >
                 {(fields, { add, remove }, { errors }) => (
                   <>
-                    {fields.map((field) => (
-                      <Row gutter={8} key={field.key} align="middle" style={{ marginBottom: 8 }}>
+                    {fields.map(({ key: fieldKey, ...restField }) => (
+                      <Row gutter={8} key={fieldKey} align="middle" style={{ marginBottom: 8 }}>
                         <Col span={5}>
                           <Form.Item
-                            {...field}
-                            name={[field.name, 'week_day']}
+                            {...restField}
+                            name={[restField.name, 'week_day']}
                             rules={[{ required: true, message: '请选择星期' }]}
                             style={{ marginBottom: 0 }}
                           >
@@ -473,8 +473,8 @@ const RecordPlanList: React.FC = () => {
                         </Col>
                         <Col span={7}>
                           <Form.Item
-                            {...field}
-                            name={[field.name, 'start_time']}
+                            {...restField}
+                            name={[restField.name, 'start_time']}
                             rules={[{ required: true, message: '请选择开始时间' }]}
                             style={{ marginBottom: 0 }}
                           >
@@ -483,8 +483,8 @@ const RecordPlanList: React.FC = () => {
                         </Col>
                         <Col span={7}>
                           <Form.Item
-                            {...field}
-                            name={[field.name, 'end_time']}
+                            {...restField}
+                            name={[restField.name, 'end_time']}
                             rules={[{ required: true, message: '请选择结束时间' }]}
                             style={{ marginBottom: 0 }}
                           >
@@ -496,7 +496,7 @@ const RecordPlanList: React.FC = () => {
                             type="text"
                             danger
                             icon={<MinusCircleOutlined />}
-                            onClick={() => remove(field.name)}
+                            onClick={() => remove(restField.name)}
                           >
                             删除
                           </Button>

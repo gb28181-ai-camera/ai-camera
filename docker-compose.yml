@@ -20,9 +20,11 @@
 #   8080  前端入口(nginx)   8081  后端 API（仅 profile full）
 #   5060  SIP(UDP/TCP，v0.2.0)     30000-30500/udp  RTP(v0.2.0)
 #
-# GB28181（profile: gb28181）：zlm + sipsvc。ZLM 用单端口收流（只发布 10000），
-# 因此**不需要** 30000-30500 端口段。设计与实测见
-# docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md §2.2
+# GB28181（profile: gb28181）：只额外起 ZLM。SIP 信令（sipsvc）**内嵌在 backend
+# 进程内**（GB28181_EMBEDDED=true），因为 HTTP 触发的播放/云台/回放要用进程内的
+# SIP 会话状态；分进程形态见 sipsvc 服务的注释。
+# ZLM 用单端口收流（只发布 10000），因此**不需要** 30000-30500 端口段。
+# 设计与实测见 docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md §2.2
 # ============================================================================
 
 name: ai-camera
@@ -109,8 +111,27 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:-aicamera_redis}
       JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET，参考 .env.example}
+      # ── GB28181 信令（默认内嵌在 backend 进程内）──
+      # ★ 为什么默认内嵌：HTTP 接口触发的播放/云台/回放要靠 control.Default()
+      #   调用 SIP 会话状态，而那是**进程内**对象。分容器部署时 API 进程里
+      #   没有 SIP 服务，这些接口会稳定返回 503。跨进程命令通道（Redis RPC）
+      #   尚未实现，因此一期默认内嵌 —— 单节点形态下这也是最简单正确的部署。
+      GB28181_ENABLED: ${GB28181_ENABLED:-true}
+      GB28181_EMBEDDED: ${GB28181_EMBEDDED:-true}
+      GB28181_SIP_LISTEN_IP: 0.0.0.0
+      GB28181_SIP_PORT: "5060"
+      GB28181_SIP_ADVERTISE_IP: ${SIP_ADVERTISE_IP:-127.0.0.1}
+      GB28181_SIP_DOMAIN: ${SIP_DOMAIN:-3402000000}
+      GB28181_SIP_SERVER_ID: ${SIP_PLATFORM_ID:-34020000002000000001}
+      GB28181_SIP_NONCE_SECRET: ${SIP_NONCE_SECRET:-}
+      GB28181_MEDIA_PUBLIC_IP: ${SIP_ADVERTISE_IP:-127.0.0.1}
+      GB28181_MEDIA_RTP_PROXY_PORT: "${ZLM_RTP_PORT:-10000}"
     ports:
       - "${BACKEND_PORT:-8081}:8080"
+      # SIP 端口随 backend 一起暴露（内嵌模式）。若改用独立 sipsvc，
+      # 必须把这两行移到 sipsvc 服务并设置 GB28181_EMBEDDED=false。
+      - "${SIP_PORT:-5060}:5060/udp"
+      - "${SIP_PORT:-5060}:5060/tcp"
     volumes:
       - ./backend/config/config.compose.yaml:/app/config/config.yaml:ro
       - uploads:/app/uploads
@@ -174,8 +195,13 @@ services:
   # GB28181 信令服务 —— 与 backend 同属一个工程、同一个镜像（backend/Dockerfile
   # 产出两个入口）。一期固定 1 副本：TCP 连接与 SIP 事务/会话状态是节点本地的，
   # 且设备注册后绑定 server_id，跨节点命令路由一期不做。
+  # ⚠️ 独立信令服务：**当前不推荐使用**。
+  # HTTP 接口（播放/云台/回放）依赖进程内的 SIP 会话状态；分进程部署时
+  # `control.Default()` 在 API 进程中为 nil，这些接口会稳定 503。
+  # 跨进程命令通道（Redis RPC）尚未实现，因此本服务只在做协议层压测/
+  # 独立调试时启用（profile: sipsvc-standalone），生产请用 backend 内嵌模式。
   sipsvc:
-    profiles: [gb28181]
+    profiles: [sipsvc-standalone]
     image: ai-camera-backend:latest   # 复用 backend 的镜像，不单独构建
     command: ["/app/ai-camera-sipsvc"]
     container_name: ai-camera-sipsvc
@@ -184,9 +210,11 @@ services:
       # 只等基础设施：镜像由 backend 构建，但不必等它启动
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
-    ports:
-      - "${SIP_PORT:-5060}:5060/udp"
-      - "${SIP_PORT:-5060}:5060/tcp"
+    # 若启用本服务，必须同时：① 把 backend 的 GB28181_EMBEDDED 设为 false；
+    # ② 把下面两行端口从 backend 服务移到这里（否则 5060 冲突）。
+    # ports:
+    #   - "${SIP_PORT:-5060}:5060/udp"
+    #   - "${SIP_PORT:-5060}:5060/tcp"
     environment:
       TZ: Asia/Shanghai
       CONFIG_PATH: config/config.yaml

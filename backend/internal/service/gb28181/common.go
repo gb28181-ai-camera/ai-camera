@@ -194,11 +194,14 @@ func generateGbDeviceID(ctx context.Context, cfg gbSipConfig) (string, error) {
 	prefix := cfg.Domain + gbDeviceTypeCode
 
 	var maxSeq int64
+	// ★ 这里**不能**过滤 deleted_at：国标编码是设备的 SIP 身份，
+	// 一旦分配给某台设备就应视为永久占用。若只看未删除行，删掉设备后
+	// 新设备会拿到同一个 20 位编码（实测连续 5 台测试设备全部得到
+	// 34020000001320000001），旧设备的残留注册/会话/信令日志可能串到新设备。
 	err := db.WithContext(ctx).Raw(`
 		SELECT COALESCE(MAX(CAST(SUBSTRING(gb_device_id FROM 14 FOR 7) AS BIGINT)), 0)
 		FROM ac_device
-		WHERE deleted_at IS NULL
-		  AND gb_device_id LIKE ?
+		WHERE gb_device_id LIKE ?
 		  AND char_length(gb_device_id) = 20`, prefix+"%").Scan(&maxSeq).Error
 	if err != nil {
 		return "", fmt.Errorf("查询国标编码最大序号失败: %w", err)
@@ -248,7 +251,8 @@ func nextFromSequence(ctx context.Context, codes []string) (int64, bool) {
 // deviceGbIDExists 判断国标编码是否已被占用。
 func deviceGbIDExists(ctx context.Context, gbDeviceID string) (bool, error) {
 	var cnt int64
-	err := bootstrap.DB().WithContext(ctx).Model(&model.Device{}).
+	// 同样必须 Unscoped：软删除设备的国标编码仍算「已占用」。
+	err := bootstrap.DB().WithContext(ctx).Unscoped().Model(&model.Device{}).
 		Where("gb_device_id = ?", gbDeviceID).Count(&cnt).Error
 	if err != nil {
 		return false, err

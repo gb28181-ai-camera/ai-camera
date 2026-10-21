@@ -579,3 +579,34 @@ func TestGbDeviceDeleteCascadesChannels(t *testing.T) {
 
 // boolValue 解引用布尔指针。
 func boolValue(p *bool) bool { return p != nil && *p }
+
+// TestGbDeviceIDNotReusedAfterSoftDelete 国标编码是设备的 SIP 身份，删除后不得回收。
+//
+// 回归来源：MAX 查询与占用检查都带 GORM 软删除作用域，导致连续创建的测试设备
+// 在删除后拿到同一个 34020000001320000001。旧设备的残留注册/会话/信令日志
+// 会因此串到新设备上 —— 这类问题在真机上表现为「新设备一直用旧设备的会话」。
+func TestGbDeviceIDNotReusedAfterSoftDelete(t *testing.T) {
+	testutil.WithTx(t, func(ctx context.Context, tx *gorm.DB) {
+		svc := gbsvc.NewGbDeviceService()
+
+		first := createDevice(t, ctx, "CAM_REUSE_001", "复用测试A", "")
+		ra, err := svc.GenerateActivation(ctx, first.ID)
+		if err != nil {
+			t.Fatalf("第一次生成激活凭证失败: %v", err)
+		}
+
+		// 软删除第一台设备
+		if err := svc.Delete(ctx, first.ID); err != nil {
+			t.Fatalf("删除设备失败: %v", err)
+		}
+
+		second := createDevice(t, ctx, "CAM_REUSE_002", "复用测试B", "")
+		rb, err := svc.GenerateActivation(ctx, second.ID)
+		if err != nil {
+			t.Fatalf("第二次生成激活凭证失败: %v", err)
+		}
+		if rb.GbDeviceID == ra.GbDeviceID {
+			t.Fatalf("软删除后国标编码被复用: %q", rb.GbDeviceID)
+		}
+	})
+}

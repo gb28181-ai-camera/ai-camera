@@ -1,17 +1,21 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
   Table, Button, Modal, Form, Input, InputNumber, Select, Switch, Space, Row, Col,
-  message, Popconfirm, Tag,
+  message, Popconfirm, Tag, Descriptions, Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import {
+  PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ThunderboltOutlined, QrcodeOutlined,
+} from '@ant-design/icons'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
 import RegionSelect from '../../components/RegionSelect'
 import StatusTag from '../../components/StatusTag'
 import { DeviceController } from '../../api/generated/DeviceController'
+import { GbDeviceController } from '../../api/generated/GbDeviceController'
 import type { Device } from '../../api/generated/definitions/Device'
+import type { GbActivationResp } from '../../api/generated/definitions/GbActivationResp'
 import type { CreateDeviceReq } from '../../api/generated/definitions/CreateDeviceReq'
 import type { OptionItem } from '../../api/generated/definitions/OptionItem'
 import { useAuthStore } from '../../store/authStore'
@@ -75,6 +79,45 @@ const DeviceList: React.FC = () => {
   const [modeTarget, setModeTarget] = useState<Device | null>(null)
   const [modeSaving, setModeSaving] = useState(false)
   const [modeForm] = Form.useForm<SwitchModeFormValues>()
+
+  // 国标接入（激活凭证）。
+  //
+  // 这里是「国标接入」的唯一入口：国标设备列表只返回 gb_device_id 非空的设备，
+  // 而 gb_device_id 只能由 generateActivation 生成 —— 若入口也放在那个列表里，
+  // 就是鸡生蛋问题（新设备永远不出现在列表、也就永远没法激活）。
+  // 所以入口必须挂在**普通设备管理**的每一台上，见下方操作列。
+  const canGbActivation = permCodes.includes('gb:device:activation')
+  const [gbActivationOpen, setGbActivationOpen] = useState(false)
+  const [gbActivationLoading, setGbActivationLoading] = useState(false)
+  const [gbActivationDevice, setGbActivationDevice] = useState<Device | null>(null)
+  const [gbActivation, setGbActivation] = useState<GbActivationResp | null>(null)
+
+  const openGbActivation = async (row: Device) => {
+    if (!row.id) {
+      message.error('设备 ID 缺失，无法生成激活凭证')
+      return
+    }
+    setGbActivationDevice(row)
+    setGbActivationOpen(true)
+    setGbActivationLoading(true)
+    setGbActivation(null)
+    try {
+      const res = await GbDeviceController.generateGbActivation(row.id)
+      // 项目的成功码是 200（pkg/utils/response.go 的 Success），不是 0。
+      if (res.data) {
+        setGbActivation(res.data)
+        void fetchData()
+      } else {
+        message.error(res.message || '生成激活凭证失败')
+        setGbActivationOpen(false)
+      }
+    } catch {
+      /* 拦截器已提示 */
+      setGbActivationOpen(false)
+    } finally {
+      setGbActivationLoading(false)
+    }
+  }
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -325,6 +368,17 @@ const DeviceList: React.FC = () => {
               切换模式
             </Button>
           )}
+          {/* 未接入国标的设备才显示。已接入的从「国标视频 → 国标设备」进入。 */}
+          {canGbActivation && !row.gb_device_id && (
+            <Button
+              type="link"
+              size="small"
+              icon={<QrcodeOutlined />}
+              onClick={() => void openGbActivation(row)}
+            >
+              国标接入
+            </Button>
+          )}
           {canDelete && (
             <Popconfirm title="确定删除?" onConfirm={() => handleDelete(row)}>
               <Button type="link" size="small" danger icon={<DeleteOutlined />}>
@@ -518,6 +572,45 @@ const DeviceList: React.FC = () => {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 国标接入凭证：生成后设备才会出现在「国标视频 → 国标设备」 */}
+      <Modal
+        className="e2e-gb-device-activation-modal"
+        title={`国标接入凭证${gbActivationDevice?.name ? ` - ${gbActivationDevice.name}` : ''}`}
+        open={gbActivationOpen}
+        loading={gbActivationLoading}
+        onCancel={() => setGbActivationOpen(false)}
+        footer={<Button onClick={() => setGbActivationOpen(false)}>关闭</Button>}
+        width={680}
+        destroyOnHidden
+      >
+        {gbActivation ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions
+              bordered
+              size="small"
+              column={1}
+              items={[
+                { key: 'gb_id', label: '国标编码', children: <Typography.Text copyable>{gbActivation.gb_device_id}</Typography.Text> },
+                { key: 'sip_password', label: 'SIP 密码', children: <Typography.Text copyable>{gbActivation.sip_password}</Typography.Text> },
+                { key: 'sip_domain', label: 'SIP 域名', children: gbActivation.sip_domain || '-' },
+                { key: 'sip_server', label: '服务器地址', children: gbActivation.sip_server || '-' },
+                { key: 'sip_port', label: 'SIP 端口', children: gbActivation.sip_port ?? '-' },
+                { key: 'transport', label: '传输协议', children: gbActivation.transport || '-' },
+              ]}
+            />
+            <div>
+              <div style={{ marginBottom: 8, fontWeight: 500 }}>二维码内容</div>
+              <Typography.Paragraph
+                copyable={{ text: gbActivation.qr_content }}
+                style={{ marginBottom: 0, fontFamily: 'monospace', wordBreak: 'break-all' }}
+              >
+                {gbActivation.qr_content || '-'}
+              </Typography.Paragraph>
+            </div>
+          </Space>
+        ) : null}
       </Modal>
     </PageContainer>
   )

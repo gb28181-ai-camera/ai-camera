@@ -324,6 +324,9 @@ type GbAlarmItem struct {
 	Remark           string     `json:"remark"`
 	CreatedDT        time.Time  `json:"created_dt"`
 	UpdatedDT        time.Time  `json:"updated_dt"`
+	// UpdatedBy 是处理人。没有独立的 handler 列，复用 BaseModel.UpdatedBy：
+	// 处理动作会写 updated_by，比新增一列更符合现有审计约定。
+	UpdatedBy string `json:"updated_by"`
 }
 
 // PageGbAlarmResp 国标报警分页载荷。

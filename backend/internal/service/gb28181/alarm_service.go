@@ -98,6 +98,7 @@ func toGbAlarmItem(m model.GbAlarm) response.GbAlarmItem {
 		Remark:           m.Remark,
 		CreatedDT:        m.CreatedDT,
 		UpdatedDT:        m.UpdatedDT,
+		UpdatedBy:        m.UpdatedBy,
 	}
 }
 
