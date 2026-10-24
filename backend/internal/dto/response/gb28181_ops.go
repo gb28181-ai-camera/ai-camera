@@ -96,23 +96,27 @@ type RGbPlayback struct {
 // 不是下载任务），因此本批次的任务表只存在于进程内存，详见
 // playback_service.go 的注释。
 type GbDownloadItem struct {
-	ID          int64      `json:"id"`
-	ChannelID   int64      `json:"channel_id"`
-	ChannelName string     `json:"channel_name"`
-	DeviceID    int64      `json:"device_id"`
-	DeviceName  string     `json:"device_name"`
-	StreamID    string     `json:"stream_id"`
-	App         string     `json:"app"`
-	Stream      string     `json:"stream"`
-	SSRC        string     `json:"ssrc"`
-	StartTime   string     `json:"start_time"`
-	EndTime     string     `json:"end_time"`
-	Status      string     `json:"status" example:"downloading"`
-	Progress    float64    `json:"progress"`
-	FilePath    string     `json:"file_path"`
-	Message     string     `json:"message"`
-	CreatedDT   time.Time  `json:"created_dt"`
-	StoppedDT   *time.Time `json:"stopped_dt"`
+	ID          int64  `json:"id"`
+	ChannelID   int64  `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
+	DeviceID    int64  `json:"device_id"`
+	DeviceName  string `json:"device_name"`
+	StreamID    string `json:"stream_id"`
+	App         string `json:"app"`
+	Stream      string `json:"stream"`
+	SSRC        string `json:"ssrc"`
+	StartTime   string `json:"start_time"`
+	EndTime     string `json:"end_time"`
+	Status      string `json:"status" example:"downloading"`
+	// Progress 为 nil 表示「进度未知」：ZLM 没有暴露录制中文件的实时字节数，
+	// 当既没有已落盘片段、又查不到在线流时，返回 null 比返回 0 更诚实。
+	Progress *float64 `json:"progress" example:"42.5"`
+	// FileSize 是已落盘片段的大小合计（来自 on_record_mp4 的真实值）。
+	FileSize  int64      `json:"file_size"`
+	FilePath  string     `json:"file_path"`
+	Message   string     `json:"message"`
+	CreatedDT time.Time  `json:"created_dt"`
+	StoppedDT *time.Time `json:"stopped_dt"`
 }
 
 // PageGbDownloadResp 下载任务分页载荷。
@@ -215,8 +219,8 @@ type RGbCloudRecordPlay struct {
 
 // GbCloudRecordDownloadResp 云端录像下载地址。
 //
-// Packaging 恒为 false：本批次只做单文件直接下载（设计 §14.5 选项 A），
-// 合并/切片/打包需要独立 Assist 服务，未实现时不得在响应里假装支持。
+// 这是「单文件」分支的响应（packaging=false）。多选录像由服务端直接
+// 返回 zip 流，不经过这个结构体。
 type GbCloudRecordDownloadResp struct {
 	ID          int64  `json:"id"`
 	URL         string `json:"url"`
@@ -596,6 +600,10 @@ type VoiceAgentConfigResp struct {
 
 	PipecatEndpoint string `json:"pipecat_endpoint"`
 	PipecatToken    string `json:"pipecat_token" example:"****"`
+
+	// ExtraParams 扩展参数：provider param_schema 中没有固定键的项。
+	// 键为原始参数名（已去掉落库时的 param_ 前缀），敏感键按 **** 脱敏。
+	ExtraParams map[string]string `json:"extra_params,omitempty"`
 }
 
 // RVoiceAgentConfig 语音 Agent 配置响应。

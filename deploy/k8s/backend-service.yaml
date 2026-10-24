@@ -1,0 +1,56 @@
+# 后端 Service 分两个：
+#
+#   ai-camera-backend  ClusterIP  —— 集群内 HTTP（/web、/app、/metrics、/media/hook）。
+#                                     ZLM 的 hook 也走这个地址。
+#   ai-camera-sip      LoadBalancer —— 设备可达的 SIP 5060/udp+tcp。
+#
+# ★ 为什么 SIP 要单独一个 Service：
+#   SIP 是长事务/UDP 会话，必须保留设备真实源 IP；HTTP 不需要。把两者拆开
+#   才能对 SIP 单独设置 externalTrafficPolicy: Local，并把 GB28181_SIP_ADVERTISE_IP
+#   指向这个 LB 的地址。
+#
+# ★ 没有 LoadBalancer 实现时：
+#   把 ai-camera-sip 改成 NodePort，并把 GB28181_SIP_ADVERTISE_IP 设为节点公网 IP。
+#   只做 ClusterIP 的话设备永远注册不上。
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-camera-backend
+  labels:
+    app.kubernetes.io/name: ai-camera-backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ai-camera-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-camera-sip
+  labels:
+    app.kubernetes.io/name: ai-camera-backend
+    app.kubernetes.io/component: sip
+  annotations:
+    # 如云厂商支持指定 LB IP，在这里填与 configmap 的 SIP_ADVERTISE_IP 相同的地址。
+    # service.beta.kubernetes.io/load-balancer-ip: "203.0.113.10"
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+spec:
+  type: LoadBalancer
+  # 必须 Local：SIP 注册/心跳依赖真实源 IP；Cluster 模式会做 SNAT，
+  # 平台侧所有设备看起来都来自同一个节点 IP，排障与 NAT 诊断都会失真。
+  externalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: ai-camera-backend
+  ports:
+    - name: sip-udp
+      port: 5060
+      targetPort: sip-udp
+      protocol: UDP
+    - name: sip-tcp
+      port: 5060
+      targetPort: sip-tcp
+      protocol: TCP

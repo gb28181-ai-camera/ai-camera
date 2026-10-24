@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/metrics"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
 	"github.com/gin-gonic/gin"
@@ -106,6 +107,7 @@ type keepalivePayload struct {
 
 // OnServerKeepalive 节点心跳。
 func (h *Handler) OnServerKeepalive(c *gin.Context) {
+	metrics.IncHookCallback("server_keepalive")
 	if !h.authorize(c) {
 		return
 	}
@@ -132,6 +134,7 @@ func (h *Handler) OnServerKeepalive(c *gin.Context) {
 // on_server_started 的负载是 ZLM 的完整配置表（扁平 key），
 // 不强行映射成结构体，避免 ZLM 版本升级时因新增字段解析失败。
 func (h *Handler) OnServerStarted(c *gin.Context) {
+	metrics.IncHookCallback("server_started")
 	if !h.authorize(c) {
 		return
 	}
@@ -163,6 +166,7 @@ func (h *Handler) OnServerStarted(c *gin.Context) {
 // 拒绝时必须返回 code=-1（HTTP 仍为 200），ZLM 才会真正断开推流。
 // Sink 返回 error 时按拒绝处理（fail-closed），避免鉴权逻辑异常时放行。
 func (h *Handler) OnPublish(c *gin.Context) {
+	metrics.IncHookCallback("publish")
 	if !h.authorize(c) {
 		return
 	}
@@ -191,6 +195,7 @@ func (h *Handler) OnPublish(c *gin.Context) {
 
 // OnPlay 播放鉴权。
 func (h *Handler) OnPlay(c *gin.Context) {
+	metrics.IncHookCallback("play")
 	if !h.authorize(c) {
 		return
 	}
@@ -219,12 +224,20 @@ func (h *Handler) OnPlay(c *gin.Context) {
 
 // OnStreamChanged 流注册/注销。
 func (h *Handler) OnStreamChanged(c *gin.Context) {
+	metrics.IncHookCallback("stream_changed")
 	if !h.authorize(c) {
 		return
 	}
 	var event StreamChangedEvent
 	if !bindJSON(c, &event) {
 		return
+	}
+	// 活跃流计数：以 ZLM 的 regist 为准。ZLM 重启后计数会归零偏差，
+	// 因此 metrics 包的加法做了非负钳制；真正的权威来源仍是 ZLM getMediaList。
+	if event.Regist {
+		metrics.AddActiveStreams(1)
+	} else {
+		metrics.AddActiveStreams(-1)
 	}
 	if err := h.sink.OnStreamChanged(c.Request.Context(), &event); err != nil {
 		utils.Warn("[ZLM-HOOK] 处理流变化失败", zap.Error(err))
@@ -236,6 +249,7 @@ func (h *Handler) OnStreamChanged(c *gin.Context) {
 
 // OnStreamNoneReader 流无人观看。本期固定 close=false。
 func (h *Handler) OnStreamNoneReader(c *gin.Context) {
+	metrics.IncHookCallback("stream_none_reader")
 	if !h.authorize(c) {
 		return
 	}
@@ -253,6 +267,7 @@ func (h *Handler) OnStreamNoneReader(c *gin.Context) {
 
 // OnStreamNotFound 流未找到。
 func (h *Handler) OnStreamNotFound(c *gin.Context) {
+	metrics.IncHookCallback("stream_not_found")
 	if !h.authorize(c) {
 		return
 	}
@@ -270,6 +285,7 @@ func (h *Handler) OnStreamNotFound(c *gin.Context) {
 
 // OnSendRTPStopped RTP 发送被动结束。
 func (h *Handler) OnSendRTPStopped(c *gin.Context) {
+	metrics.IncHookCallback("send_rtp_stopped")
 	if !h.authorize(c) {
 		return
 	}
@@ -299,6 +315,7 @@ type rtpServerTimeoutPayload struct {
 // 该回调只发生在 RTP server 语境下，app 恒为 rtp（与 WVP 的处理一致），
 // 因此在转换事件时补齐 App，便于下游按统一键清理活跃流。
 func (h *Handler) OnRTPServerTimeout(c *gin.Context) {
+	metrics.IncHookCallback("rtp_server_timeout")
 	if !h.authorize(c) {
 		return
 	}
@@ -326,6 +343,7 @@ func (h *Handler) OnRTPServerTimeout(c *gin.Context) {
 
 // OnRecordMP4 录像落盘完成。
 func (h *Handler) OnRecordMP4(c *gin.Context) {
+	metrics.IncHookCallback("record_mp4")
 	if !h.authorize(c) {
 		return
 	}

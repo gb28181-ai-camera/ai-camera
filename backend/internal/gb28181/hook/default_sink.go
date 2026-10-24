@@ -2,13 +2,19 @@ package hook
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/play"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/record"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // MediaServerStore 抽象「更新媒体节点在线状态」，便于单测注入。
@@ -251,22 +257,153 @@ func (s *DefaultSink) OnRTPServerTimeout(_ context.Context, event *StreamEvent) 
 	return nil
 }
 
-// OnRecordMP4 处理录像落盘完成。
+// OnRecordMP4 处理录像落盘完成：把 MP4 索引写入 ac_gb_cloud_record。
 //
-// 这里才是写 ac_gb_cloud_record 的正确时机（文件已完整落盘）。
-// 但本期缺少 (app,stream) → (device_id,channel_id) 的映射（SSRC 注册表在 Wave 2 落地），
-// 强行写索引会得到一堆无归属的记录，因此只记录日志并留下 TODO。
-func (s *DefaultSink) OnRecordMP4(_ context.Context, event *RecordMP4Event) error {
-	if event == nil {
+// 为什么在这里写而不是 on_stream_changed：on_stream_changed 只代表流注册/注销，
+// 此时文件可能还是 0 字节；on_record_mp4 是 ZLM 明确告知「一个 MP4 已关闭并
+// 落盘完成」的时机，file_size/time_len 可信。
+//
+// 归属解析分两步：
+//  1. record.ResolveStreamOwner：调度器/下载任务在发起 INVITE 时登记的
+//     stream → 设备/通道映射；
+//  2. play.DefaultRegistry：用户手动实时点播产生的流（它不是调度器发起的，
+//     但同样可能被录制）。
+//
+// 两步都找不到归属时仍然写索引（device_id/channel_id 为空）：录像文件本身
+// 是真实存在的，丢弃会让「云端录像」列表漏掉拉流代理等来源的录像。
+func (s *DefaultSink) OnRecordMP4(ctx context.Context, event *RecordMP4Event) error {
+	if event == nil || strings.TrimSpace(event.Stream) == "" {
 		return nil
 	}
-	utils.Info("[ZLM-HOOK] 录像落盘完成",
-		zap.String("mediaServerId", event.MediaServerID),
-		zap.String("app", event.App),
-		zap.String("stream", event.Stream),
-		zap.String("file_path", event.FilePath),
-		zap.Int64("file_size", event.FileSize),
-		zap.Float64("time_len", event.TimeLen))
-	// TODO(Wave 2): 按 SSRC 注册表反查 device/channel，写入 ac_gb_cloud_record。
-	return nil
+	db := bootstrap.DB()
+	if db == nil {
+		utils.Warn("[ZLM-HOOK] 数据库未初始化，跳过录像索引落库")
+		return nil
+	}
+
+	owner, ok := record.ResolveStreamOwner(event.Stream)
+	if !ok {
+		if st, found := play.DefaultRegistry().GetByStream(event.Stream); found {
+			owner = record.StreamOwner{
+				App:           st.App,
+				Stream:        st.Stream,
+				MediaServerID: st.MediaServerID,
+				DeviceID:      st.DeviceID,
+				ChannelID:     st.ChannelID,
+			}
+			ok = true
+		}
+	}
+
+	app := strings.TrimSpace(event.App)
+	if app == "" {
+		app = "record"
+	}
+	fileName := strings.TrimSpace(event.FileName)
+	if fileName == "" && event.FilePath != "" {
+		fileName = filepath.Base(strings.ReplaceAll(event.FilePath, "\\", "/"))
+	}
+
+	startAt := time.Now()
+	if event.StartTime > 0 {
+		startAt = time.Unix(event.StartTime, 0)
+	}
+	timeLen := int64(event.TimeLen + 0.5)
+	if timeLen < 0 {
+		timeLen = 0
+	}
+	endAt := startAt.Add(time.Duration(timeLen) * time.Second)
+	if timeLen == 0 {
+		endAt = time.Now()
+	}
+
+	// 幂等键：同一节点 + app + 流名 + 文件名。ZLM 对同一文件的回调可能重发，
+	// 用主键去重比「先删后插」安全（不会把收藏/备注一起删掉）。
+	q := db.WithContext(ctx).Model(&model.GbCloudRecord{}).
+		Where("stream = ? AND file_name = ?", event.Stream, fileName)
+	if event.MediaServerID != "" {
+		q = q.Where("media_server_id = ?", event.MediaServerID)
+	}
+	if event.App != "" {
+		q = q.Where("app = ?", event.App)
+	}
+
+	var existing model.GbCloudRecord
+	findErr := q.First(&existing).Error
+	updates := map[string]any{
+		"app":             app,
+		"stream":          event.Stream,
+		"media_server_id": event.MediaServerID,
+		"file_name":       fileName,
+		"folder":          event.Folder,
+		"file_path":       event.FilePath,
+		"file_size":       event.FileSize,
+		"time_len":        timeLen,
+		"start_time":      startAt,
+		"end_time":        endAt,
+		"updated_dt":      time.Now(),
+	}
+	if ok {
+		// 只有原记录没有归属时才补写，避免覆盖更精确的人工归属。
+		if existing.DeviceID == nil && owner.DeviceID > 0 {
+			updates["device_id"] = owner.DeviceID
+		}
+		if existing.ChannelID == nil && owner.ChannelID > 0 {
+			updates["channel_id"] = owner.ChannelID
+		}
+	}
+
+	switch {
+	case errors.Is(findErr, gorm.ErrRecordNotFound):
+		rec := model.GbCloudRecord{
+			App:           app,
+			Stream:        event.Stream,
+			MediaServerID: event.MediaServerID,
+			FileName:      fileName,
+			Folder:        event.Folder,
+			FilePath:      event.FilePath,
+			FileSize:      event.FileSize,
+			TimeLen:       timeLen,
+			StartTime:     &startAt,
+			EndTime:       &endAt,
+		}
+		if ok {
+			if owner.DeviceID > 0 {
+				v := owner.DeviceID
+				rec.DeviceID = &v
+			}
+			if owner.ChannelID > 0 {
+				v := owner.ChannelID
+				rec.ChannelID = &v
+			}
+		}
+		if err := db.WithContext(ctx).Create(&rec).Error; err != nil {
+			utils.Warn("[ZLM-HOOK] 写入录像索引失败",
+				zap.String("stream", event.Stream), zap.String("file", fileName), zap.Error(err))
+			return err
+		}
+		utils.Info("[ZLM-HOOK] 录像索引已写入",
+			zap.Int64("id", rec.ID),
+			zap.String("stream", event.Stream),
+			zap.String("file", fileName),
+			zap.Int64("file_size", event.FileSize),
+			zap.Int64("time_len", timeLen))
+		return nil
+	case findErr != nil:
+		utils.Warn("[ZLM-HOOK] 查询录像索引失败",
+			zap.String("stream", event.Stream), zap.Error(findErr))
+		return findErr
+	default:
+		if err := db.WithContext(ctx).Model(&model.GbCloudRecord{}).
+			Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
+			utils.Warn("[ZLM-HOOK] 更新录像索引失败",
+				zap.Int64("id", existing.ID), zap.Error(err))
+			return err
+		}
+		utils.Debug("[ZLM-HOOK] 录像索引已更新",
+			zap.Int64("id", existing.ID),
+			zap.String("file", fileName),
+			zap.Int64("file_size", event.FileSize))
+		return nil
+	}
 }

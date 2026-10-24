@@ -1,0 +1,197 @@
+# 后端 API + 内嵌 SIP 信令。
+#
+# ★ 副本数必须为 1 ★
+#   当前推荐形态是 GB28181_EMBEDDED=true：SIP 事务、TCP 连接、INVITE 会话与
+#   设备源地址都存在**本进程内存**里，HTTP 的播放/云台/回放接口直接调用
+#   control.Default()。多副本会造成：
+#     - 设备注册到 A Pod，播放请求落到 B Pod → 稳定 503；
+#     - 5060 端口在多 Pod 间争抢。
+#   因此这里固定 replicas: 1，并用 Recreate 策略避免滚动更新期间出现两个
+#   Pod 同时持有 SIP 状态。
+#
+# 若确实需要水平扩展，只有两条路（当前均未实现）：
+#   1. 独立 sipsvc（副本固定 1）+ Redis 注册表 + 跨进程 RPC（见 sipsvc-statefulset.yaml）；
+#   2. 把会话状态外置到 Redis，并让设备注册具备可迁移性。
+#
+# PostgreSQL 不在本清单内：生产建议用云托管或独立 Patroni 集群，
+# 通过 ConfigMap 的 DATABASE_HOST / Secret 的 DATABASE_PASSWORD 连接。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-camera-uploads
+  labels:
+    app.kubernetes.io/name: ai-camera-backend
+spec:
+  # replicas=1，RWO 足够。若未来扩到多副本/对象存储迁移，改用 ReadWriteMany
+  # 或直接把 media.upload_dir 换成 S3 兼容存储（见 02-监控与容灾.md §5.5）。
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-camera-backend
+  labels:
+    app.kubernetes.io/name: ai-camera-backend
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-camera-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-camera-backend
+      annotations:
+        # Prometheus Pod 注解自动发现（见 02-监控与容灾.md §2.1）。
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      # 如需从私有仓库拉镜像，在这里引用 imagePullSecrets（不要提交明文密码）。
+      # imagePullSecrets:
+      #   - name: registry-credentials
+      containers:
+        - name: backend
+          # ★ 生产请固定版本 tag，不要长期使用 latest。
+          image: registry.boticz.cn:5000/boticz/ai-camera-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: sip-udp
+              containerPort: 5060
+              protocol: UDP
+            - name: sip-tcp
+              containerPort: 5060
+              protocol: TCP
+          env:
+            - name: CONFIG_PATH
+              value: /app/config/config.yaml
+            - name: TZ
+              value: Asia/Shanghai
+
+            # ── 数据库（外部托管）──
+            - name: DATABASE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: DATABASE_HOST
+            - name: DATABASE_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: DATABASE_PORT
+            - name: DATABASE_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: DATABASE_USER
+            - name: DATABASE_DBNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: DATABASE_NAME
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: DATABASE_PASSWORD
+
+            # ── Redis ──
+            - name: REDIS_HOST
+              value: ai-camera-redis
+            - name: REDIS_PORT
+              value: "6379"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: REDIS_PASSWORD
+
+            # ── 鉴权 ──
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: JWT_SECRET
+
+            # ── GB28181（内嵌 SIP）──
+            - name: GB28181_ENABLED
+              value: "true"
+            - name: GB28181_EMBEDDED
+              value: "true"
+            - name: GB28181_SIP_LISTEN_IP
+              value: "0.0.0.0"
+            - name: GB28181_SIP_PORT
+              value: "5060"
+            - name: GB28181_SIP_TRANSPORT
+              value: BOTH
+            # ★ 设备可达地址：填 SIP LoadBalancer 的公网/局域网 IP。
+            #   绝对不能用 127.0.0.1 / Pod IP / Service ClusterIP。
+            - name: GB28181_SIP_ADVERTISE_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: SIP_ADVERTISE_IP
+            - name: GB28181_MEDIA_PUBLIC_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: MEDIA_PUBLIC_IP
+            - name: GB28181_MEDIA_RTP_PROXY_PORT
+              value: "10000"
+            - name: GB28181_SIP_NONCE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: GB28181_SIP_NONCE_SECRET
+
+            # 信令日志保留天数（janitor 每日执行一次）。不设时默认 30。
+            - name: SIP_LOG_RETENTION_DAYS
+              value: "30"
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            # 用 subPath 只覆盖 config.yaml，保留镜像内置的 config/rbac_model.conf。
+            - name: config
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: uploads
+              mountPath: /app/uploads
+            - name: logs
+              mountPath: /app/logs
+      volumes:
+        - name: config
+          configMap:
+            name: ai-camera-config
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: ai-camera-uploads
+        - name: logs
+          emptyDir: {}

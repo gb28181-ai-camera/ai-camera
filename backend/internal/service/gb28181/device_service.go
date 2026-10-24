@@ -285,7 +285,7 @@ func (s *GbDeviceService) getDevice(ctx context.Context, id int64, requireGbID b
 // validSubscribeType 校验订阅类型。
 func validSubscribeType(t string) bool {
 	switch strings.ToLower(trim(t)) {
-	case model.GbSubscribeCatalog, model.GbSubscribeAlarm, model.GbSubscribeMobilePosition:
+	case model.GbSubscribeCatalog, model.GbSubscribeAlarm, model.GbSubscribeMobilePosition, model.GbSubscribePTZPosition:
 		return true
 	default:
 		return false

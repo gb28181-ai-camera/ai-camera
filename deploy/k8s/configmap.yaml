@@ -1,0 +1,117 @@
+# 后端基线配置（非敏感）。
+#
+# ★ 密钥不在这里：数据库口令、JWT_SECRET、SIP nonce、ZLM secret 全部走
+#   Secret（见 secret.example.yaml），通过 config/config.go 的 envBindings 覆盖。
+#   本 ConfigMap 只管「结构 + 非敏感默认值」。
+#
+# ★ PostgreSQL 不内置：生产建议用云托管 / 独立 Patroni 集群。
+#   把 database.host 与下面 DATABASE_HOST 改成实际地址即可。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-camera-config
+  labels:
+    app.kubernetes.io/part-of: ai-camera
+data:
+  # 供 Deployment 用 env 覆盖，免去为了改库地址去编辑整份 YAML。
+  DATABASE_HOST: "postgres.example.internal"
+  DATABASE_PORT: "5432"
+  DATABASE_USER: "aicamera"
+  DATABASE_NAME: "ai_camera"
+
+  # SIP / 媒体对外通告地址。
+  # ★ 必须是**设备可达**的地址（LB 公网 IP 或局域网 IP），不能填 127.0.0.1、
+  #   容器 IP 或集群 Service IP。写错的典型表现：设备能注册、目录能同步，
+  #   但点播黑屏（RTP 打到了错误地址）。
+  SIP_ADVERTISE_IP: "203.0.113.10"   # 占位：TEST-NET-3，部署时替换
+  MEDIA_PUBLIC_IP: "203.0.113.10"    # 通常与 SIP_ADVERTISE_IP 相同
+
+  config.yaml: |
+    server:
+      port: 8080
+      mode: release
+      read_timeout: 10s
+      write_timeout: 10s
+
+    # 生产库建议外部托管；host 会被 DATABASE_HOST 环境变量覆盖。
+    database:
+      host: postgres.example.internal
+      port: 5432
+      user: aicamera
+      password: ""              # 由 DATABASE_PASSWORD 注入
+      dbname: ai_camera
+      sslmode: require
+      max_idle_conns: 10
+      max_open_conns: 100
+      conn_max_lifetime: 1h
+
+    redis:
+      host: ai-camera-redis
+      port: 6379
+      password: ""              # 由 REDIS_PASSWORD 注入
+      db: 0
+      pool_size: 10
+
+    jwt:
+      secret: ""                # 由 JWT_SECRET 注入
+      expire_hours: 7200
+
+    casbin:
+      model_path: config/rbac_model.conf
+      # 多副本时策略最终一致的关键；内嵌 SIP 形态固定 1 副本，但配置保留。
+      auto_load_interval: 5m
+
+    media:
+      upload_dir: /app/uploads
+      base_url: "https://api.example.com/uploads"
+
+    thirdparty:
+      getui:
+        app_id: ""
+        app_key: ""
+        app_secret: ""
+        master_secret: ""
+      sms:
+        secret_id: ""
+        secret_key: ""
+        sdk_app_id: ""
+        sign_name: ""
+
+    swagger:
+      enabled: false            # 生产关闭
+
+    # ── GB28181 ──────────────────────────────────────────────────
+    # ★ 内嵌模式：SIP 信令与 HTTP API 在同一个进程，播放/云台/回放命令
+    #   依赖进程内会话状态，这是当前唯一完整可用的形态。
+    #   代价是 backend 只能有 1 个副本（见 backend-deployment.yaml）。
+    gb28181:
+      enabled: true
+      embedded: true
+      charset: GB2312
+      sip:
+        listen_ip: 0.0.0.0
+        port: 5060
+        transport: BOTH
+        advertise_ip: 203.0.113.10
+        domain: 3402000000
+        realm: 3402000000
+        server_id: 34020000002000000001
+        server_name: AI Camera
+        register_expires: 3600
+        nonce_secret: ""        # 由 GB28181_SIP_NONCE_SECRET 注入
+      media:
+        public_ip: 203.0.113.10
+        rtp_proxy_port: 10000
+      cascade:
+        enabled: false
+        listen_ip: 0.0.0.0
+        port: 5061
+        advertise_ip: ""
+
+    log:
+      level: info
+      format: json
+      output: console
+      max_size: 100
+      max_backups: 30
+      max_age: 7

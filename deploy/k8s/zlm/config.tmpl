@@ -1,0 +1,79 @@
+; AI Camera —— ZLMediaKit 最小覆盖配置（K8s 副本）
+;
+; ⚠️ 本文件同步自 deploy/zlm/config.ini。Kustomize 默认只允许引用 k8s 目录内的
+;    文件，因此这里保留一份副本；修改其中一份时必须同步另一份。
+;
+; 只列本项目需要覆盖的项，其余由 ZLM 自身默认值兜底。
+; 若实测发现缺失项导致启动异常，再从镜像默认配置补齐。
+;
+; 设计依据：docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md §2.2
+
+[general]
+; 节点标识，与 ac_gb_media_server.server_id 对应
+mediaServerId=ai-camera-zlm-01
+; 允许无 secret 访问的本地地址（便于容器内调试）
+check_nvr=0
+
+[api]
+; ZLM HTTP API 密钥。容器化部署时由 compose 从 .env 注入（见 .env.example 的 ZLM_SECRET）
+; ★ 长度必须 ≥32 字符，否则 ZLM 启动时会自动改写（实测：19 字符被拒）
+;
+; 本文件现在是**模板**：compose 启动时由 deploy/zlm/render-config.sh 把
+; __ZLM_SECRET__ / __HOOK_BASE__ 替换成真实值，渲染到容器内的 /opt/media/conf/config.ini。
+; 原因：实测 ZLM 不做环境变量替换（把 ${VAR} 原样保留），而 hook URL 与 secret
+; 又必须随部署环境变化 —— 静态写死会导致「本地联调正常、容器部署全量 401」。
+secret=__ZLM_SECRET__
+apiDebug=0
+
+[http]
+port=80
+
+[rtp_proxy]
+; ★ 单端口模式的核心：所有 RTP 流共用此端口，由 ZLM 按 SSRC 自动建流（设计 §2.2）。
+; 设备把 PS/RTP 打到这里，ZLM 依据 RTP 头里的 SSRC 分辨是哪一路，
+; 流名即 SSRC 的大写十六进制（实测 rtp/0BEBC201）。
+port=10000
+
+; ⚠️ 这里**刻意不设 port_range** —— 设了会埋一个很隐蔽的坑：
+;   ZLM 的 /index/api/openRtpServer?port=0 会从 port_range 里挑端口（实测拿到
+;   33870 / 31704），而 compose 只发布了 10000 一个端口，**宿主机与设备都够不着**，
+;   表现为「接口返回成功、端口也分配了，但永远收不到流」。
+;   本项目走真·单端口形态：**不调 openRtpServer**，直接让设备往 10000 打。
+;   若日后确需多端口模式，必须同时：① 在此设 port_range；
+;   ② 在 docker-compose.yml 发布同一段端口（Docker Desktop 会为每个端口起
+;   userland proxy，段不能太大，这也是当初选单端口的原因）。
+
+; 收流超时（秒）。超时后 ZLM 移除该流并触发 on_stream_changed 回调
+timeoutSec=15
+
+; ⚠️ 曾试过把 port_range 收敛为 `10000-10000`，让误用 openRtpServer(port=0) 时
+;   立即报错（而不是静默分配一个够不着的端口）。**该做法已撤回**，原因：
+;   ZLM 的 PortManager 不只服务于 openRtpServer —— **语音对讲的 startSendRtp
+;   回推端口也走它**（模块 H 的在范围内功能）。设成非法段会让 ZLM 内部断言
+;   失败（实测 `Assertion failed: (s_max_port >= s_min_port + 36 - 1)`），
+;   存在波及其他端口分配的风险。
+;   → 因此保持 ZLM 默认的有效端口段，改为**靠文档与代码纪律**防误用：
+;     本项目 sipsvc **不得调用 openRtpServer**（见设计 §2.2）。
+
+[hook]
+; ZLM 回调平台（backend）。__HOOK_BASE__ 由 render-config.sh 注入。
+;
+; ★ 这 10 个端点就是 ZLM 的全部回调，一个不多一个不少。
+;   注意 on_media_arrival **不在其中** —— 它是 WVP 的内部事件，ZLM 配置里配不出来。
+;   平台侧实现见 backend/internal/gb28181/hook，路由组 /media/hook
+;   **不挂 authMW/casbinMW**（ZLM 没有 JWT），改用 secret 查询参数鉴权。
+enable=1
+on_server_keepalive=__HOOK_BASE__/media/hook/on_server_keepalive?secret=__ZLM_SECRET__
+on_server_started=__HOOK_BASE__/media/hook/on_server_started?secret=__ZLM_SECRET__
+on_publish=__HOOK_BASE__/media/hook/on_publish?secret=__ZLM_SECRET__
+on_play=__HOOK_BASE__/media/hook/on_play?secret=__ZLM_SECRET__
+on_stream_changed=__HOOK_BASE__/media/hook/on_stream_changed?secret=__ZLM_SECRET__
+on_stream_none_reader=__HOOK_BASE__/media/hook/on_stream_none_reader?secret=__ZLM_SECRET__
+on_stream_not_found=__HOOK_BASE__/media/hook/on_stream_not_found?secret=__ZLM_SECRET__
+on_send_rtp_stopped=__HOOK_BASE__/media/hook/on_send_rtp_stopped?secret=__ZLM_SECRET__
+on_rtp_server_timeout=__HOOK_BASE__/media/hook/on_rtp_server_timeout?secret=__ZLM_SECRET__
+on_record_mp4=__HOOK_BASE__/media/hook/on_record_mp4?secret=__ZLM_SECRET__
+; 心跳超时（秒）。超过后 on_server_keepalive 停止，平台据此判节点离线。
+alive_interval=15.0
+; 回调超时（秒）。平台侧处理要快，超过此值 ZLM 会记错误日志。
+timeoutSec=10

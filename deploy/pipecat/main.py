@@ -1,16 +1,24 @@
 """Pipecat 语音 Agent 控制面（FastAPI）。
 
-设计文档 §8.2「Pipecat 侧控制面」。这是一个**薄控制面**，不承担音频传输：
+设计文档 §8.2「Pipecat 侧控制面」。从 v0.2.1 起，除配置/会话登记外，
+`/session/start` 会**真正启动** RTP 音频桥与 Pipecat Pipeline：
 
 | 端点 | 鉴权 | 作用 |
 |:--|:--:|:--|
-| ``GET /health`` | 否 | 存活 + provider 数量 + 音频桥接状态 |
+| ``GET /health`` | 否 | 存活 + provider 数量 + **真实**音频桥状态 |
 | ``POST /config`` | 是 | 后端 ``Apply`` 下发配置，原子替换内存快照 |
 | ``GET /config`` | 是 | 读当前配置（敏感键脱敏） |
-| ``POST /session/start`` | 是 | 按当前配置装配 pipeline 并登记会话 |
+| ``POST /session/start`` | 是 | 启动 UDP 接收 + WebRTC 推流 + Pipeline |
 | ``POST /session/stop`` | 是 | 停止并清理会话 |
-| ``GET /sessions`` | 是 | 活跃会话列表 |
+| ``GET /sessions`` | 是 | 活跃会话与各自的音频桥状态 |
 | ``POST /test`` | 是 | provider 最小连通性检查（不发外部计费请求） |
+
+## 上行/下行参数由调用方传入
+
+`/session/start` 接受 ``uplink_port`` / ``uplink_ssrc`` /
+``downlink_stream`` / ``downlink_ssrc`` / ``zlm_base_url`` 等字段。
+这些值来自后端的 GB28181 会话（SSRC、设备流名）与媒体节点配置 ——
+Pipecat 侧不写死端口或流名，因此同一进程可以服务多路设备。
 
 ## 鉴权
 
@@ -22,18 +30,6 @@
 **未配置 token 时进程拒绝启动**（fail-fast），不存在「默认放行」的开发模式。
 后端 ``voice_agent_service.go`` 的 ``Apply`` 使用 ``Authorization: Bearer``，
 token 取自 ``ac_thirdparty_config`` 的 ``pipecat_token``。
-
-## 配置语义
-
-``POST /config`` 只替换配置，**不影响已经启动的会话**；下一个
-``/session/start`` 使用新配置（设计 §H+ 的「层次 2：会话热重建」）。
-
-## 契约
-
-请求体是扁平的 ``map[string]string``，键名与后端
-``backend/internal/service/setting/voice_agent_service.go`` 完全一致
-（``stt_provider`` / ``llm_model`` / ``tts_api_key`` …）。控制面不发明新键；
-未知但合法的键会透传（用于 provider 的扩展参数）。
 """
 
 from __future__ import annotations
@@ -45,7 +41,7 @@ import os
 import socket
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -57,7 +53,7 @@ from config_store import ConfigStore, ConfigValidationError
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 SERVICE_NAME = "ai-camera-pipecat"
 
 logging.basicConfig(
@@ -128,17 +124,34 @@ class SessionState:
     started_monotonic: float
     bundle: pipeline.PipelineBundle
     config_revision: int
+    receiver: transport.RTPAudioReceiver
+    sender: Optional[transport.WebRTCPCMAPusher]
+    runner: pipeline.AudioPipelineRunner
+    downlink_stream: str = ""
+    detail: str = ""
+
+    def bridge(self) -> Dict[str, Any]:
+        return self.runner.status()
 
     def describe(self) -> Dict[str, Any]:
-        return {
-            "session_id": self.session_id,
-            "channel_id": self.channel_id,
-            "mode": self.mode,
-            "started_at": self.started_at,
-            "config_revision": self.config_revision,
-            "pipeline": self.bundle.stage_names,
-            "audio_bridge": transport.AUDIO_BRIDGE_STATUS,
-        }
+        status = self.bridge()
+        data = self.bundle.describe(audio_bridge=status["audio_bridge"])
+        data.update(
+            {
+                "channel_id": self.channel_id,
+                "started_at": self.started_at,
+                "config_revision": self.config_revision,
+                "uplink_port": self.receiver.port,
+                "downlink_stream": self.downlink_stream,
+                # 只有「音频桥 connected + pipeline 已起来」才允许后端
+                # 把 agent_enabled 落成 true。
+                "agent_ready": self.runner.agent_ready,
+                "audio_bridge_detail": status,
+            }
+        )
+        if self.detail:
+            data["detail"] = self.detail
+        return data
 
 
 class SessionRegistry:
@@ -181,6 +194,16 @@ class SessionStartRequest(BaseModel):
     # half_duplex（默认，设计 §8.1.1）/ full_duplex（实验项）/ ptt
     mode: str = Field(default="half_duplex", max_length=32)
 
+    # ── 音频桥参数（全部由后端会话传入，不写死）──────────────
+    uplink_port: int = Field(default=0, ge=0, le=65535)
+    uplink_ssrc: Optional[int] = Field(default=None, ge=0, le=0xFFFFFFFF)
+    downlink_stream: str = Field(default="", max_length=100)
+    downlink_ssrc: Optional[int] = Field(default=None, ge=0, le=0xFFFFFFFF)
+    zlm_base_url: str = Field(default="", max_length=255)
+    # secret 只在内存中使用，不写日志。
+    zlm_secret: str = Field(default="", max_length=255)
+    zlm_app: str = Field(default="rtp", max_length=50)
+
 
 class SessionStopRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
@@ -193,20 +216,51 @@ class TestRequest(BaseModel):
 
 
 # ── 健康检查（无需鉴权）────────────────────────────────────────
+def aggregate_bridge_status() -> str:
+    """把全部活跃会话的桥状态合并成一个可读值。
+
+    - 没有任何会话：not_connected（没有桥可谈）；
+    - 任一 connected：connected（至少一路是完整闭环）；
+    - 否则只要还有 degraded：degraded；
+    - 全部 not_connected：not_connected。
+    """
+
+    items = sessions.list()
+    if not items:
+        return transport.AUDIO_BRIDGE_NOT_CONNECTED
+    statuses = [item.bridge()["audio_bridge"] for item in items]
+    if transport.AUDIO_BRIDGE_CONNECTED in statuses:
+        return transport.AUDIO_BRIDGE_CONNECTED
+    if transport.AUDIO_BRIDGE_DEGRADED in statuses:
+        return transport.AUDIO_BRIDGE_DEGRADED
+    return transport.AUDIO_BRIDGE_NOT_CONNECTED
+
+
 @app.get("/health")
 def health() -> Dict[str, Any]:
     """存活探针。
 
     ``providers`` 只返回类别与数量（不返回 provider 明细，更不返回密钥）；
-    ``audio_bridge`` 明确标注音频桥接尚未接通。
+    ``audio_bridge`` 是**当前活跃会话的实测状态**，不是配置推断。
     """
+
+    items = sessions.list()
+    counts = {
+        transport.AUDIO_BRIDGE_CONNECTED: 0,
+        transport.AUDIO_BRIDGE_DEGRADED: 0,
+        transport.AUDIO_BRIDGE_NOT_CONNECTED: 0,
+    }
+    for item in items:
+        status = item.bridge()["audio_bridge"]
+        counts[status] = counts.get(status, 0) + 1
 
     return {
         "status": "ok",
         "service": SERVICE_NAME,
         "version": VERSION,
         "providers": factory.provider_counts(),
-        "audio_bridge": transport.AUDIO_BRIDGE_STATUS,
+        "audio_bridge": aggregate_bridge_status(),
+        "audio_bridge_sessions": counts,
         "config_revision": store.revision,
         "sessions": sessions.count(),
         "uptime_sec": round(time.time() - _STARTED_AT, 1),
@@ -250,9 +304,58 @@ def get_config() -> Dict[str, Any]:
 
 
 # ── 会话 ────────────────────────────────────────────────────────
+def _build_audio_transport(req: SessionStartRequest) -> tuple[
+    transport.RTPAudioReceiver,
+    Optional[transport.WebRTCPCMAPusher],
+    str,
+]:
+    """创建并启动上行接收 + 下行推流。
+
+    返回 ``(receiver, sender, detail)``。上行失败是硬错误（没有它整个
+    闭环不成立）；下行失败只降级（用户仍能说话，只是听不到 agent），
+    并把原因放进 detail，供后端/日志定位。
+    """
+
+    receiver = transport.RTPAudioReceiver(
+        port=req.uplink_port,
+        expected_ssrc=req.uplink_ssrc or None,
+    )
+    try:
+        receiver.start(req.uplink_port)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"绑定 RTP 上行端口失败：{exc}") from exc
+
+    sender: Optional[transport.WebRTCPCMAPusher] = None
+    detail = ""
+    if req.downlink_stream.strip() and req.zlm_base_url.strip():
+        try:
+            sender = transport.WebRTCPCMAPusher(
+                zlm_base_url=req.zlm_base_url,
+                secret=req.zlm_secret,
+                app=req.zlm_app or "rtp",
+                stream=req.downlink_stream.strip(),
+                ssrc=req.downlink_ssrc or 0,
+            )
+            if not sender.start():
+                detail = "WebRTC 下行未连接（aiortc 缺失或 ZLM WebRTC push 失败）"
+                logger.warning("%s stream=%s", detail, req.downlink_stream)
+                sender.close()
+                sender = None
+        except Exception as exc:
+            detail = f"WebRTC 下行启动失败：{type(exc).__name__}: {exc}"
+            logger.warning("%s", detail, exc_info=True)
+            if sender is not None:
+                sender.close()
+            sender = None
+    else:
+        detail = "未提供 downlink_stream/zlm_base_url，跳过下行推流"
+
+    return receiver, sender, detail
+
+
 @app.post("/session/start", dependencies=[Depends(require_token)])
 def start_session(req: SessionStartRequest) -> Dict[str, Any]:
-    """按**当前**配置装配 pipeline 并登记会话。
+    """按**当前**配置装配 pipeline，并真正启动音频桥与 Pipeline。
 
     已存在的会话不受 ``/config`` 影响；要换配置请 stop 后重新 start。
     """
@@ -279,6 +382,16 @@ def start_session(req: SessionStartRequest) -> Dict[str, Any]:
     except factory.UnknownProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    receiver, sender, detail = _build_audio_transport(req)
+    runner = pipeline.AudioPipelineRunner(
+        bundle=bundle,
+        config=config,
+        receiver=receiver,
+        sender=sender,
+        half_duplex=mode == "half_duplex",
+    )
+    runner.start()
+
     state = SessionState(
         session_id=session_id,
         channel_id=req.channel_id.strip(),
@@ -287,30 +400,48 @@ def start_session(req: SessionStartRequest) -> Dict[str, Any]:
         started_monotonic=time.monotonic(),
         bundle=bundle,
         config_revision=revision,
+        receiver=receiver,
+        sender=sender,
+        runner=runner,
+        downlink_stream=req.downlink_stream.strip(),
+        detail=detail,
     )
     if not sessions.add(state):
+        # 409 前必须释放刚分配的 UDP 端口与 WebRTC 连接。
+        runner.stop()
+        if sender is not None:
+            sender.close()
+        receiver.close()
         raise HTTPException(status_code=409, detail=f"会话 {session_id} 已存在，请先停止")
 
     logger.info(
-        "会话启动 session=%s channel=%s mode=%s pipeline=%s",
+        "会话启动 session=%s channel=%s mode=%s pipeline=%s audio_bridge=%s agent=%s",
         session_id,
         state.channel_id,
         mode,
         pipeline.summary(bundle),
+        state.bridge()["audio_bridge"],
+        runner.agent_state,
     )
 
     body = {"ok": True, "started_at": state.started_at}
-    body.update(bundle.describe())
+    body.update(state.describe())
     return body
 
 
 @app.post("/session/stop", dependencies=[Depends(require_token)])
 def stop_session(req: SessionStopRequest) -> Dict[str, Any]:
-    """停止并清理会话。"""
+    """停止并清理会话（幂等：重复停止返回 404 之外的明确结果）。"""
 
     state = sessions.pop(req.session_id.strip())
     if state is None:
         raise HTTPException(status_code=404, detail=f"会话 {req.session_id} 不存在")
+
+    final_bridge = state.bridge()["audio_bridge"]
+    state.runner.stop()
+    if state.sender is not None:
+        state.sender.close()
+    state.receiver.close()
 
     duration = round(time.monotonic() - state.started_monotonic, 3)
     logger.info("会话停止 session=%s duration=%.3fs", state.session_id, duration)
@@ -320,19 +451,20 @@ def stop_session(req: SessionStopRequest) -> Dict[str, Any]:
         "session_id": state.session_id,
         "stopped": True,
         "duration_sec": duration,
+        "audio_bridge": final_bridge,
     }
 
 
 @app.get("/sessions", dependencies=[Depends(require_token)])
 def list_sessions() -> Dict[str, Any]:
-    """列出活跃会话。"""
+    """列出活跃会话（含每路的真实音频桥状态）。"""
 
     items = [state.describe() for state in sessions.list()]
     return {
         "ok": True,
         "count": len(items),
         "sessions": items,
-        "audio_bridge": transport.AUDIO_BRIDGE_STATUS,
+        "audio_bridge": aggregate_bridge_status(),
     }
 
 
@@ -459,4 +591,12 @@ def test_provider(req: TestRequest) -> Dict[str, Any]:
     }
 
 
-__all__ = ("app", "health", "list_sessions", "start_session", "stop_session", "test_provider")
+__all__ = (
+    "aggregate_bridge_status",
+    "app",
+    "health",
+    "list_sessions",
+    "start_session",
+    "stop_session",
+    "test_provider",
+)

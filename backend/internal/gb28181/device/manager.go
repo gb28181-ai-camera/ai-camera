@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/manscdp"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/version"
 	"github.com/boticz/ai-camera-backend/internal/model"
 )
 
@@ -668,4 +669,102 @@ func parseDeviceTime(s string, fallback time.Time) time.Time {
 		}
 	}
 	return fallback
+}
+
+// OnCommandSeen 在收到任何 MANSCDP 命令后，按命令能力升级设备协议版本。
+//
+// 为什么需要自动升级：设备的 REGISTER 头里没有可靠的版本声明，而 2022 独有命令
+// （PTZPosition、CruiseTrackListQuery…）本身就证明了设备至少支持 2022。
+// 版本一旦升到 2022 就不再降级 —— 设备固件降级的场景极少，反复升降会让
+// 「支持哪些能力」变得不可预测。
+func (m *Manager) OnCommandSeen(ctx context.Context, dev *model.Device, cmdType string) error {
+	if dev == nil {
+		return nil
+	}
+	current := version.Normalize(dev.GbVersion)
+	next := version.UpgradeOnCommand(current, cmdType)
+	if next == current {
+		return nil
+	}
+	if err := m.store.UpdateDevice(ctx, dev.ID, map[string]interface{}{
+		"gb_version": string(next),
+	}); err != nil {
+		return err
+	}
+	dev.GbVersion = string(next)
+	m.log.Info("设备协议版本已升级",
+		"gb_device_id", dev.GbDeviceID, "from", string(current), "to", string(next),
+		"trigger_cmd", cmdType)
+	return nil
+}
+
+// OnCatalogNotify 处理目录订阅通知（Notify/Catalog）的增量变更。
+//
+// 与全量 Catalog 响应的区别：Notify 只带变化的条目，且通常带 Event。
+// 不能走 OnCatalogResponse 的「按 SumNum 等齐」逻辑，否则永远等不到。
+//
+// 删除语义：DEL 只把通道置为 inactive + OFF，**不做物理删除** ——
+// 历史报警/录像/位置仍引用该通道，物理删除会让这些记录失去归属。
+func (m *Manager) OnCatalogNotify(ctx context.Context, dev *model.Device, notify *manscdp.CatalogNotify) error {
+	if dev == nil || notify == nil {
+		return nil
+	}
+	now := m.now()
+	var upserts []manscdp.CatalogItem
+
+	for _, item := range notify.DeviceList.Items {
+		id := strings.TrimSpace(item.DeviceID)
+		if id == "" {
+			continue
+		}
+		effect := manscdp.ResolveCatalogItemState(item)
+		if !effect.Known {
+			m.log.Warn("目录通知含未知事件，已忽略",
+				"gb_device_id", dev.GbDeviceID, "channel_id", id, "event", item.Event)
+			continue
+		}
+
+		// ADD/UPDATE 需要完整字段，交给 upsert 路径；其余事件只改状态。
+		if strings.EqualFold(item.Event, manscdp.CatalogEventAdd) ||
+			strings.EqualFold(item.Event, manscdp.CatalogEventUpdate) {
+			upserts = append(upserts, item)
+		}
+
+		ch, err := m.store.FindChannel(ctx, id)
+		if err != nil || ch == nil {
+			// 本地还没有该通道时，ON/OFF 无法更新；ADD/UPDATE 由上面对 upsert 处理。
+			if effect.Online != nil && !*effect.Online {
+				continue
+			}
+			continue
+		}
+		fields := map[string]interface{}{}
+		if effect.Online != nil {
+			if *effect.Online {
+				fields["status"] = model.GbStatusOn
+			} else {
+				fields["status"] = model.GbStatusOff
+			}
+		}
+		if effect.Delete {
+			fields["status"] = model.GbStatusOff
+			fields["active"] = false
+		}
+		if len(fields) > 0 {
+			if err := m.store.UpdateChannel(ctx, ch.ID, fields); err != nil {
+				m.log.Warn("更新通道状态失败",
+					"gb_device_id", dev.GbDeviceID, "channel_id", id, "error", err)
+			}
+		}
+	}
+
+	if len(upserts) > 0 {
+		// 复用全量目录的落库逻辑：它负责域前缀校验、保留用户自定义字段、回写 channel_count。
+		if err := m.persistCatalog(ctx, dev, upserts); err != nil {
+			return err
+		}
+	}
+	m.log.Debug("目录通知处理完成",
+		"gb_device_id", dev.GbDeviceID, "items", len(notify.DeviceList.Items), "at", now)
+	return nil
 }

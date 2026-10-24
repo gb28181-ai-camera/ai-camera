@@ -29,6 +29,7 @@ var contractGbRoutes = []string{
 	"GET /web/gb/devices",
 	"GET /web/gb/devices/:id",
 	"POST /web/gb/devices/:id/sync-channel",
+	"POST /web/gb/devices/:id/diagnose",
 	"POST /web/gb/devices/:id/subscribe",
 	"DELETE /web/gb/devices/:id/subscribe",
 	"POST /web/gb/devices/:id/activation",
@@ -144,6 +145,10 @@ var contractGbRoutes = []string{
 	"PUT /web/gb/platforms/:id/channels/:channelId",
 	"PUT /web/gb/platforms/:id/groups",
 	"PUT /web/gb/platforms/:id/regions",
+	"GET /web/gb/platforms/cascade/status",
+	"POST /web/gb/platforms/cascade/start",
+	"POST /web/gb/platforms/cascade/stop",
+	"POST /web/gb/platforms/:id/catalog-push",
 
 	// ── §10.9 语音 Agent 配置 ──
 	"GET /web/settings/voice-agent",
@@ -462,6 +467,9 @@ var contractRoutes = []string{
 var infraRoutes = map[string]bool{
 	"GET /uploads/*filepath":  true,
 	"HEAD /uploads/*filepath": true,
+	// Prometheus 抓取端点：基础设施端点，不是业务 API，不属于契约范围。
+	// 预先登记，避免接入指标时被反向比对误判为「实现了契约未列出的端点」。
+	"GET /metrics": true,
 }
 
 // contractGaps 已实现、但契约 §3 尚未列出的端点（实现先行造成的偏差）。

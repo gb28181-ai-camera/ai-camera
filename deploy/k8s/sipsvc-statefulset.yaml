@@ -1,0 +1,162 @@
+# ⚠️ 独立信令服务（可选，默认**不启用**）。
+#
+# 默认部署形态是「backend 内嵌 SIP」（GB28181_EMBEDDED=true），见
+# backend-deployment.yaml。本文件只在以下场景使用：
+#   - 需要把信令与 API 的生命周期解耦（协议层压测、独立调试）；
+#   - 未来实现了跨进程命令通道之后。
+#
+# 当前**不推荐**启用，原因：
+#   1. HTTP 的播放/云台/回放依赖进程内的 INVITE 会话状态。分进程后
+#      control.Default() 在 API 进程里为 nil，这些接口稳定返回 503；
+#   2. 设备注册后绑定到具体节点，扩容/漂移会导致注册丢失；
+#   3. 跨进程命令通道（Redis RPC）**尚未实现**。
+#
+# 启用步骤：
+#   1. 从 kustomization.yaml 取消本文件注释；
+#   2. 把 backend Deployment 的 GB28181_EMBEDDED 改为 "false"；
+#   3. 从 backend-service.yaml 移除 ai-camera-sip（或删除该 Service），
+#      否则 5060 会被两个 Service 指向不同 Pod；
+#   4. 确保 ai-camera-sipsvc 的 5060 对外可达，并把 SIP_ADVERTISE_IP 指向它。
+#
+# ★ 副本数固定 1：SIP 事务、TCP 连接与设备注册表都在进程内存。
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-camera-sipsvc
+  labels:
+    app.kubernetes.io/name: ai-camera-sipsvc
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: ai-camera-sipsvc
+  ports:
+    - name: sip-udp
+      port: 5060
+      targetPort: sip-udp
+      protocol: UDP
+    - name: sip-tcp
+      port: 5060
+      targetPort: sip-tcp
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ai-camera-sipsvc
+  labels:
+    app.kubernetes.io/name: ai-camera-sipsvc
+spec:
+  replicas: 1
+  serviceName: ai-camera-sipsvc
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-camera-sipsvc
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-camera-sipsvc
+    spec:
+      containers:
+        - name: sipsvc
+          image: registry.boticz.cn:5000/boticz/ai-camera-api:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/app/ai-camera-sipsvc"]
+          ports:
+            - name: sip-udp
+              containerPort: 5060
+              protocol: UDP
+            - name: sip-tcp
+              containerPort: 5060
+              protocol: TCP
+          env:
+            - name: CONFIG_PATH
+              value: /app/config/config.yaml
+            - name: TZ
+              value: Asia/Shanghai
+            - name: DATABASE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: DATABASE_HOST
+            - name: DATABASE_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: DATABASE_PORT
+            - name: DATABASE_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: DATABASE_USER
+            - name: DATABASE_DBNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: DATABASE_NAME
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: DATABASE_PASSWORD
+            - name: REDIS_HOST
+              value: ai-camera-redis
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: REDIS_PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: JWT_SECRET
+            - name: GB28181_ENABLED
+              value: "true"
+            # 独立进程形态：本进程只跑 SIP，不提供 HTTP。
+            - name: GB28181_EMBEDDED
+              value: "false"
+            - name: GB28181_SIP_LISTEN_IP
+              value: "0.0.0.0"
+            - name: GB28181_SIP_PORT
+              value: "5060"
+            - name: GB28181_SIP_TRANSPORT
+              value: BOTH
+            - name: GB28181_SIP_ADVERTISE_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: SIP_ADVERTISE_IP
+            - name: GB28181_MEDIA_PUBLIC_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: MEDIA_PUBLIC_IP
+            - name: GB28181_MEDIA_RTP_PROXY_PORT
+              value: "10000"
+            - name: GB28181_SIP_NONCE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: GB28181_SIP_NONCE_SECRET
+          readinessProbe:
+            tcpSocket:
+              port: sip-tcp
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: ai-camera-config

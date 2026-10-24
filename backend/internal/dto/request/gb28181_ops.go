@@ -362,6 +362,11 @@ type UpdateVoiceAgentReq struct {
 
 	PipecatEndpoint *string `json:"pipecat_endpoint"`
 	PipecatToken    *string `json:"pipecat_token"`
+
+	// ExtraParams provider param_schema 中没有固定键的扩展参数（如 TTS 的 model、
+	// Azure 的 region）。键为原始参数名（前端不带前缀），服务端统一加 `param_`
+	// 前缀落库，避免与上面的固定键冲突；nil 表示不修改。
+	ExtraParams map[string]string `json:"extra_params"`
 }
 
 // TestVoiceAgentReq provider 连通性测试。

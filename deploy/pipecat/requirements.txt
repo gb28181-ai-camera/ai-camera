@@ -18,6 +18,13 @@ openai>=1.74,<4.0
 # 默认零密钥 TTS（设计 §8.2）
 edge-tts>=6.1,<8.0
 
+# 下行音频推流：aiortc 把 TTS 的 PCM 编成 PCMA 轨道，POST 到 ZLM
+# /index/api/webrtc?type=push（方案 A，见 transport.py 的说明）。
+# 未安装时控制面照常启动：上行仍能收，audio_bridge 会明确报 degraded，
+# 不会假装「设备能听到声音」。
+aiortc>=1.9,<2.0
+av>=12,<16
+
 # 默认本地 STT（设计 §8.2：local_whisper / faster-whisper）
 # 体积较大（含 ctranslate2）。若部署环境不需要本地识别，可注释掉本行，
 # /test 与 /session/start 会明确提示「未安装 faster-whisper」。

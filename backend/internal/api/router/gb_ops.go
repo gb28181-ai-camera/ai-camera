@@ -83,6 +83,12 @@ func registerGbOpsRoutes(wAuth *gin.RouterGroup) {
 		gb.POST("/stream-pushes/:id/stop", gbStreamPushH.Stop)
 
 		// ── 国标级联（§10.7）──
+		// 运行时动作放在静态段，必须在 /:id 之前注册（gin 支持静态与参数同级，
+		// 但按「静态优先」的阅读习惯排列，避免以后新增 :id 路由时误判冲突）。
+		gb.GET("/platforms/cascade/status", gbPlatformH.CascadeStatus)
+		gb.POST("/platforms/cascade/start", gbPlatformH.StartCascade)
+		gb.POST("/platforms/cascade/stop", gbPlatformH.StopCascade)
+
 		gb.GET("/platforms", gbPlatformH.Page)
 		gb.GET("/platforms/:id", gbPlatformH.Get)
 		gb.POST("/platforms", gbPlatformH.Create)
@@ -94,6 +100,7 @@ func registerGbOpsRoutes(wAuth *gin.RouterGroup) {
 		gb.PUT("/platforms/:id/channels/:channelId", gbPlatformH.UpdateChannelCustom)
 		gb.PUT("/platforms/:id/groups", gbPlatformH.SetGroups)
 		gb.PUT("/platforms/:id/regions", gbPlatformH.SetRegions)
+		gb.POST("/platforms/:id/catalog-push", gbPlatformH.PushCatalog)
 	}
 
 	// ── 语音 Agent 配置（§10.9）──

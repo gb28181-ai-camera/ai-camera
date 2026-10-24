@@ -391,6 +391,8 @@ func registerWebRoutes(r *gin.Engine) {
 			gb.GET("/devices", gbDeviceH.Page)
 			gb.GET("/devices/:id", gbDeviceH.Get)
 			gb.POST("/devices/:id/sync-channel", gbDeviceH.SyncChannel)
+			// 可达性 / NAT 诊断：只读 + 一条标准 DeviceInfo 查询，不修改设备状态。
+			gb.POST("/devices/:id/diagnose", gbDeviceH.Diagnose)
 			gb.POST("/devices/:id/subscribe", gbDeviceH.Subscribe)
 			gb.DELETE("/devices/:id/subscribe", gbDeviceH.Unsubscribe)
 			gb.POST("/devices/:id/activation", gbDeviceH.GenerateActivation)

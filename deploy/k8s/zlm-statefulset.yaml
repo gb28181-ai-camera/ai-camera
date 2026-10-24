@@ -1,0 +1,172 @@
+# ZLMediaKit（国标媒体节点）。
+#
+# 关键约束（与 docker-compose.yml / docs/部署文档/01-部署与运维.md §9.3 一致）：
+#   1. **单端口收流**：只开 10000/udp + 10000/tcp，不需要 30000-30500 端口段。
+#      设备按 SSRC 复用同一端口，ZLM 自动建流；平台**不得**调用 openRtpServer。
+#   2. 配置不能直接写死 secret：ZLM 不支持 ${VAR} 替换，必须由 render-config.sh
+#      把 __ZLM_SECRET__ / __HOOK_BASE__ 渲染成实际值。
+#   3. ConfigMap 是只读卷，渲染结果写到 emptyDir /opt/media/conf，不能写回模板目录。
+#   4. 云端录像落 PVC（volumeClaimTemplates），Pod 重建后录像不丢。
+#
+# Service 类型说明：
+#   - ai-camera-zlm        ClusterIP：backend 调 REST API + 站内播放走这里；
+#   - ai-camera-zlm-public LoadBalancer：设备与浏览器从集群外访问。若集群没有
+#     LB 实现，改成 NodePort，并把 GB28181_SIP_ADVERTISE_IP / MEDIA_PUBLIC_IP
+#     设为节点公网 IP。
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-camera-zlm
+  labels:
+    app.kubernetes.io/name: ai-camera-zlm
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ai-camera-zlm
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+    - name: rtp-udp
+      port: 10000
+      targetPort: rtp-udp
+      protocol: UDP
+    - name: rtp-tcp
+      port: 10000
+      targetPort: rtp-tcp
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-camera-zlm-public
+  labels:
+    app.kubernetes.io/name: ai-camera-zlm
+  annotations:
+    # 如有固定公网 IP，填在这里；否则由云厂商自动分配。
+    # service.beta.kubernetes.io/load-balancer-ip: "203.0.113.10"
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+spec:
+  type: LoadBalancer
+  # 保留设备源 IP：GB28181 的 RTP 与 SIP 都依赖真实源地址做排障/鉴权。
+  externalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: ai-camera-zlm
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+    - name: rtp-udp
+      port: 10000
+      targetPort: rtp-udp
+      protocol: UDP
+    - name: rtp-tcp
+      port: 10000
+      targetPort: rtp-tcp
+      protocol: TCP
+    - name: webrtc
+      port: 8000
+      targetPort: webrtc
+      protocol: UDP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ai-camera-zlm
+  labels:
+    app.kubernetes.io/name: ai-camera-zlm
+spec:
+  # ★ 固定 1 副本：单端口收流 + 单 PVC 录像。ZLM 本身可多节点，
+  #   但多节点需要平台侧按 ac_gb_media_server 做路由，本期不做。
+  replicas: 1
+  serviceName: ai-camera-zlm
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-camera-zlm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-camera-zlm
+    spec:
+      containers:
+        - name: zlm
+          image: zlmediakit/zlmediakit:master
+          imagePullPolicy: IfNotPresent
+          workingDir: /opt/media/bin
+          command: ["/bin/sh", "/opt/media/tmpl/render-config.sh"]
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+            - name: ZLM_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: ZLM_SECRET
+            # backend 的 ClusterIP Service 名。ZLM 从集群内回调平台。
+            - name: ZLM_HOOK_BASE
+              value: "http://ai-camera-backend:8080"
+            - name: ZLM_CONFIG_TPL
+              value: /opt/media/tmpl/config.tmpl
+            - name: ZLM_CONFIG_OUT
+              value: /opt/media/conf/config.ini
+          ports:
+            - name: http
+              containerPort: 80
+            - name: rtp-udp
+              containerPort: 10000
+              protocol: UDP
+            - name: rtp-tcp
+              containerPort: 10000
+              protocol: TCP
+            - name: webrtc
+              containerPort: 8000
+              protocol: UDP
+          readinessProbe:
+            # 不把 secret 写进 probe URL：TCP 能连上即说明 HTTP 监听已起来。
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: zlm-config
+              mountPath: /opt/media/tmpl
+              readOnly: true
+            # 渲染输出目录必须可写，因此用 emptyDir；模板目录保持只读。
+            - name: zlm-conf
+              mountPath: /opt/media/conf
+            - name: record
+              mountPath: /opt/media/bin/www/record
+      volumes:
+        - name: zlm-config
+          configMap:
+            name: ai-camera-zlm-config
+            defaultMode: 0555       # 脚本只读可执行；通过 /bin/sh 调用，实际不依赖 +x
+            items:
+              - key: config.tmpl
+                path: config.tmpl
+              - key: render-config.sh
+                path: render-config.sh
+        - name: zlm-conf
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: record
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi

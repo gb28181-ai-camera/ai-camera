@@ -1,10 +1,14 @@
 package gb28181
 
-// 录像计划（周计划）CRUD。
+// 录像计划（周计划）CRUD + 调度接线。
 //
-// ★ 本期只做配置 CRUD，**不做定时调度**：到点调用 ZLM startRecord /
-// 设备 RecordCmd 的调度器属于后续批次。这里的 active/snap 字段只是配置，
-// 不会自动驱动任何录制行为 —— 注释保留这一点，避免被误认为已生效。
+// 计划配置由本文件维护，到点录制由 internal/gb28181/record 的 Scheduler 执行：
+//   - 构造函数里调用 record.EnsureStarted() 懒启动进程级调度器（路由注册即触发，
+//     因此不需要修改 cmd/server）；
+//   - 计划新增/编辑/删除/换绑通道后调用 record.NotifyChanged()，让调度器
+//     立即重新对齐，而不是等下一个 30 秒 ticker；
+//   - 跨天时间段（如 22:00–06:00）用 start > end 表示，调度器按「前一天」
+//     的 WeekDay 匹配凌晨部分。
 //
 // 数据关系：
 //   - ac_gb_record_plan_item 存「一周内的时间段」，无 channel_id；
@@ -21,6 +25,7 @@ import (
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
 	"github.com/boticz/ai-camera-backend/internal/dto/response"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/record"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/internal/repository"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
@@ -41,7 +46,12 @@ type GbRecordPlanService struct {
 }
 
 // NewGbRecordPlanService 构造录像计划服务。
+//
+// 调度器接线点：处理器在路由注册阶段被构造 → 这里被调用 → EnsureStarted
+// 用 sync.Once 保证全进程只启动一个 Scheduler。放在这里的原因是不能修改
+// cmd/server，而 handler 的构造时机恰好等价于「服务启动」。
 func NewGbRecordPlanService() *GbRecordPlanService {
+	record.EnsureStarted()
 	return &GbRecordPlanService{
 		planRepo: repository.NewGbRecordPlanRepo(),
 		itemRepo: repository.NewGbRecordPlanItemRepo(),
@@ -246,6 +256,8 @@ func (s *GbRecordPlanService) Create(ctx context.Context, req *request.CreateGbR
 	if err != nil {
 		return nil, err
 	}
+	// 新计划可能已经覆盖当前时刻：立刻让调度器对齐，避免等 30 秒。
+	record.NotifyChanged()
 	return plan, nil
 }
 
@@ -289,7 +301,7 @@ func (s *GbRecordPlanService) Update(ctx context.Context, id int64, req *request
 		plan.Remark = trim(*req.Remark)
 	}
 
-	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(plan).Error; err != nil {
 			return err
 		}
@@ -309,6 +321,12 @@ func (s *GbRecordPlanService) Update(ctx context.Context, id int64, req *request
 		}
 		return tx.Create(&items).Error
 	})
+	if err != nil {
+		return err
+	}
+	// 时间段被整体重建（item id 变化），调度器会据此停止旧任务并启动新任务。
+	record.NotifyChanged()
+	return nil
 }
 
 // Delete 删除录像计划（有通道引用时拒绝）。
@@ -326,12 +344,16 @@ func (s *GbRecordPlanService) Delete(ctx context.Context, id int64) error {
 	if inUse > 0 {
 		return ErrGbRecordPlanInUse
 	}
-	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("plan_id = ?", id).Delete(&model.GbRecordPlanItem{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&model.GbRecordPlan{}, id).Error
 	})
+	if err == nil {
+		record.NotifyChanged()
+	}
+	return err
 }
 
 // LinkChannels 整体替换计划绑定的通道集合。
@@ -348,7 +370,7 @@ func (s *GbRecordPlanService) LinkChannels(ctx context.Context, id int64, channe
 
 	ids := dedupIDs(channelIDs)
 
-	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if len(ids) > 0 {
 			var found int64
 			if err := tx.Model(&model.GbChannel{}).Where("id IN ?", ids).Count(&found).Error; err != nil {
@@ -372,6 +394,12 @@ func (s *GbRecordPlanService) LinkChannels(ctx context.Context, id int64, channe
 			Where("record_plan_id = ?", id).
 			Update("record_plan_id", nil).Error
 	})
+	if err != nil {
+		return err
+	}
+	// 解绑/换绑会改变「哪些通道该录」，立即对齐。
+	record.NotifyChanged()
+	return nil
 }
 
 // normalizePlanItems 校验并归一化时间段。
@@ -392,8 +420,11 @@ func normalizePlanItems(in []request.GbRecordPlanItemReq) ([]model.GbRecordPlanI
 		if err != nil {
 			return nil, fmt.Errorf("第 %d 个时间段结束时间非法: %w", idx+1, err)
 		}
-		if end <= start {
-			return nil, fmt.Errorf("第 %d 个时间段的结束时间必须晚于开始时间", idx+1)
+		// 允许 end < start：这表示**跨天时段**（如 22:00–06:00），
+		// 由调度器按「开始那天的 WeekDay」匹配，次日凌晨仍属于同一窗口。
+		// 只拒绝起止完全相同（零长度窗口没有意义）。
+		if end == start {
+			return nil, fmt.Errorf("第 %d 个时间段的开始与结束时间不能相同", idx+1)
 		}
 		out = append(out, model.GbRecordPlanItem{
 			WeekDay:   it.WeekDay,

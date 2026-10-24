@@ -1,0 +1,84 @@
+# 语音 Agent 控制面（Pipecat）—— 可选组件，默认**不启用**。
+#
+# 定位：只做配置下发、会话登记、pipeline 装配与 G.711↔PCM 转换。
+# **音频桥接尚未接通**，/health 固定返回 "audio_bridge": "not_connected"。
+# 详见 deploy/pipecat/README.md。
+#
+# 启用方法：在 kustomization.yaml 的 resources 中取消本文件注释。
+# 注意：
+#   1. PIPECAT_TOKEN 为必填，未设置时进程拒绝启动（fail-fast）；
+#   2. 只在内网暴露（ClusterIP，不映射宿主机端口）。后台「Pipecat 控制面
+#      地址」填 http://ai-camera-pipecat:8090；
+#   3. 后台令牌与 Secret 的 PIPECAT_TOKEN 必须一致，否则控制面返回 401。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-camera-pipecat
+  labels:
+    app.kubernetes.io/name: ai-camera-pipecat
+spec:
+  # 配置与会话都在进程内存，固定 1 副本。
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-camera-pipecat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-camera-pipecat
+    spec:
+      containers:
+        - name: pipecat
+          # 镜像由 deploy/pipecat/Dockerfile 构建并推送；先按实际仓库替换。
+          image: registry.boticz.cn:5000/boticz/ai-camera-pipecat:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8090
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+            - name: PIPECAT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: PIPECAT_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-camera-pipecat
+  labels:
+    app.kubernetes.io/name: ai-camera-pipecat
+spec:
+  # 仅集群内可达：语音控制面不对外暴露。
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ai-camera-pipecat
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http

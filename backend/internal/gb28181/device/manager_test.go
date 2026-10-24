@@ -82,6 +82,8 @@ func (f *fakeStore) UpdateDevice(_ context.Context, id int64, fields map[string]
 			}
 		case "channel_count":
 			f.device.ChannelCount = v.(int64)
+		case "gb_version":
+			f.device.GbVersion = v.(string)
 		}
 	}
 	return nil
@@ -102,6 +104,28 @@ func (f *fakeStore) UpsertChannel(_ context.Context, ch *model.GbChannel) error 
 	defer f.mu.Unlock()
 	f.channels[ch.GbChannelID] = ch
 	return nil
+}
+
+func (f *fakeStore) UpdateChannel(_ context.Context, id int64, fields map[string]interface{}) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, ch := range f.channels {
+		if ch.ID != id {
+			continue
+		}
+		for k, v := range fields {
+			switch k {
+			case "status":
+				ch.Status = v.(string)
+			case "active":
+				if b, ok := v.(bool); ok {
+					ch.Active = &b
+				}
+			}
+		}
+		return nil
+	}
+	return errors.New("channel not found")
 }
 
 func (f *fakeStore) CountChannels(_ context.Context, deviceID int64) (int64, error) {
@@ -442,5 +466,92 @@ func TestEndpointIgnoreEmpty(t *testing.T) {
 	m.SetEndpoint(testDeviceID, "", "UDP")
 	if _, ok := m.Endpoint(testDeviceID); ok {
 		t.Fatalf("空地址不应记录端点")
+	}
+}
+
+// TestOnCommandSeenUpgradesVersion 2022 独有命令应把设备版本升到 2022，且不回退。
+func TestOnCommandSeenUpgradesVersion(t *testing.T) {
+	dev := testDevice()
+	dev.GbVersion = "2016"
+	store := newFakeStore(dev)
+	m := newTestManager(store)
+	ctx := context.Background()
+
+	// 2016 命令不升级
+	if err := m.OnCommandSeen(ctx, dev, "Catalog"); err != nil {
+		t.Fatalf("OnCommandSeen 失败：%v", err)
+	}
+	if dev.GbVersion != "2016" {
+		t.Fatalf("普通命令不应升级版本，实际 %q", dev.GbVersion)
+	}
+
+	// 2022 独有命令升级
+	if err := m.OnCommandSeen(ctx, dev, "CruiseTrackListQuery"); err != nil {
+		t.Fatalf("OnCommandSeen 失败：%v", err)
+	}
+	if dev.GbVersion != "2022" {
+		t.Fatalf("2022 命令应升级版本，实际 %q", dev.GbVersion)
+	}
+	if store.device.GbVersion != "2022" {
+		t.Fatalf("版本应落库，实际 %q", store.device.GbVersion)
+	}
+
+	// 不再回退
+	if err := m.OnCommandSeen(ctx, dev, "Catalog"); err != nil {
+		t.Fatalf("OnCommandSeen 失败：%v", err)
+	}
+	if dev.GbVersion != "2022" {
+		t.Fatalf("版本不应回退，实际 %q", dev.GbVersion)
+	}
+}
+
+// TestOnCatalogNotifyEvents 目录通知的 ON/OFF/DEL 应更新通道状态，未知事件被忽略。
+func TestOnCatalogNotifyEvents(t *testing.T) {
+	dev := testDevice()
+	store := newFakeStore(dev)
+	active := true
+	ch := &model.GbChannel{
+		BaseModel:   model.BaseModel{ID: 11},
+		DeviceID:    dev.ID,
+		GbDeviceID:  dev.GbDeviceID,
+		GbChannelID: testChannel1,
+		Status:      model.GbStatusOn,
+		Active:      &active,
+	}
+	store.channels[testChannel1] = ch
+	m := newTestManager(store)
+	ctx := context.Background()
+
+	notify := &manscdp.CatalogNotify{
+		CmdType: manscdp.CmdCatalog,
+		DeviceList: manscdp.DeviceList{
+			Num: 1,
+			Items: []manscdp.CatalogItem{{
+				DeviceID: testChannel1,
+				Event:    manscdp.CatalogEventOff,
+			}},
+		},
+	}
+	if err := m.OnCatalogNotify(ctx, dev, notify); err != nil {
+		t.Fatalf("OnCatalogNotify 失败：%v", err)
+	}
+	if ch.Status != model.GbStatusOff {
+		t.Fatalf("OFF 事件应把状态置为 OFF，实际 %q", ch.Status)
+	}
+
+	notify.DeviceList.Items[0].Event = "UNKNOWN_EVENT"
+	if err := m.OnCatalogNotify(ctx, dev, notify); err != nil {
+		t.Fatalf("未知事件不应返回错误：%v", err)
+	}
+	if ch.Status != model.GbStatusOff {
+		t.Fatalf("未知事件不应改变状态，实际 %q", ch.Status)
+	}
+
+	notify.DeviceList.Items[0].Event = manscdp.CatalogEventDel
+	if err := m.OnCatalogNotify(ctx, dev, notify); err != nil {
+		t.Fatalf("OnCatalogNotify 失败：%v", err)
+	}
+	if ch.Status != model.GbStatusOff || ch.Active == nil || *ch.Active {
+		t.Fatalf("DEL 应置 OFF 且 active=false，实际 status=%q active=%v", ch.Status, ch.Active)
 	}
 }

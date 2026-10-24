@@ -17,15 +17,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/boticz/ai-camera-backend/internal/bootstrap"
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
 	"github.com/boticz/ai-camera-backend/internal/dto/response"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/control"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/mediaserver"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/manscdp"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/record"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/sipserver"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/ssrc"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/internal/repository"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -407,9 +411,6 @@ func unregisterRecordWaiter(key string, w *recordWaiter) {
 // GbPlaybackService 回放与下载业务逻辑。
 type GbPlaybackService struct{}
 
-// NewGbPlaybackService 构造回放服务。
-func NewGbPlaybackService() *GbPlaybackService { return &GbPlaybackService{} }
-
 // QueryRecord 检索设备侧录像。
 //
 // 超时返回已收到的条目（可能为空）且 Timeout=true，不返回 error ——
@@ -641,29 +642,85 @@ func releasePlayStream(ctx context.Context, app, stream string) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// 下载任务（进程内表）
+// 下载任务
 //
-// 为什么不用数据库：现有 20 张国标表里没有「下载任务」表
-// （ac_gb_cloud_record 是 ZLM 落盘 MP4 的索引，语义不同）。本批次不做迁移，
-// 任务只存在于当前 API 进程内存：
-//   - 单进程部署（开发/一体机）下行为完整；
-//   - 多副本或重启后任务列表会丢失，但设备侧下载会话本身由 SIP 生命周期
-//     管理，重启会随进程一起终止 —— 不会留下「僵尸任务」。
-// 若后续需要持久化/断点续传，应新增 ac_gb_download_task 表并走正式迁移。
+// 持久化策略（不改表结构）：
+//   - 任务元数据（设备/通道/时间窗/状态）写成 ac_gb_cloud_record 的一行
+//     **软删除快照**（deleted_at 非空）。默认查询会自动排除它，所以云端
+//     录像列表看不到这条内部记录，不需要改 repository 的查询条件；
+//   - 每 10 秒把「已落盘片段的大小/时长合计」快照回这一行，进程重启后
+//     可由 Remark 前缀恢复任务列表；
+//   - 真实文件信息仍由 ZLM 的 on_record_mp4 回调写成普通的
+//     ac_gb_cloud_record 行（deleted_at 为空），那些行才是用户可见的录像。
+//
+// 为什么不用新表：本批次不允许改表结构；用软删除行承载内部状态既不污染
+// 业务查询，也复用了现有索引列（start_time / stream）。
 // ════════════════════════════════════════════════════════════════
+
+const (
+	downloadStatusDownloading = "downloading"
+	downloadStatusStopped     = "stopped"
+	downloadStatusCompleted   = "completed"
+	downloadStatusInterrupted = "interrupted"
+
+	// downloadSnapshotPrefix 是内部快照行的 Remark 前缀。
+	// 格式：gb-download-task:<id>|<status>|<设备录像开始>|<设备录像结束>
+	downloadSnapshotPrefix   = "gb-download-task:"
+	downloadSnapshotInterval = 10 * time.Second
+)
+
+// downloadTask 是进程内的可变任务状态。
+type downloadTask struct {
+	ID            int64
+	ChannelID     int64
+	ChannelName   string
+	DeviceID      int64
+	DeviceName    string
+	StreamID      string
+	App           string
+	Stream        string
+	SSRC          string
+	StartTime     string
+	EndTime       string
+	Status        string
+	Message       string
+	CreatedDT     time.Time
+	StoppedDT     *time.Time
+	MediaServerID string
+	// TotalSeconds 是请求的设备录像时间窗长度，用于计算百分比。
+	TotalSeconds float64
+	// SnapshotID 是 ac_gb_cloud_record 中承载任务快照的软删除行。
+	SnapshotID int64
+}
 
 var (
 	downloadMu    sync.Mutex
-	downloadTasks = map[int64]*response.GbDownloadItem{}
+	downloadTasks = map[int64]*downloadTask{}
 	downloadSeq   atomic.Int64
+
+	downloadBootOnce sync.Once
 )
 
-// StartDownload 发起下载 INVITE 并登记内存任务。
+// NewGbPlaybackService 构造回放服务，并初始化下载任务的恢复/快照循环。
+func NewGbPlaybackService() *GbPlaybackService {
+	initDownloadTasks()
+	return &GbPlaybackService{}
+}
+
+// initDownloadTasks 只执行一次：从快照恢复任务 + 启动周期快照。
+func initDownloadTasks() {
+	downloadBootOnce.Do(func() {
+		restoreDownloadTasks(context.Background())
+		go downloadSnapshotLoop()
+	})
+}
+
+// StartDownload 发起下载 INVITE、登记任务并让 ZLM 开始录制。
 func (s *GbPlaybackService) StartDownload(ctx context.Context, req *request.GbDownloadReq) (*response.GbDownloadResp, error) {
 	if req == nil {
 		return nil, ErrPlaybackTimeInvalid
 	}
-	_, _, err := validateTimeWindow(req.StartTime, req.EndTime)
+	startTime, endTime, err := validateTimeWindow(req.StartTime, req.EndTime)
 	if err != nil {
 		return nil, err
 	}
@@ -694,9 +751,6 @@ func (s *GbPlaybackService) StartDownload(ctx context.Context, req *request.GbDo
 		return nil, err
 	}
 
-	// 下载会话建立后让 ZLM 把收到的 PS 流落成 MP4。
-	// 设备开始推流有时间差，StartRecord 对尚未创建的流会失败，
-	// 因此异步重试几次；失败只更新任务提示，不阻塞 HTTP 响应。
 	ms, err := resolveMediaServerForDevice(ctx, dev)
 	if err != nil {
 		_ = dlg.Bye(ctx)
@@ -704,36 +758,66 @@ func (s *GbPlaybackService) StartDownload(ctx context.Context, req *request.GbDo
 		return nil, err
 	}
 
+	now := time.Now()
+	totalSeconds := endTime.Sub(startTime).Seconds()
 	taskID := downloadSeq.Add(1)
-	go startDownloadRecording(taskID, ms, dlg.App, stream)
 
-	item := &response.GbDownloadItem{
-		ID:          taskID,
-		ChannelID:   ch.ID,
-		ChannelName: ch.Name,
-		DeviceID:    dev.ID,
-		DeviceName:  dev.Name,
-		StreamID:    dlg.CallID,
-		App:         dlg.App,
-		Stream:      stream,
-		SSRC:        ssrcStr,
-		StartTime:   req.StartTime,
-		EndTime:     req.EndTime,
-		Status:      "downloading",
-		Progress:    0,
-		CreatedDT:   time.Now(),
+	task := &downloadTask{
+		ID:            taskID,
+		ChannelID:     ch.ID,
+		ChannelName:   ch.Name,
+		DeviceID:      dev.ID,
+		DeviceName:    dev.Name,
+		StreamID:      dlg.CallID,
+		App:           dlg.App,
+		Stream:        stream,
+		SSRC:          ssrcStr,
+		StartTime:     req.StartTime,
+		EndTime:       req.EndTime,
+		Status:        downloadStatusDownloading,
+		Message:       "正在建立录制流",
+		CreatedDT:     now,
+		MediaServerID: ms.ServerID,
+		TotalSeconds:  totalSeconds,
 	}
-	// 说明：真实下载进度需要 ZLM 侧的文件写入回调（on_record_mp4），
-	// 本批次只维护会话状态，Progress 由后续批次接入回调后更新。
+
+	// 先落内部快照。失败只影响「重启后能否恢复任务列表」，不应阻断下载。
+	if row, rerr := createDownloadSnapshot(ctx, task, ch, dev, now); rerr != nil {
+		utils.Warn("[GB-DOWNLOAD] 写入下载任务快照失败（不影响本次下载）",
+			zap.Int64("task_id", taskID), zap.Error(rerr))
+	} else {
+		task.SnapshotID = row
+	}
+
+	// hook 落库时需要把 MP4 归属到设备/通道。
+	record.RegisterStreamOwner(record.StreamOwner{
+		App:           dlg.App,
+		Stream:        stream,
+		MediaServerID: ms.ServerID,
+		DeviceID:      dev.ID,
+		ChannelID:     ch.ID,
+	})
+
 	downloadMu.Lock()
-	downloadTasks[item.ID] = item
+	downloadTasks[taskID] = task
+	// 在启动后台 goroutine 之前生成响应快照，避免与状态更新并发读写。
+	item := task.toItem()
 	downloadMu.Unlock()
 
-	return &response.GbDownloadResp{GbDownloadItem: *item}, nil
+	maxSecond := int(totalSeconds)
+	if maxSecond < 1 {
+		maxSecond = 1
+	}
+	// 设备开始推流有时间差，StartRecord 对尚未创建的流会失败，异步重试。
+	go startDownloadRecording(taskID, ms, dlg.App, stream, maxSecond)
+	// 到点自动收尾：进程存活时任务一定能结束，不会永远停在 downloading。
+	go watchDownload(taskID, now.Add(time.Duration(totalSeconds)*time.Second))
+
+	return &response.GbDownloadResp{GbDownloadItem: item}, nil
 }
 
-// PageDownload 分页查询内存下载任务。
-func (s *GbPlaybackService) PageDownload(_ context.Context, req *request.PageGbDownloadReq, _ *utils.DataScope) (*response.PageGbDownloadResp, error) {
+// PageDownload 分页查询下载任务，并实时补全进度与已落盘大小。
+func (s *GbPlaybackService) PageDownload(ctx context.Context, req *request.PageGbDownloadReq, _ *utils.DataScope) (*response.PageGbDownloadResp, error) {
 	if req == nil {
 		req = &request.PageGbDownloadReq{}
 	}
@@ -741,12 +825,19 @@ func (s *GbPlaybackService) PageDownload(_ context.Context, req *request.PageGbD
 
 	downloadMu.Lock()
 	items := make([]response.GbDownloadItem, 0, len(downloadTasks))
+	serverIDs := make([]string, 0, len(downloadTasks))
 	for _, t := range downloadTasks {
-		items = append(items, *t)
+		items = append(items, t.toItem())
+		serverIDs = append(serverIDs, t.MediaServerID)
 	}
 	downloadMu.Unlock()
 
-	// 无数据库，排序在内存完成：任务量天然很小（单进程排障/补录场景）。
+	// 进度是查询时计算的：数据库里是已落盘片段的真实值，ZLM 提供当前流的
+	// 存活时长估算。任务量很小（单进程补录场景），逐个查询可以接受。
+	for i := range items {
+		s.fillDownloadProgress(ctx, &items[i], serverIDs[i])
+	}
+
 	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
 
 	kw := strings.ToLower(strings.TrimSpace(req.Keyword))
@@ -793,13 +884,26 @@ func (s *GbPlaybackService) StopDownload(ctx context.Context, id int64) error {
 	if task == nil {
 		return ErrGbDownloadNotFound
 	}
-	if task.Status != "downloading" {
-		return nil // 幂等
-	}
+	s.stopDownloadTask(ctx, task, downloadStatusStopped)
+	return nil
+}
 
-	// 先停录制再 BYE：BYE 后流可能立即消失，StopRecord 就找不到流了。
-	if ms, err := resolveMediaServerByKey(ctx, ""); err == nil && ms != nil {
-		_ = mediaserver.FromModel(ms).StopRecord(ctx, task.App, task.Stream, "")
+// stopDownloadTask 是 StopDownload 与自动收尾共用的停止逻辑。
+//
+// 顺序：先 stopRecord，再 BYE/close_streams。反过来流会立即消失，
+// ZLM 找不到流，最后一个 MP4 片段可能没有正常收尾、on_record_mp4 不回调。
+func (s *GbPlaybackService) stopDownloadTask(ctx context.Context, task *downloadTask, status string) {
+	downloadMu.Lock()
+	if task.Status != downloadStatusDownloading {
+		downloadMu.Unlock()
+		return
+	}
+	downloadMu.Unlock()
+
+	if ms, err := resolveMediaServerByKey(ctx, task.MediaServerID); err == nil && ms != nil {
+		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = mediaserver.FromModel(ms).StopRecord(rctx, task.App, task.Stream, "")
+		cancel()
 	}
 	if sipSvc, err := activeSipService(); err == nil {
 		if dlg, ok := sipSvc.Sessions().Get(task.StreamID); ok && dlg != nil {
@@ -808,27 +912,58 @@ func (s *GbPlaybackService) StopDownload(ctx context.Context, id int64) error {
 			sipSvc.ReleaseSSRC(task.SSRC)
 		}
 	}
+	// 延迟清理归属，给最后一个 on_record_mp4 回调留出落库时间。
+	record.UnregisterStreamOwnerAfter(task.Stream, 15*time.Second)
 
 	now := time.Now()
 	downloadMu.Lock()
-	task.Status = "stopped"
+	task.Status = status
 	task.StoppedDT = &now
+	if status == downloadStatusCompleted {
+		task.Message = "下载完成"
+	} else if task.Message == "" || task.Message == "正在建立录制流" || task.Message == "ZLM 录制中" {
+		// 保留「无法开始 ZLM 录制: ...」这类诊断信息，别用笼统的「已停止」盖掉。
+		task.Message = "已停止"
+	}
 	downloadMu.Unlock()
-	return nil
+
+	snapshotDownloadTask(context.Background(), task)
+}
+
+// watchDownload 在时间窗结束时自动停止任务。
+//
+// 多留 2 秒：StopRecord 之后 ZLM 才关闭 MP4 并回调 on_record_mp4，
+// 立刻做最终快照可能漏掉最后一个片段。
+func watchDownload(taskID int64, expectedEnd time.Time) {
+	d := time.Until(expectedEnd)
+	if d > 0 {
+		timer := time.NewTimer(d)
+		<-timer.C
+		timer.Stop()
+	}
+	downloadMu.Lock()
+	task := downloadTasks[taskID]
+	downloadMu.Unlock()
+	if task == nil {
+		return
+	}
+	// stopDownloadTask 内部会检查状态，重复调用（用户手动停止）是幂等的。
+	(&GbPlaybackService{}).stopDownloadTask(context.Background(), task, downloadStatusCompleted)
+	time.Sleep(2 * time.Second)
+	snapshotDownloadTask(context.Background(), task)
 }
 
 // startDownloadRecording 异步让 ZLM 开始录制下载流。
 //
-// 设备从 200 OK 到真正发 RTP 通常有几百毫秒到数秒的时差；立即调用
-// startRecord 大概率返回「流不存在」。这里按 1 秒间隔重试 5 次，
-// 全部失败才把原因写进任务提示。
-func startDownloadRecording(taskID int64, ms *model.GbMediaServer, app, stream string) {
+// maxSecond 设置为整个时间窗：ZLM 到点会自动切分片段并回调 on_record_mp4，
+// 进度与文件大小因此能分段得到真实值。
+func startDownloadRecording(taskID int64, ms *model.GbMediaServer, app, stream string, maxSecond int) {
 	client := mediaserver.FromModel(ms)
 	var lastErr error
 	for i := 0; i < 5; i++ {
 		time.Sleep(time.Second)
 		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		lastErr = client.StartRecord(rctx, app, stream, "", 0)
+		lastErr = client.StartRecord(rctx, app, stream, "", maxSecond)
 		cancel()
 		if lastErr == nil {
 			setDownloadMessage(taskID, "ZLM 录制中")
@@ -836,13 +971,382 @@ func startDownloadRecording(taskID int64, ms *model.GbMediaServer, app, stream s
 		}
 	}
 	setDownloadMessage(taskID, "无法开始 ZLM 录制: "+lastErr.Error())
+	// 录制没起来：把会话也收掉，避免设备一直推流到无人消费的端口。
+	if t := taskByID(taskID); t != nil {
+		(&GbPlaybackService{}).stopDownloadTask(context.Background(), t, downloadStatusStopped)
+	}
 }
 
 // setDownloadMessage 更新任务的提示文案。
 func setDownloadMessage(taskID int64, msg string) {
 	downloadMu.Lock()
-	if t := downloadTasks[taskID]; t != nil && t.Status == "downloading" {
+	if t := downloadTasks[taskID]; t != nil && t.Status == downloadStatusDownloading {
 		t.Message = msg
 	}
 	downloadMu.Unlock()
+}
+
+// ── 任务 → 响应 ───────────────────────────────────────────────
+
+func (t *downloadTask) toItem() response.GbDownloadItem {
+	if t == nil {
+		return response.GbDownloadItem{}
+	}
+	return response.GbDownloadItem{
+		ID:          t.ID,
+		ChannelID:   t.ChannelID,
+		ChannelName: t.ChannelName,
+		DeviceID:    t.DeviceID,
+		DeviceName:  t.DeviceName,
+		StreamID:    t.StreamID,
+		App:         t.App,
+		Stream:      t.Stream,
+		SSRC:        t.SSRC,
+		StartTime:   t.StartTime,
+		EndTime:     t.EndTime,
+		Status:      t.Status,
+		FilePath:    "",
+		Message:     t.Message,
+		CreatedDT:   t.CreatedDT,
+		StoppedDT:   t.StoppedDT,
+	}
+}
+
+// fillDownloadProgress 补齐单条任务的进度与文件大小。
+//
+// 数据来源：
+//   - file_size / time_len：ac_gb_cloud_record 中该流的普通行（on_record_mp4
+//     写入），是真实值；
+//   - 当前片段：ZLM getMediaList 的 aliveSecond，只能作为估算；
+//   - 两者都拿不到时 Progress 保持 nil（JSON null），前端显示「未知」，
+//     绝不能填 0 —— 那会把「设备没推流」误报成「刚开始下载」。
+func (s *GbPlaybackService) fillDownloadProgress(ctx context.Context, item *response.GbDownloadItem, mediaServerID string) {
+	db := bootstrap.DB()
+	if db == nil || item == nil || strings.TrimSpace(item.Stream) == "" {
+		return
+	}
+
+	type aggRow struct {
+		Size    int64 `gorm:"column:size"`
+		Seconds int64 `gorm:"column:seconds"`
+	}
+	var agg aggRow
+	err := db.WithContext(ctx).
+		Table("ac_gb_cloud_record").
+		Select("COALESCE(SUM(file_size),0) AS size, COALESCE(SUM(time_len),0) AS seconds").
+		Where("stream = ? AND deleted_at IS NULL", item.Stream).
+		Where("remark IS NULL OR remark NOT LIKE ?", downloadSnapshotPrefix+"%").
+		Scan(&agg).Error
+	if err != nil {
+		utils.Warn("[GB-DOWNLOAD] 汇总已落盘录像失败",
+			zap.String("stream", item.Stream), zap.Error(err))
+	}
+
+	if agg.Size > 0 {
+		item.FileSize = agg.Size
+	}
+
+	var latest struct {
+		FilePath string `gorm:"column:file_path"`
+	}
+	_ = db.WithContext(ctx).
+		Table("ac_gb_cloud_record").
+		Select("file_path").
+		Where("stream = ? AND deleted_at IS NULL", item.Stream).
+		Where("remark IS NULL OR remark NOT LIKE ?", downloadSnapshotPrefix+"%").
+		Order("start_time DESC NULLS LAST, id DESC").
+		Limit(1).Scan(&latest).Error
+	if latest.FilePath != "" {
+		item.FilePath = latest.FilePath
+	}
+
+	total := 0.0
+	if st, ok := parseGbTime(item.StartTime); ok {
+		if et, ok2 := parseGbTime(item.EndTime); ok2 {
+			total = et.Sub(st).Seconds()
+		}
+	}
+
+	liveSeconds := 0.0
+	liveKnown := false
+	if item.Status == downloadStatusDownloading {
+		if ms, err := resolveMediaServerByKey(ctx, mediaServerID); err == nil && ms != nil {
+			qctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			list, lerr := mediaserver.FromModel(ms).GetMediaList(qctx, item.App, item.Stream, "", "")
+			cancel()
+			if lerr == nil {
+				for _, m := range list {
+					if m.Stream == "" || m.Stream == item.Stream {
+						liveSeconds = float64(m.AliveSecond)
+						liveKnown = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	final := item.Status != downloadStatusDownloading
+	p, known := record.ComputeProgress(record.ProgressInput{
+		CompletedSeconds: float64(agg.Seconds),
+		LiveSeconds:      liveSeconds,
+		LiveKnown:        liveKnown,
+		TotalSeconds:     total,
+		Final:            final,
+	})
+	if known {
+		item.Progress = &p
+	} else {
+		item.Progress = nil
+	}
+}
+
+// ── 持久化快照 ────────────────────────────────────────────────
+
+// formatDownloadRemark 生成内部快照行的 Remark。
+func formatDownloadRemark(id int64, status, startTime, endTime string) string {
+	return fmt.Sprintf("%s%d|%s|%s|%s", downloadSnapshotPrefix, id, status, startTime, endTime)
+}
+
+// createDownloadSnapshot 写一条**软删除**的 ac_gb_cloud_record 作为任务快照。
+//
+// 软删除（deleted_at 非空）是这里的关键：GORM 的默认查询会自动排除它，
+// 因此云端录像列表/日期列表不会被内部任务行污染，无需改 repository。
+func createDownloadSnapshot(ctx context.Context, t *downloadTask, ch *model.GbChannel, dev *model.Device, now time.Time) (int64, error) {
+	db := bootstrap.DB()
+	if db == nil {
+		return 0, errors.New("数据库未初始化")
+	}
+	end := now.Add(time.Duration(t.TotalSeconds) * time.Second)
+	deviceID, channelID := dev.ID, ch.ID
+	row := &model.GbCloudRecord{
+		App:           t.App,
+		Stream:        t.Stream,
+		CallID:        t.StreamID,
+		DeviceID:      &deviceID,
+		ChannelID:     &channelID,
+		StartTime:     &now,
+		EndTime:       &end,
+		MediaServerID: t.MediaServerID,
+		Remark:        formatDownloadRemark(t.ID, t.Status, t.StartTime, t.EndTime),
+		DeptID:        ch.DeptID,
+	}
+	// 先创建再软删除：直接带 DeletedAt Create 也可以，但显式两步更清晰，
+	// 且能确保 created_dt 由数据库默认值/钩子正确填充。
+	if err := db.WithContext(ctx).Create(row).Error; err != nil {
+		return 0, err
+	}
+	if err := db.WithContext(ctx).Delete(&model.GbCloudRecord{}, row.ID).Error; err != nil {
+		return 0, err
+	}
+	return row.ID, nil
+}
+
+// updateDownloadSnapshot 用 Unscoped 更新软删除行（默认作用域会过滤掉它）。
+func updateDownloadSnapshot(ctx context.Context, id int64, updates map[string]any) error {
+	db := bootstrap.DB()
+	if db == nil || id <= 0 {
+		return nil
+	}
+	return db.WithContext(ctx).Unscoped().Model(&model.GbCloudRecord{}).
+		Where("id = ?", id).Updates(updates).Error
+}
+
+// snapshotDownloadTask 把任务状态与已落盘片段的合计写回快照行。
+//
+// 先在锁内拷贝可变字段，再做数据库/网络操作：避免长时间持锁，
+// 也避免与 StopDownload/定时快照并发读写 task 字段。
+func snapshotDownloadTask(ctx context.Context, t *downloadTask) {
+	if t == nil {
+		return
+	}
+	downloadMu.Lock()
+	id, snapID, stream := t.ID, t.SnapshotID, t.Stream
+	status, startTime, endTime := t.Status, t.StartTime, t.EndTime
+	downloadMu.Unlock()
+
+	if snapID <= 0 {
+		return
+	}
+	size, seconds, latest := aggregateStreamRecords(ctx, stream)
+	updates := map[string]any{
+		"remark":     formatDownloadRemark(id, status, startTime, endTime),
+		"file_size":  size,
+		"time_len":   seconds,
+		"updated_dt": time.Now(),
+	}
+	if latest != "" {
+		updates["file_path"] = latest
+	}
+	if err := updateDownloadSnapshot(ctx, snapID, updates); err != nil {
+		utils.Warn("[GB-DOWNLOAD] 更新下载任务快照失败",
+			zap.Int64("task_id", id), zap.Error(err))
+	}
+}
+
+// aggregateStreamRecords 汇总某个流已落盘录像的大小、时长与最近文件路径。
+func aggregateStreamRecords(ctx context.Context, stream string) (size, seconds int64, latest string) {
+	db := bootstrap.DB()
+	if db == nil || strings.TrimSpace(stream) == "" {
+		return 0, 0, ""
+	}
+	type aggRow struct {
+		Size    int64 `gorm:"column:size"`
+		Seconds int64 `gorm:"column:seconds"`
+	}
+	var agg aggRow
+	_ = db.WithContext(ctx).
+		Table("ac_gb_cloud_record").
+		Select("COALESCE(SUM(file_size),0) AS size, COALESCE(SUM(time_len),0) AS seconds").
+		Where("stream = ? AND deleted_at IS NULL", stream).
+		Where("remark IS NULL OR remark NOT LIKE ?", downloadSnapshotPrefix+"%").
+		Scan(&agg).Error
+	var row struct {
+		FilePath string `gorm:"column:file_path"`
+	}
+	_ = db.WithContext(ctx).
+		Table("ac_gb_cloud_record").Select("file_path").
+		Where("stream = ? AND deleted_at IS NULL", stream).
+		Where("remark IS NULL OR remark NOT LIKE ?", downloadSnapshotPrefix+"%").
+		Order("start_time DESC NULLS LAST, id DESC").Limit(1).Scan(&row).Error
+	return agg.Size, agg.Seconds, row.FilePath
+}
+
+// downloadSnapshotLoop 周期性把内存状态刷到快照行。
+func downloadSnapshotLoop() {
+	ticker := time.NewTicker(downloadSnapshotInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		downloadMu.Lock()
+		tasks := make([]*downloadTask, 0, len(downloadTasks))
+		for _, t := range downloadTasks {
+			// 同一个锁内筛选，避免快照已结束任务的过期状态。
+			if t.Status == downloadStatusDownloading {
+				tasks = append(tasks, t)
+			}
+		}
+		downloadMu.Unlock()
+		for _, t := range tasks {
+			snapshotDownloadTask(context.Background(), t)
+		}
+	}
+}
+
+// restoreDownloadTasks 从软删除快照恢复任务列表。
+//
+// 只在进程启动时执行一次。恢复出来的 downloading 任务被标记为 interrupted：
+// 原 SIP 会话与 ZLM 录制已经随上个进程结束，不能假装还在录。
+func restoreDownloadTasks(ctx context.Context) {
+	db := bootstrap.DB()
+	if db == nil {
+		return
+	}
+	// 清理 30 天前的内部快照（物理删除）：它们不属于用户数据，
+	// 留着只会让 ac_gb_cloud_record 随下载次数无限增长。
+	_ = db.WithContext(ctx).Unscoped().
+		Where("remark LIKE ?", downloadSnapshotPrefix+"%").
+		Where("start_time IS NOT NULL AND start_time < ?", time.Now().AddDate(0, 0, -30)).
+		Delete(&model.GbCloudRecord{}).Error
+
+	var rows []model.GbCloudRecord
+	err := db.WithContext(ctx).Unscoped().
+		Preload("Device").Preload("Channel").
+		Where("remark LIKE ?", downloadSnapshotPrefix+"%").
+		Order("id ASC").
+		Find(&rows).Error
+	if err != nil {
+		utils.Warn("[GB-DOWNLOAD] 恢复下载任务失败", zap.Error(err))
+		return
+	}
+
+	for i := range rows {
+		r := rows[i]
+		id, status, startTime, endTime, ok := parseDownloadRemark(r.Remark)
+		if !ok || id <= 0 {
+			continue
+		}
+
+		task := &downloadTask{
+			ID:           id,
+			StreamID:     r.CallID,
+			App:          r.App,
+			Stream:       r.Stream,
+			StartTime:    startTime,
+			EndTime:      endTime,
+			Status:       status,
+			Message:      "从快照恢复",
+			CreatedDT:    time.Now(),
+			SnapshotID:   r.ID,
+			TotalSeconds: 0,
+		}
+		if r.DeviceID != nil {
+			task.DeviceID = *r.DeviceID
+		}
+		if r.ChannelID != nil {
+			task.ChannelID = *r.ChannelID
+		}
+		if r.Device != nil {
+			task.DeviceName = r.Device.Name
+		}
+		if r.Channel != nil {
+			task.ChannelName = r.Channel.Name
+		}
+		if r.StartTime != nil {
+			task.CreatedDT = *r.StartTime
+		}
+		if r.MediaServerID != "" {
+			task.MediaServerID = r.MediaServerID
+		}
+		if st, ok := parseGbTime(startTime); ok {
+			if et, ok2 := parseGbTime(endTime); ok2 {
+				task.TotalSeconds = et.Sub(st).Seconds()
+			}
+		}
+		if ssrcStr, serr := ssrc.FromHexStream(r.Stream); serr == nil {
+			task.SSRC = ssrcStr
+		}
+
+		if status == downloadStatusDownloading {
+			task.Status = downloadStatusInterrupted
+			task.Message = "进程重启，下载会话已中断"
+			_ = updateDownloadSnapshot(context.Background(), r.ID, map[string]any{
+				"remark": formatDownloadRemark(task.ID, task.Status, task.StartTime, task.EndTime),
+			})
+		}
+
+		downloadMu.Lock()
+		if _, exists := downloadTasks[id]; !exists {
+			downloadTasks[id] = task
+		}
+		downloadMu.Unlock()
+
+		for {
+			cur := downloadSeq.Load()
+			if cur >= id || downloadSeq.CompareAndSwap(cur, id) {
+				break
+			}
+		}
+	}
+}
+
+// parseDownloadRemark 解析快照 Remark。
+func parseDownloadRemark(v string) (id int64, status, startTime, endTime string, ok bool) {
+	if !strings.HasPrefix(v, downloadSnapshotPrefix) {
+		return 0, "", "", "", false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(v, downloadSnapshotPrefix), "|", 4)
+	if len(parts) != 4 {
+		return 0, "", "", "", false
+	}
+	if _, err := fmt.Sscanf(parts[0], "%d", &id); err != nil {
+		return 0, "", "", "", false
+	}
+	return id, parts[1], parts[2], parts[3], true
+}
+
+// taskByID 返回任务快照（不存在时 nil）。
+func taskByID(id int64) *downloadTask {
+	downloadMu.Lock()
+	defer downloadMu.Unlock()
+	return downloadTasks[id]
 }

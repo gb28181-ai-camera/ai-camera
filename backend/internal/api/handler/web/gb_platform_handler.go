@@ -367,3 +367,84 @@ func (h *GbPlatformHandler) SetRegions(c *gin.Context) {
 	}
 	utils.Success(c, nil)
 }
+
+// ────────────────────────────────────────────────────────────────
+// 级联运行时（启动 / 停止 / 状态 / 手动推送目录）
+// ────────────────────────────────────────────────────────────────
+
+// CascadeStatus 查看级联运行状态
+//
+// @Summary      级联运行状态
+// @Description  返回级联信令服务是否在监听，以及各上级平台的注册/心跳状态
+// @Tags         GbPlatform
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  response.BaseResponse
+// @Router       /web/gb/platforms/cascade/status [get]
+// @ID           getGbPlatformCascadeStatus
+func (h *GbPlatformHandler) CascadeStatus(c *gin.Context) {
+	utils.Success(c, h.svc.CascadeSnapshot())
+}
+
+// StartCascade 启动级联服务
+//
+// @Summary      启动级联
+// @Description  绑定 gb28181.cascade.port 并开始向上级注册；需配置 cascade.enabled=true
+// @Tags         GbPlatform
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  response.BaseResponse
+// @Failure      400  {object}  response.BaseResponse
+// @Router       /web/gb/platforms/cascade/start [post]
+// @ID           startGbPlatformCascade
+func (h *GbPlatformHandler) StartCascade(c *gin.Context) {
+	if err := h.svc.StartCascade(c.Request.Context()); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.Success(c, h.svc.CascadeSnapshot())
+}
+
+// StopCascade 停止级联服务
+//
+// @Summary      停止级联
+// @Description  尽力向上级发送 Expires:0 注销，然后关闭级联监听
+// @Tags         GbPlatform
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  response.BaseResponse
+// @Router       /web/gb/platforms/cascade/stop [post]
+// @ID           stopGbPlatformCascade
+func (h *GbPlatformHandler) StopCascade(c *gin.Context) {
+	h.svc.StopCascade()
+	utils.Success(c, nil)
+}
+
+// PushCatalog 手动推送目录
+//
+// @Summary      手动推送目录
+// @Description  向上级发送一次完整的 Notify/Catalog（忽略 auto_push_channel 开关）
+// @Tags         GbPlatform
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "平台ID"
+// @Success      200  {object}  response.BaseResponse
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/gb/platforms/{id}/catalog-push [post]
+// @ID           pushGbPlatformCatalog
+func (h *GbPlatformHandler) PushCatalog(c *gin.Context) {
+	id, ok := gbPathID(c, "上级平台")
+	if !ok {
+		return
+	}
+	if _, err := h.svc.Get(c.Request.Context(), id); err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbPlatformNotFound)
+		return
+	}
+	if err := h.svc.PushCatalog(c.Request.Context(), id); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.Success(c, nil)
+}

@@ -98,10 +98,17 @@ func TestGbRecordPlanCRUDAndLinkChannels(t *testing.T) {
 		}); err == nil {
 			t.Fatalf("week_day 越界时应拒绝更新")
 		}
+		// 结束早于开始 = 跨天时段（22:00–06:00），现在必须允许；
+		// 只有起止相同（零长度窗口）才拒绝。
 		if err := svc.Update(ctx, plan.ID, &request.UpdateGbRecordPlanReq{
-			Items: []request.GbRecordPlanItemReq{{WeekDay: 1, StartTime: "18:00", EndTime: "08:00"}},
+			Items: []request.GbRecordPlanItemReq{{WeekDay: 1, StartTime: "22:00", EndTime: "06:00"}},
+		}); err != nil {
+			t.Fatalf("跨天时段应允许更新: %v", err)
+		}
+		if err := svc.Update(ctx, plan.ID, &request.UpdateGbRecordPlanReq{
+			Items: []request.GbRecordPlanItemReq{{WeekDay: 1, StartTime: "08:00", EndTime: "08:00"}},
 		}); err == nil {
-			t.Fatalf("结束早于开始时应拒绝更新")
+			t.Fatalf("起止相同时应拒绝更新")
 		}
 
 		// 通道绑定：计划关系存在 ac_gb_channel.record_plan_id

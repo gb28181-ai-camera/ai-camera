@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/boticz/ai-camera-backend/internal/api/router"
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/sipserver"
+	gbsvc "github.com/boticz/ai-camera-backend/internal/service/gb28181"
 )
 
 // @title           AI Camera 智能监控平台 API
@@ -29,8 +32,21 @@ func main() {
 	// 配置、数据库、JWT、Casbin 均在 bootstrap 包 init() 时完成装配
 	r := router.SetupRouter()
 
+	// 进程级上下文：用于停止后台 janitor。与 HTTP 请求上下文无关，
+	// 收到 SIGTERM 时统一 cancel。
+	appCtx, appCancel := context.WithCancel(context.Background())
+	defer appCancel()
+
 	cfg := bootstrap.Config()
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
+
+	// 信令日志 janitor：默认保留 30 天，每天执行一次。
+	// 放在 HTTP 服务启动前注册，保证即使 HTTP 端口被占用也能在日志里看到清理任务。
+	if bootstrap.DB() != nil {
+		go startSipLogJanitor(appCtx, gbsvc.NewGbSipLogService(), sipLogRetentionDays())
+	} else {
+		log.Println("数据库未初始化，跳过信令日志清理任务")
+	}
 
 	// 开发期便利（设计 §3.2）：gb28181.embedded=true 时把 SIP 信令内嵌进本进程，
 	// 一条命令即可与 tools/gbsim 端到端联调。生产环境应改用独立的 cmd/sipsvc
@@ -72,6 +88,9 @@ func main() {
 	<-quit
 	log.Println("正在关闭服务...")
 
+	// 先停后台任务，再停 HTTP：避免 janitor 在连接池关闭后还在执行清理。
+	appCancel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if sipSvc != nil {
@@ -81,4 +100,68 @@ func main() {
 		log.Fatalf("服务关闭异常: %v", err)
 	}
 	log.Println("服务已退出")
+}
+
+// sipLogRetentionDays 读取 SIP_LOG_RETENTION_DAYS，默认 30 天。
+//
+// 为什么不放进 config 结构：这是一个纯运维参数，且只被 janitor 使用；
+// 为一个整数扩展 Config + 模板 + 文档的收益很低。非法值必须显式回退并打印，
+// 不能静默使用 0（0 会被 Cleanup 当成默认值，看似正常，实则掩盖了配置错误）。
+func sipLogRetentionDays() int {
+	raw := strings.TrimSpace(os.Getenv("SIP_LOG_RETENTION_DAYS"))
+	if raw == "" {
+		return gbsvc.DefaultSipLogRetentionDays
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Printf("SIP_LOG_RETENTION_DAYS=%q 非法，回退到默认 %d 天", raw, gbsvc.DefaultSipLogRetentionDays)
+		return gbsvc.DefaultSipLogRetentionDays
+	}
+	return n
+}
+
+// startSipLogJanitor 启动信令日志清理循环。
+//
+// 首次延迟 10 分钟：进程刚启动时正在做 AutoMigrate、Casbin 装载与设备重注册，
+// 此时再压一个大表 DELETE 会放大启动抖动。10 分钟后系统已稳定，再开始清理。
+// 之后按 24 小时周期执行；单次清理有 30 分钟超时，避免慢查询把 janitor 永久卡住。
+func startSipLogJanitor(ctx context.Context, svc *gbsvc.GbSipLogService, retentionDays int) {
+	const (
+		interval   = 24 * time.Hour
+		firstDelay = 10 * time.Minute
+		runTimeout = 30 * time.Minute
+	)
+
+	log.Printf("信令日志清理任务已启动：保留 %d 天，周期 %s，首次延迟 %s",
+		retentionDays, interval, firstDelay)
+
+	first := time.NewTimer(firstDelay)
+	defer first.Stop()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	run := func() {
+		runCtx, cancel := context.WithTimeout(ctx, runTimeout)
+		defer cancel()
+		start := time.Now()
+		n, err := svc.Cleanup(runCtx, retentionDays)
+		if err != nil {
+			log.Printf("信令日志清理未完成（保留 %d 天，已删除 %d 行）: %v", retentionDays, n, err)
+			return
+		}
+		log.Printf("信令日志清理完成：保留 %d 天，删除 %d 行，耗时 %s",
+			retentionDays, n, time.Since(start).Round(time.Millisecond))
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("信令日志清理任务已停止")
+			return
+		case <-first.C:
+			run()
+		case <-ticker.C:
+			run()
+		}
+	}
 }

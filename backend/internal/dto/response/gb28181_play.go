@@ -36,6 +36,11 @@ type GbPlayResp struct {
 	MediaServerID string `json:"media_server_id" example:"zlm-1"`
 	// StreamID 会话标识（SIP Call-ID），停止播放时回传。
 	StreamID string `json:"stream_id" example:"34020000002000000001-1750000000000-abcd"`
+	// Codec 实际协商到的视频编码，如 H264 / H265。
+	//
+	// 来自 ZLM getMediaInfo 的 tracks.codec_id_name，用于前端展示与排障；
+	// 查询失败时留空（不影响播放本身），后端只记 WARN。
+	Codec string `json:"codec" example:"H264"`
 }
 
 // RGbPlay 实时点播响应。

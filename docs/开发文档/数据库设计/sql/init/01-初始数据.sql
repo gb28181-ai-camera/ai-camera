@@ -1721,6 +1721,9 @@ INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, pl
 SELECT 12115, '1211', 4, '生成激活凭证', '', '', '', 'button', 'pc', 'gb:device:activation', '按钮', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12115);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12116, '1211', 4, '设备诊断', '', '', '', 'button', 'pc', 'gb:device:diagnose', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12116);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
 SELECT 12121, '1212', 4, '编辑通道', '', '', '', 'button', 'pc', 'gb:channel:update', '按钮', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12121);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
@@ -2264,6 +2267,9 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/ap
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 617, 12211, 'POST', '/web/gb/ptz/:channelId/presets/:presetId/goto', '调用预置位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/ptz/:channelId/presets/:presetId/goto');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 618, 12116, 'POST', '/web/gb/devices/:id/diagnose', '设备可达性与 NAT 诊断', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/devices/:id/diagnose');
 
 -- ── 12.6 角色授权：super_admin（角色 1）──────────────────────
 --     国标菜单 / 按钮的 permission_code 以 gb: 前缀标识，
@@ -2330,6 +2336,38 @@ SELECT 1, TRUE, '本地 ZLMediaKit', 'ai-camera-zlm-01', 'zlm', '127.0.0.1', 'ho
     '/opt/media/bin/www/record', 7, FALSE, 15, TRUE, FALSE,
     'seed 默认节点，与 deploy/zlm/config.ini 的 mediaServerId 对应', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_gb_media_server WHERE server_id = 'ai-camera-zlm-01');
+
+-- ── 12.7d 级联运行时动作（启动 / 停止 / 手动推送目录）────────
+--     级联从「配置 CRUD」升级为可用后新增的 4 个端点。
+--     status 挂在上级平台列表菜单（1251）下；其余三个是按钮型菜单。
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12518, '1251', 4, '启动级联', '', '', '', 'button', 'pc', 'gb:platform:cascade-start', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:platform:cascade-start');
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12519, '1251', 4, '停止级联', '', '', '', 'button', 'pc', 'gb:platform:cascade-stop', '按钮', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:platform:cascade-stop');
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12520, '1251', 4, '推送目录', '', '', '', 'button', 'pc', 'gb:platform:catalog-push', '按钮', 8, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:platform:catalog-push');
+
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 619, 1251, 'GET', '/web/gb/platforms/cascade/status', '查询级联运行状态', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/platforms/cascade/status');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 620, 12518, 'POST', '/web/gb/platforms/cascade/start', '启动级联服务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/platforms/cascade/start');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 621, 12519, 'POST', '/web/gb/platforms/cascade/stop', '停止级联服务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/platforms/cascade/stop');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 622, 12520, 'POST', '/web/gb/platforms/:id/catalog-push', '手动推送级联目录', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/platforms/:id/catalog-push');
+
+-- 新增按钮同样要授权给 super_admin，否则前端 permCodes 里没有对应权限码。
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT 1, m.id FROM ac_menu m
+WHERE m.id IN (12518, 12519, 12520)
+  AND NOT EXISTS (SELECT 1 FROM ac_role_menu_rel r WHERE r.role_id = 1 AND r.menu_id = m.id);
 
 -- ── 12.8 重建 Casbin p 策略 + 序列对齐 ───────────────────────
 --     ac_menu_api 是 p 策略的唯一来源，新增接口必须重新派生，

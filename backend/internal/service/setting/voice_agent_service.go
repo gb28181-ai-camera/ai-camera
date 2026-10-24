@@ -70,6 +70,32 @@ const (
 // voiceSecretKeys 只写不读的键。
 var voiceSecretKeys = []string{voiceSTTAPIKey, voiceLLMAPIKey, voiceTTSAPIKey, voicePipecatToken}
 
+// voiceExtraPrefix 扩展参数落库前缀。
+//
+// 前端提交的扩展参数键（如 tts 的 model、azure 的 region）直接落库会与上面的
+// 固定键同名冲突（例如 model 本身不是固定键，但换 provider 后语义不同）。
+// 统一加 param_ 前缀隔离；读接口返回时再剥掉前缀，前端无感知。
+const voiceExtraPrefix = "param_"
+
+// isSensitiveExtraKey 判断扩展参数是否敏感。
+//
+// 后端不读取 VoiceProvider.param_schema（那会引入一次额外查询，而且 schema
+// 只在前端用于渲染），因此按命名约定判断：包含 key/token/secret/password
+// 的扩展参数一律按 secret 存储并在读接口脱敏，宁可多脱敏也不泄露凭证。
+func isSensitiveExtraKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	if k == "" {
+		return false
+	}
+	return strings.Contains(k, "api_key") ||
+		strings.Contains(k, "apikey") ||
+		strings.Contains(k, "token") ||
+		strings.Contains(k, "secret") ||
+		strings.Contains(k, "password") ||
+		strings.HasSuffix(k, "_key") ||
+		k == "key"
+}
+
 // voiceKeyNames 配置项展示名（写入 ac_thirdparty_config.name）。
 var voiceKeyNames = map[string]string{
 	voiceSTTProvider: "STT Provider", voiceSTTModel: "STT 模型",
@@ -142,7 +168,30 @@ func (s *VoiceAgentService) Get(ctx context.Context) (*response.VoiceAgentConfig
 
 		PipecatEndpoint: values[voicePipecatEndpoint],
 		PipecatToken:    maskIfSecret(voicePipecatToken, values[voicePipecatToken], secrets[voicePipecatToken]),
+
+		ExtraParams: collectVoiceExtras(values, secrets),
 	}, nil
+}
+
+// collectVoiceExtras 提取 param_ 前缀的扩展参数，并对敏感键脱敏。
+//
+// 返回的键已去掉 param_ 前缀，前端可直接按 param_schema 的 key 回填。
+func collectVoiceExtras(values map[string]string, secrets map[string]bool) map[string]string {
+	extras := make(map[string]string)
+	for code, value := range values {
+		if !strings.HasPrefix(code, voiceExtraPrefix) {
+			continue
+		}
+		key := strings.TrimPrefix(code, voiceExtraPrefix)
+		if key == "" {
+			continue
+		}
+		extras[key] = maskIfSecret(code, value, secrets[code])
+	}
+	if len(extras) == 0 {
+		return nil
+	}
+	return extras
 }
 
 // GetVoiceAgent 是 Get 的语义别名（任务清单中的命名）。
@@ -206,6 +255,30 @@ func (s *VoiceAgentService) Update(ctx context.Context, req *request.UpdateVoice
 
 	addStr(voicePipecatEndpoint, req.PipecatEndpoint)
 	addStr(voicePipecatToken, req.PipecatToken)
+
+	// 扩展参数：原样落库，仅加 param_ 前缀避免与固定键冲突。
+	//
+	// 这里直接调用 repo.Upsert，而不是塞进 items 走 saveThirdParty：
+	// saveThirdParty 的 secret 标记只认包级 sensitiveCodes（进程启动时静态注册），
+	// 动态写入该 map 会在并发请求下产生数据竞争。直接传 secret 参数更安全，
+	// 后续 Get 通过 ac_thirdparty_config.secret 列继续脱敏。
+	// 空值与脱敏串的跳过语义与 saveThirdParty 保持一致。
+	for key, value := range req.ExtraParams {
+		k := strings.TrimSpace(key)
+		if k == "" {
+			continue
+		}
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" || strings.Contains(trimmed, "****") {
+			continue
+		}
+		code := voiceExtraPrefix + k
+		if err := s.base.repo.UpsertThirdPartyConfig(
+			ctx, CategoryVoiceAgent, code, "扩展参数 "+k, trimmed, isSensitiveExtraKey(k),
+		); err != nil {
+			return err
+		}
+	}
 
 	return s.base.saveThirdParty(ctx, CategoryVoiceAgent, items)
 }
@@ -361,6 +434,12 @@ func (s *VoiceAgentService) Apply(ctx context.Context) error {
 	payload := make(map[string]string, len(values))
 	for k, v := range values {
 		if k == voicePipecatEndpoint || k == voicePipecatToken {
+			continue
+		}
+		// 扩展参数落库时加了 param_ 前缀；下发给 Pipecat 时还原为原始键，
+		// 否则 Pipecat 侧会多出一个无法识别的 param_<name> 字段。
+		if strings.HasPrefix(k, voiceExtraPrefix) {
+			payload[strings.TrimPrefix(k, voiceExtraPrefix)] = v
 			continue
 		}
 		payload[k] = v

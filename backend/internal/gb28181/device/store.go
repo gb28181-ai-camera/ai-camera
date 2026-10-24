@@ -28,6 +28,8 @@ type Store interface {
 
 	FindChannel(ctx context.Context, gbChannelID string) (*model.GbChannel, error)
 	UpsertChannel(ctx context.Context, ch *model.GbChannel) error
+	// UpdateChannel 局部更新通道，供目录事件（ON/OFF/DEL/VLOST）修改状态用。
+	UpdateChannel(ctx context.Context, id int64, fields map[string]interface{}) error
 	CountChannels(ctx context.Context, deviceID int64) (int64, error)
 
 	CreateSipLog(ctx context.Context, entry *model.GbSipLog) error
@@ -61,6 +63,11 @@ func (s *GbStore) FindChannel(ctx context.Context, gbChannelID string) (*model.G
 // UpsertChannel 按国标编码 upsert 通道。
 func (s *GbStore) UpsertChannel(ctx context.Context, ch *model.GbChannel) error {
 	return repository.NewGbChannelRepo().UpsertByGbChannelID(ctx, ch)
+}
+
+// UpdateChannel 局部更新通道字段。
+func (s *GbStore) UpdateChannel(ctx context.Context, id int64, fields map[string]interface{}) error {
+	return repository.NewGbChannelRepo().UpdateFields(ctx, id, fields)
 }
 
 // CountChannels 统计设备下的通道数。

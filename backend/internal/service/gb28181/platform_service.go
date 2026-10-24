@@ -1,29 +1,39 @@
 package gb28181
 
-// 国标级联：本平台作为下级，向上级平台注册/推送目录。
+// 国标级联：本平台作为下级，向上级平台注册/推送目录/接受点播。
 //
-// ★ 本批次边界：**只做配置与映射表的 CRUD**。
-//   - 不向上级平台发起 REGISTER / SUBSCRIBE；
-//   - 不推送 Catalog；
-//   - 不处理上级的 INVITE。
+// 本文件负责「配置面」的 CRUD 与**级联运行时的启停/状态**；SIP 交互本身
+// 在 internal/gb28181/platform 包中实现（独立端口的 sipgo UA）。
 //
-// 这些 SIP 交互依赖级联专用的对话框与目录组装，属于后续批次。本文件把
-// 「上级平台 + 可见通道 + 可见分组/区域」的配置维护完整，保证 SIP 层接入时
-// 数据已经就绪；不做任何「看起来已级联」的假动作。
+// 生命周期约定：
+//   - config.gb28181.cascade.enabled=true 时，首个 GbPlatformService 构造
+//     会在后台自动拉起级联服务（不阻塞 HTTP 启动）；
+//   - 管理员也可以通过 /web/gb/platforms/cascade/start|stop 显式控制；
+//   - 平台/映射表变更后调用 ReloadCascade 对账，必要时主动推送目录。
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
 	"github.com/boticz/ai-camera-backend/internal/dto/response"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/platform"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/internal/repository"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
 	"gorm.io/gorm"
+)
+
+// 级联服务是进程级单例：一个端口只能绑定一次，多个 handler 实例必须共享。
+var (
+	cascadeMu  sync.Mutex
+	cascadeSvc *platform.Service
 )
 
 var (
@@ -46,13 +56,132 @@ type GbPlatformService struct {
 }
 
 // NewGbPlatformService 构造级联平台服务。
+//
+// 配置开启时在后台自动拉起级联 SIP 服务：这里不能同步 Start ——
+// 首次绑定端口 + 读取平台列表会给第一个 HTTP 请求带来秒级延迟，
+// 而且级联不可用不应阻塞管理后台启动。
 func NewGbPlatformService() *GbPlatformService {
-	return &GbPlatformService{
+	s := &GbPlatformService{
 		repo:      repository.NewGbPlatformRepo(),
 		chanRepo:  repository.NewGbPlatformChannelRepo(),
 		groupRepo: repository.NewGbPlatformGroupRepo(),
 		regRepo:   repository.NewGbPlatformRegionRepo(),
 	}
+	s.autoStartCascade()
+	return s
+}
+
+// autoStartCascade 读取全局配置并在后台启动级联（幂等）。
+func (s *GbPlatformService) autoStartCascade() {
+	cfg := bootstrap.Config()
+	if cfg == nil || !cfg.GB28181.Cascade.Enabled {
+		return
+	}
+	go func() {
+		if err := s.StartCascade(context.Background()); err != nil {
+			slog.Default().Error("级联服务自动启动失败", "error", err)
+		}
+	}()
+}
+
+// StartCascade 启动级联 SIP 服务（幂等）。
+//
+// config.gb28181.cascade.enabled=false 时拒绝启动：这是「配置开关」与
+// 「按钮动作」的一致性要求，避免管理员绕过配置文件把端口偷偷打开。
+func (s *GbPlatformService) StartCascade(ctx context.Context) error {
+	cascadeMu.Lock()
+	defer cascadeMu.Unlock()
+	if cascadeSvc != nil && cascadeSvc.Running() {
+		return nil
+	}
+	cfg, err := platform.FromAppConfig(bootstrap.Config(), slog.Default())
+	if err != nil {
+		return err
+	}
+	if !cfg.Enabled {
+		return errors.New("级联未启用：请先设置 gb28181.cascade.enabled=true")
+	}
+	svc, err := platform.New(cfg, nil)
+	if err != nil {
+		return err
+	}
+	if err := svc.Start(ctx); err != nil {
+		return err
+	}
+	cascadeSvc = svc
+	return nil
+}
+
+// StopCascade 停止级联服务；未启动时为空操作。
+func (s *GbPlatformService) StopCascade() {
+	cascadeMu.Lock()
+	svc := cascadeSvc
+	cascadeSvc = nil
+	cascadeMu.Unlock()
+	if svc != nil {
+		svc.Stop()
+	}
+}
+
+// CascadeSnapshot 返回级联运行状态。
+func (s *GbPlatformService) CascadeSnapshot() platform.Snapshot {
+	cascadeMu.Lock()
+	svc := cascadeSvc
+	cascadeMu.Unlock()
+	if svc == nil {
+		// 返回空数组而不是 null：前端渲染表格时无需再判空。
+		return platform.Snapshot{Platforms: []platform.Status{}}
+	}
+	return svc.Snapshot()
+}
+
+// ReloadCascade 按数据库对账（新增/删除/改配置的平台）。
+//
+// 异步执行：对账可能包含对不可达上级的 Expires:0 注销（每个最多数秒），
+// 不能让管理后台的保存按钮等它；同时请求 context 在响应返回后就取消了，
+// 因此后台任务必须换用带超时的独立 context。
+func (s *GbPlatformService) ReloadCascade(_ context.Context) {
+	cascadeMu.Lock()
+	svc := cascadeSvc
+	cascadeMu.Unlock()
+	if svc == nil || !svc.Running() {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := svc.Reload(ctx); err != nil {
+			slog.Default().Warn("级联平台对账失败", "error", err)
+		}
+	}()
+}
+
+// ReloadAndNotify 在目录映射变化后对账并触发一次主动推送（同样异步）。
+func (s *GbPlatformService) ReloadAndNotify(_ context.Context, platformID int64) {
+	cascadeMu.Lock()
+	svc := cascadeSvc
+	cascadeMu.Unlock()
+	if svc == nil || !svc.Running() {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := svc.ReloadAndNotify(ctx, platformID); err != nil {
+			slog.Default().Warn("级联目录推送失败", "platform_id", platformID, "error", err)
+		}
+	}()
+}
+
+// PushCatalog 手动向上级推送一次目录（忽略 auto_push_channel 开关）。
+func (s *GbPlatformService) PushCatalog(ctx context.Context, platformID int64) error {
+	cascadeMu.Lock()
+	svc := cascadeSvc
+	cascadeMu.Unlock()
+	if svc == nil || !svc.Running() {
+		return errors.New("级联服务未启动")
+	}
+	return svc.NotifyCatalog(ctx, platformID, true)
 }
 
 // Page 上级平台分页。
@@ -161,6 +290,8 @@ func (s *GbPlatformService) Create(ctx context.Context, req *request.CreateGbPla
 	if err := s.repo.Create(ctx, m); err != nil {
 		return nil, err
 	}
+	// 新增平台立即开始注册（级联服务未启动时是空操作）。
+	s.ReloadCascade(ctx)
 	// 返回值用于前端回显：密码不能以明文回传（契约 §10.0-2）。
 	m.Password = utils.MaskSecret(m.Password)
 	return m, nil
@@ -251,7 +382,12 @@ func (s *GbPlatformService) Update(ctx context.Context, id int64, req *request.U
 	setBool("active", req.Active)
 	setBool("enable", req.Enable)
 
-	return s.repo.UpdateFields(ctx, id, fields)
+	if err := s.repo.UpdateFields(ctx, id, fields); err != nil {
+		return err
+	}
+	// 配置变更（地址/凭证/有效期）需要重建注册协程。
+	s.ReloadCascade(ctx)
+	return nil
 }
 
 // Delete 删除上级平台，并级联清理通道/分组/区域映射。
@@ -262,7 +398,7 @@ func (s *GbPlatformService) Delete(ctx context.Context, id int64) error {
 	if _, err := s.getByID(ctx, id); err != nil {
 		return err
 	}
-	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 映射表是纯关联行，没有独立生命周期；物理删除可避免
 		// (platform_id, group_id) 这类**非 partial** 唯一索引被软删除行长期占用。
 		if err := tx.Unscoped().Where("platform_id = ?", id).Delete(&model.GbPlatformChannel{}).Error; err != nil {
@@ -276,6 +412,12 @@ func (s *GbPlatformService) Delete(ctx context.Context, id int64) error {
 		}
 		return tx.Delete(&model.GbPlatform{}, id).Error
 	})
+	if err != nil {
+		return err
+	}
+	// 对账会停掉该平台的注册协程（Reload 中按 seen 集合回收）。
+	s.ReloadCascade(ctx)
+	return nil
 }
 
 // PageChannel 某上级平台下的级联通道分页。
@@ -387,7 +529,7 @@ func (s *GbPlatformService) AddChannel(ctx context.Context, platformID int64, ch
 		return errors.New("请选择要添加的通道")
 	}
 
-	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, channelID := range ids {
 			var ch model.GbChannel
 			if err := tx.First(&ch, channelID).Error; err != nil {
@@ -434,6 +576,12 @@ func (s *GbPlatformService) AddChannel(ctx context.Context, platformID int64, ch
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// 目录映射变化后按 auto_push_channel 主动推送一次（未启用则静默跳过）。
+	s.ReloadAndNotify(ctx, platformID)
+	return nil
 }
 
 // RemoveChannel 从上级平台目录中移除通道（幂等）。
@@ -445,9 +593,13 @@ func (s *GbPlatformService) RemoveChannel(ctx context.Context, platformID int64,
 	if len(ids) == 0 {
 		return errors.New("请选择要移除的通道")
 	}
-	return bootstrap.DB().WithContext(ctx).
+	if err := bootstrap.DB().WithContext(ctx).
 		Where("platform_id = ? AND channel_id IN ?", platformID, ids).
-		Delete(&model.GbPlatformChannel{}).Error
+		Delete(&model.GbPlatformChannel{}).Error; err != nil {
+		return err
+	}
+	s.ReloadAndNotify(ctx, platformID)
+	return nil
 }
 
 // UpdateChannelCustom 修改通道在上级平台的定制信息。
@@ -509,8 +661,12 @@ func (s *GbPlatformService) UpdateChannelCustom(ctx context.Context, platformID,
 	if len(fields) == 0 {
 		return nil
 	}
-	return bootstrap.DB().WithContext(ctx).Model(&model.GbPlatformChannel{}).
-		Where("id = ?", row.ID).Updates(fields).Error
+	if err := bootstrap.DB().WithContext(ctx).Model(&model.GbPlatformChannel{}).
+		Where("id = ?", row.ID).Updates(fields).Error; err != nil {
+		return err
+	}
+	s.ReloadAndNotify(ctx, platformID)
+	return nil
 }
 
 // SetGroups 设置「按分组推送目录」的可见范围。
@@ -526,7 +682,7 @@ func (s *GbPlatformService) SetGroups(ctx context.Context, platformID int64, gro
 	if err := validateIDsExist(ctx, &model.GbGroup{}, ids); err != nil {
 		return err
 	}
-	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().Where("platform_id = ?", platformID).
 			Delete(&model.GbPlatformGroup{}).Error; err != nil {
 			return err
@@ -540,6 +696,11 @@ func (s *GbPlatformService) SetGroups(ctx context.Context, platformID int64, gro
 		}
 		return tx.Create(&rows).Error
 	})
+	if err != nil {
+		return err
+	}
+	s.ReloadAndNotify(ctx, platformID)
+	return nil
 }
 
 // SetRegions 设置「按区域推送目录」的可见范围（同 SetGroups，绕开非 partial 唯一索引）。
@@ -551,7 +712,7 @@ func (s *GbPlatformService) SetRegions(ctx context.Context, platformID int64, re
 	if err := validateIDsExist(ctx, &model.Region{}, ids); err != nil {
 		return err
 	}
-	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().Where("platform_id = ?", platformID).
 			Delete(&model.GbPlatformRegion{}).Error; err != nil {
 			return err
@@ -565,6 +726,11 @@ func (s *GbPlatformService) SetRegions(ctx context.Context, platformID int64, re
 		}
 		return tx.Create(&rows).Error
 	})
+	if err != nil {
+		return err
+	}
+	s.ReloadAndNotify(ctx, platformID)
+	return nil
 }
 
 // validateIDsExist 校验一组主键是否都存在，避免写入指向不存在实体的映射。

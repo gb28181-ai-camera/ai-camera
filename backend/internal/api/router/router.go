@@ -1,8 +1,11 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/boticz/ai-camera-backend/internal/api/middleware"
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/metrics"
 	"github.com/gin-gonic/gin"
 )
 
@@ -33,6 +36,15 @@ func SetupRouter() *gin.Engine {
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok", "version": "v0.1.0"})
+	})
+
+	// Prometheus 抓取端点。
+	//
+	// 刻意不挂 JWT / Casbin：Prometheus 没有用户会话，且 /metrics 不返回业务数据。
+	// 生产环境必须由网络层限制来源（K8s NetworkPolicy / Ingress 白名单），
+	// 不要把该路径暴露到公网 —— 指标会泄露设备规模与故障形态。
+	r.GET("/metrics", func(c *gin.Context) {
+		c.Data(http.StatusOK, metrics.ContentType, []byte(metrics.Render()))
 	})
 
 	// 注册管理后台（含官网同源接口）路由

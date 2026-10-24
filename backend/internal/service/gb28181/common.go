@@ -41,7 +41,7 @@ var (
 	// ErrGbDeviceIDExists 国标编码已被其他设备占用。
 	ErrGbDeviceIDExists = errors.New("国标编码已被占用")
 	// ErrGbSubscribeTypeInvalid 订阅类型非法。
-	ErrGbSubscribeTypeInvalid = errors.New("订阅类型非法，仅支持 catalog/alarm/mobile_position")
+	ErrGbSubscribeTypeInvalid = errors.New("订阅类型非法，仅支持 catalog/alarm/mobile_position/ptz_position")
 
 	// ErrGbChannelNotFound 国标通道不存在。
 	ErrGbChannelNotFound = errors.New("国标通道不存在")

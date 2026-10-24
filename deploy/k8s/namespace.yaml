@@ -1,0 +1,10 @@
+# AI Camera 命名空间。
+#
+# 生产环境可按环境改名（ai-camera-prod / ai-camera-dev），
+# 修改后需同步 kustomization.yaml 的 namespace 字段。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-camera
+  labels:
+    app.kubernetes.io/part-of: ai-camera

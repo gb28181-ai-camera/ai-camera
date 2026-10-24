@@ -18,6 +18,8 @@ import (
 	"github.com/boticz/ai-camera-backend/internal/gb28181/play"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/internal/repository"
+	"github.com/boticz/ai-camera-backend/pkg/utils"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -146,7 +148,84 @@ func (s *GbPlayService) Play(ctx context.Context, channelID int64, req *request.
 	if err != nil {
 		return nil, mapLivePlayErr(err)
 	}
-	return toGbPlayResp(res), nil
+
+	resp := toGbPlayResp(res)
+	// 流已就绪，向 ZLM 读一次实际的视频编码（GB28181-2022 的 H.264/H.265 协商结果）。
+	// 失败只留空并告警：编码是「锦上添花」的展示字段，不能让它把已经播通的流判成失败。
+	resp.Codec = probePlayCodec(ctx, dev, res)
+	return resp, nil
+}
+
+// codecProbeTimeout 是 getMediaInfo 探测的上限。
+//
+// 取 2s 而不是沿用 ZLM 客户端的 10s：此时流已经就绪并即将返回前端，
+// 为了一个展示字段把 HTTP 请求再挂 10 秒不可接受。
+const codecProbeTimeout = 2 * time.Second
+
+// probePlayCodec 读取 ZLM 流信息里的视频编码名（如 H264 / H265）。
+//
+// 为什么用 getMediaInfo 而不是解析设备 200 OK 的 SDP：
+// SDP 里通告的是**能力列表**（PS/H264/H265 可能全在），实际推流始终是 PS 封装；
+// 只有 ZLM 解封装后的 tracks.codec_id_name 才是真实的视频编码。
+func probePlayCodec(ctx context.Context, dev *model.Device, res *play.Result) string {
+	if res == nil || strings.TrimSpace(res.Stream) == "" {
+		return ""
+	}
+	client, _, err := play.ResolveMediaServer(ctx, dev)
+	if err != nil {
+		utils.Warn("编码探测：解析流媒体节点失败",
+			zap.String("stream", res.Stream), zap.Error(err))
+		return ""
+	}
+
+	pctx, cancel := context.WithTimeout(ctx, codecProbeTimeout)
+	defer cancel()
+	info, err := client.GetMediaInfo(pctx, res.App, res.Stream, "", "")
+	if err != nil {
+		utils.Warn("编码探测：getMediaInfo 失败（不影响播放）",
+			zap.String("stream", res.Stream), zap.Error(err))
+		return ""
+	}
+	if info == nil {
+		utils.Warn("编码探测：ZLM 未返回流信息（不影响播放）",
+			zap.String("stream", res.Stream))
+		return ""
+	}
+	return codecFromTracks(info.Tracks)
+}
+
+// codecFromTracks 从轨道列表里挑出视频编码；没有视频轨时回落到音频。
+//
+// ZLM 的 codec_type：0 = 视频、1 = 音频。codec_id_name 通常是 H264 / H265 / AAC，
+// 个别版本会返回 AVC / HEVC 这类别名，统一归一成国标常用的写法。
+func codecFromTracks(tracks []mediaserver.MediaTrack) string {
+	audio := ""
+	for _, tr := range tracks {
+		name := normalizeCodecName(tr.CodecIDName)
+		if name == "" {
+			continue
+		}
+		if tr.CodecType == 0 {
+			return name
+		}
+		if audio == "" {
+			audio = name
+		}
+	}
+	return audio
+}
+
+// normalizeCodecName 把编码别名归一成大写标准名。
+func normalizeCodecName(name string) string {
+	v := strings.ToUpper(strings.TrimSpace(name))
+	switch v {
+	case "AVC":
+		return "H264"
+	case "HEVC":
+		return "H265"
+	default:
+		return v
+	}
 }
 
 // StopPlay 停止实时点播。

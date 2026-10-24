@@ -1,0 +1,52 @@
+# AI Camera K8s 清单入口。
+#
+#   kubectl apply -k deploy/k8s
+#   kubectl -n ai-camera get pods -o wide
+#
+# 默认只部署「推荐形态」：
+#   namespace + configmap + secret(占位) + redis + zlm + backend + services
+#
+# 可选组件（默认注释掉，按需启用）：
+#   - sipsvc-statefulset.yaml  独立信令：需同时把 backend 的 GB28181_EMBEDDED 改为 false，
+#                              且当前 HTTP 播放/云台/回放会因跨进程状态缺失而 503；
+#   - pipecat-deployment.yaml  语音 Agent 控制面：音频桥接尚未接通。
+#
+# ★ Secret 安全：
+#   secret.example.yaml 里的值全部是 CHANGE_ME 占位符，仅用于让 apply -k
+#   一次跑通。生产必须换成真实密钥（见文件内注释），或用 SealedSecret。
+#
+# ★ 前置条件：
+#   1. 已有可用的 PostgreSQL（本清单不内置），并把 configmap.yaml 的
+#      DATABASE_HOST / DATABASE_NAME / DATABASE_USER 改成实际值；
+#   2. 集群有 LoadBalancer 实现（SIP 与 ZLM RTP 需要设备可达的地址）；
+#      没有的话改用 NodePort，并把 SIP_ADVERTISE_IP / MEDIA_PUBLIC_IP
+#      设为节点公网 IP；
+#   3. 把 ac_gb_media_server 的默认节点改成集群内地址：
+#        ip='ai-camera-zlm', http_port=80, sdp_ip='<MEDIA_PUBLIC_IP>',
+#        hook_ip='<平台地址>', secret='<与 Secret 的 ZLM_SECRET 一致>'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ai-camera
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.example.yaml
+  - redis.yaml
+  - zlm-statefulset.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  # - sipsvc-statefulset.yaml
+  # - pipecat-deployment.yaml
+
+# ZLM 模板与渲染脚本。ConfigMap 卷是只读的，渲染结果写到 emptyDir。
+configMapGenerator:
+  - name: ai-camera-zlm-config
+    files:
+      - config.tmpl=zlm/config.tmpl
+      - render-config.sh=zlm/render-config.sh
+
+# 固定名字，避免哈希后缀导致 StatefulSet 里的 configMap 引用失效。
+generatorOptions:
+  disableNameSuffixHash: true

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/diagnostics"
 	gbsvc "github.com/boticz/ai-camera-backend/internal/service/gb28181"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
 	"github.com/gin-gonic/gin"
@@ -17,12 +18,16 @@ import (
 
 // GbDeviceHandler 国标设备处理器。
 type GbDeviceHandler struct {
-	svc *gbsvc.GbDeviceService
+	svc  *gbsvc.GbDeviceService
+	diag *diagnostics.Service
 }
 
 // NewGbDeviceHandler 构造国标设备处理器。
 func NewGbDeviceHandler() *GbDeviceHandler {
-	return &GbDeviceHandler{svc: gbsvc.NewGbDeviceService()}
+	return &GbDeviceHandler{
+		svc:  gbsvc.NewGbDeviceService(),
+		diag: diagnostics.NewService(),
+	}
 }
 
 // gbPathID 解析路径中的主键 ID（国标接口路由参数一律是数据库主键，不是国标编码）。
@@ -134,6 +139,36 @@ func (h *GbDeviceHandler) SyncChannel(c *gin.Context) {
 		return
 	}
 	utils.Success(c, nil)
+}
+
+// Diagnose 设备可达性 / NAT 诊断
+//
+// @Summary      设备接入与 NAT 诊断
+// @Description  逐项检查建档、国标编码、在线状态、注册有效期、内存中的 SIP 端点、最近注册/心跳、SDP 通告地址、设备响应与 ZLM 可达性；每项返回中文结论。SIP 服务未启动时相关项标记为 skipped
+// @Tags         GbDevice
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "设备ID"
+// @Success      200  {object}  diagnostics.RReport
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/gb/devices/{id}/diagnose [post]
+// @ID           diagnoseGbDevice
+func (h *GbDeviceHandler) Diagnose(c *gin.Context) {
+	id, ok := gbPathID(c, "设备")
+	if !ok {
+		return
+	}
+	rep, err := h.diag.Diagnose(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, diagnostics.ErrDeviceNotFound) {
+			utils.NotFound(c, err.Error())
+			return
+		}
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.Success(c, rep)
 }
 
 // Subscribe 订阅设备目录/报警/位置
