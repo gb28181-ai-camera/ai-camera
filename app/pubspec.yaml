@@ -20,6 +20,21 @@ dependencies:
   media_kit_video: ^2.0.1
   media_kit_libs_video: ^1.0.7
 
+  # ── IOT 设备接入（v0.3.0）──────────────────────────────────
+  # 下列四项是「添加设备 + MQTT 信令」的最小依赖集合：
+  # - mqtt_client：WebRTC 信令通道（后端不提供 App 侧 SDP 转发 HTTP 端点时使用）；
+  # - flutter_blue_plus：蓝牙配网（Nordic UART Service）；
+  # - mobile_scanner：扫描设备分享二维码；
+  # - permission_handler：蓝牙/相机权限申请与「去设置」引导。
+  mqtt_client: ^10.13.0
+  # 固定在 1.x：2.x 起改为 FlutterBluePlus 商业许可（connect() 需声明 License），
+  # 1.36.8 仍是 BSD 许可且 API 稳定，满足本项目蓝牙配网需求。
+  flutter_blue_plus: ^1.36.8
+  mobile_scanner: ^7.4.2
+  # 固定在 12.x：13.x 的 Android 模块要求 compileSdk 37，而当前 Flutter/AGP
+  # 组合为 36（AGP 9 的最高推荐值）。12.x 功能足够且可正常构建。
+  permission_handler: ^12.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

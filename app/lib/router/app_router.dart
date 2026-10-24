@@ -16,6 +16,11 @@ import '../pages/gb/gb_playback_page.dart';
 import '../pages/home/home_page.dart';
 import '../pages/inspect/inspect_task_detail_page.dart';
 import '../pages/inspect/inspect_task_list_page.dart';
+import '../pages/iot/add_device_page.dart';
+import '../pages/iot/ble_provision_page.dart';
+import '../pages/iot/iot_device_page.dart';
+import '../pages/iot/scan_claim_page.dart';
+import '../pages/iot/share_device_page.dart';
 import '../pages/login/login_page.dart';
 import '../pages/notification/notification_list_page.dart';
 import '../pages/profile/profile_page.dart';
@@ -217,6 +222,49 @@ class AppRouter {
           name: 'gbAlarms',
           builder: (BuildContext context, GoRouterState state) =>
               const GbAlarmPage(),
+        ),
+
+        // ── IOT 设备接入：添加（蓝牙配网 / 扫码）→ 我的设备 ──
+        GoRoute(
+          path: '/iot/add',
+          name: 'iotAdd',
+          builder: (BuildContext context, GoRouterState state) =>
+              const AddDevicePage(),
+        ),
+        GoRoute(
+          path: '/iot/ble',
+          name: 'iotBle',
+          builder: (BuildContext context, GoRouterState state) =>
+              BleProvisionPage(
+            // 从扫码页带入分享令牌时，配网 bind 指令会把它一并发给设备。
+            token: state.uri.queryParameters['token'] ?? '',
+          ),
+        ),
+        GoRoute(
+          path: '/iot/scan',
+          name: 'iotScan',
+          builder: (BuildContext context, GoRouterState state) =>
+              const ScanClaimPage(),
+        ),
+        GoRoute(
+          path: '/iot/devices',
+          name: 'iotDevices',
+          builder: (BuildContext context, GoRouterState state) =>
+              const IotDevicePage(),
+        ),
+        // 设备分享：仅适老化相机的 owner 可进入（后端同样以 owner 校验）。
+        // deviceId 必填，name 只用于展示。
+        GoRoute(
+          path: '/iot/share',
+          name: 'iotShare',
+          builder: (BuildContext context, GoRouterState state) =>
+              ShareDevicePage(
+            deviceId: int.tryParse(
+                  state.uri.queryParameters['deviceId'] ?? '',
+                ) ??
+                0,
+            deviceName: state.uri.queryParameters['name'] ?? '',
+          ),
         ),
 
         // ⚠️ 临时：播放器共存 Spike（验证完连同 import 一并删除）。

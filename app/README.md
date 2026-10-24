@@ -21,6 +21,10 @@ AI Camera 智能监控平台的移动端 App，供**巡检人、区域负责人�
 | 轻提示 | `ScaffoldMessenger`（Flutter 内置） | 统一走 `SnackBar`（`Extensions.showToast` / `AppNavigator.showToast`） |
 | 测试 | `flutter_test` + `mockito` | 自定义 Dio Adapter，无需后端 |
 | 图表 | 不引入图表库 | 首页用纯 Widget（`LinearProgressIndicator`）画进度条 |
+| MQTT | `mqtt_client` | WebRTC 信令通道（SDP offer/answer） |
+| BLE | `flutter_blue_plus` **1.x** | 蓝牙配网（Nordic UART Service）。2.x 起需商业许可，故固定 1.36.8 |
+| 扫码 | `mobile_scanner` | 分享码 / 设备二维码 |
+| 权限 | `permission_handler` **12.x** | 蓝牙、定位（Android ≤11）、相机。13.x 要求 compileSdk 37，当前工程为 36 |
 | E2E | 未引入 `patrol` | 后续版本补充 |
 
 > **注意**：`pubspec.yaml` 中虽声明了 `fluttertoast ^8.2.8`，但 `lib/` 下**无任何调用**，
@@ -60,6 +64,9 @@ app/
 │   ├── router/app_router.dart         # 路由表 + 底部 Tab 外壳 + 登录态 redirect
 │   ├── services/
 │   │   ├── api_service.dart           # HTTP 门面：注入 Bearer、统一错误处理
+│   │   ├── IotAppController.dart      # /app/iot/* 与 /app/rtc/* 接口 + 扫码内容模型
+│   │   ├── MqttSignalingClient.dart   # MQTT 信令（offer/answer 匹配）+ MqttWebRtcClient
+│   │   ├── BleProvisioner.dart        # 蓝牙配网（NUS 帧编解码、扫描、会话）
 │   │   └── generated/
 │   │       ├── AuthController.dart    # POST /app/auth/login
 │   │       ├── AppController.dart     # 其余 /app/* 端点
@@ -79,8 +86,8 @@ app/
 │   │   ├── empty_state.dart           # 空态与错误态
 │   │   ├── stat_card.dart             # 统计卡 / 进度统计卡 / 状态标签
 │   │   └── entity_list_page.dart      # 通用分页列表 + 卡片 + 信息行 + 远程图片
-│   └── pages/                         # 21 个页面，按领域分目录（含 gb/ 国标视频 4 页）
-└── test/                              # 51 个用例
+│   └── pages/                         # 按领域分目录（gb/ 国标视频 4 页、iot/ 设备接入 4 页）
+└── test/                              # 单元/组件测试（含 iot/ 扫码、BLE 帧、MQTT 信令、接口）
 ```
 
 ---
@@ -128,6 +135,7 @@ flutter build apk --release   # 正式包
 | Gradle 卡在下载发行包、报 `Timeout ... waiting for exclusive access to gradle-*-all.zip` | `services.gradle.org` 在国内拉不动 | `android/gradle/wrapper/gradle-wrapper.properties` 已改用**腾讯云镜像**（与 boticz-mes 一致） |
 | `Could not close incremental caches … kotlin` | Windows 上 Kotlin 增量编译的文件占用/长路径问题 | `android/gradle.properties` 已设 **`kotlin.incremental=false`**（与 boticz-mes 一致） |
 | `checkDebugAarMetadata` 报某插件 `compiled against android-33` 但依赖要求 34+ | 插件自身 compileSdk 过旧 | 已**移除 `fluttertoast`**（该依赖全仓零调用，提示统一走 `ScaffoldMessenger`）。新增插件若踩到同类问题，优先考虑移除或换维护中的替代品，而非强行抬高 compileSdk |
+| `checkDebugAarMetadata` 报 `permission_handler_android` 要求 compileSdk **37**，而工程为 36 | 13.x 起插件抬高了 compileSdk | 已固定 `permission_handler: ^12.0.3`；不要为此把 compileSdk 提到 37（AGP 9 最高推荐 36） |
 
 **明文流量**：开发/测试环境后端是 `http`，`android/app/src/main/AndroidManifest.xml` 已设
 `android:usesCleartextTraffic="true"`（Android 9+ 默认禁止）。**正式环境切 https 后应移除该属性。**
@@ -214,6 +222,27 @@ flutter analyze                               # 静态检查（要求 0 error 0 
 
 > 移动端返回的是**裁剪后**的结构（`AppGb.dart`），不含 `sip_password`、国标内部字段等。
 > 若需增加字段，改后端 `internal/dto/response/app_gb.go` 与本文件对应模型，两处保持一致。
+
+**IOT 设备接入（`IotAppController.dart`，手写，无 Dart 生成器）**
+
+| 方法 | 路径 | Controller 方法 | 响应类型 |
+|---|---|---|---|
+| POST | `/app/iot/devices/claim` | `claim` | `RIotDevice` |
+| POST | `/app/iot/devices/bind` | `bind` | `RIotDevice` |
+| POST | `/app/iot/devices/bind-qr` | `bindByQr` | `RIotDevice` |
+| GET | `/app/iot/devices` | `devices` | `RIotDeviceList`（兼容数组 / 分页） |
+| GET | `/app/iot/devices/:id` | `deviceDetail` | `RIotDevice` |
+| GET | `/app/iot/devices/:id/services` | `services` | `RIotServices`（`{product, groups, mqtt, turn}`） |
+| GET | `/app/rtc/ice-servers` | `iceServers` | `RIceServers`（`data` 为数组） |
+
+- 字段名与后端 JSON tag 一一对应（`device_code`、`product_name`、`device_secret` 等）。
+- `devices` 同时接受 `data: []` 与 `data: {total, items}` 两种形态，
+  避免后端「分页/列表」二选一实现时列表页空白；认领/绑定/详情响应里的
+  `{device, account, ...}` 包装由 `IotDevice.fromJson` 统一拆解。
+- 服务组返回的 `password` 是**明文组凭据**（App 已通过 JWT 鉴权，MQTT 登录所必需）。
+- MQTT 连接优先使用后端下发的 `mqtt.url` 与 `mqtt.topic_prefix`
+  （ACL 隔离边界，客户端不自行拼接）；缺失时才回退到服务组里的 MQTT 服务项。
+- `ice-servers` 未配置 TURN 时返回空数组 → App 按直连处理，不视为失败。
 
 ### 调用规范
 
@@ -314,6 +343,15 @@ radio = max(414 / 短边, 1)        ← 钳制为 1，即只缩不放
 | `/gb/live?channelId=&name=` | 国标实时播放 | WebRTC(WHEP) 优先 + HTTP-FLV 回退；含云台与对讲入口 |
 | `/gb/playback?channelId=&name=` | 国标录像回放 | 未带 channelId 时先选通道 |
 | `/gb/alarms` | AI / 国标报警 | 只读列表 + 详情弹层 |
+| `/iot/devices` | 我的设备 | 已绑定设备列表，点击选择通道进入播放 |
+| `/iot/add` | 添加设备 | 「蓝牙配网」「扫一扫添加」两个入口 |
+| `/iot/ble?token=` | 蓝牙配网 | 扫描 → 连接 → Wi-Fi → 分步配网 → 成功 |
+| `/iot/scan` | 扫一扫 | 分享码 `device_share` / 设备码 `device` 分流 |
+
+国标实时页新增两个可选查询参数（不影响原有调用）：
+
+- `deviceId=<ac_device.id>`：MQTT 信令需要它查询设备服务组；
+- `mode=mqtt`：优先使用 MQTT 信令（仅当同时带 `deviceId` 时生效）。
 
 详情页参数通过 `?id=` 查询串传递，页面内用 `int.tryParse` 解析，解析失败展示错误态。
 
@@ -328,6 +366,104 @@ radio = max(414 / 短边, 1)        ← 钳制为 1，即只缩不放
    不允许黑屏无提示。
 
 ---
+
+## IOT 设备接入（v0.3.0）
+
+### 添加设备的两种方式
+
+| 方式 | 适用条件 | 关键接口 |
+|---|---|---|
+| 蓝牙配网 | 设备首次使用、尚未联网 | BLE 协议（见下）+ `POST /app/iot/devices/bind` |
+| 扫一扫 | 设备已联网 / 机身二维码 | `POST /app/iot/devices/claim` 或 `POST /app/iot/devices/bind-qr` |
+
+扫码解析兼容**链接格式**（新格式优先，与 `neme-ai-app` 一致）与 **JSON 格式**（本项目早期约定）：
+
+```text
+# 链接：http:// / https:// 前缀可省略
+boticz.cn/qrDevice/{product_code}/{device_code}   → POST /app/iot/devices/bind-qr
+boticz.cn/deviceShareToken/{token}                → POST /app/iot/devices/claim
+```
+
+```jsonc
+// JSON：分享码（主账号生成，一次性）
+{"type":"device_share","token":"..."}
+// JSON：设备二维码（机身/包装上的固定资产标识）
+{"type":"device","product_code":"P-OD-01","device_code":"CAM-0005"}
+```
+
+顺序：`trim` → 先按 URL 解析（仅接受 `boticz.cn` 及其子域）→ 失败再按 JSON 解析。
+其余内容一律提示「不是 AI Camera 设备二维码」。
+
+### 蓝牙配网协议（与固件约定）
+
+- Service：`6e400001-b5a3-f393-e0a9-e50e24dcca9e`（Nordic UART Service）
+- RX（App 写入）：`6e400002-b5a3-f393-e0a9-e50e24dcca9e`
+- TX（设备通知）：`6e400003-b5a3-f393-e0a9-e50e24dcca9e`
+- 帧：UTF-8 JSON + `\n`，**一问一答**
+
+| 步骤 | App → 设备 | 设备 → App |
+|---|---|---|
+| 握手 | `{"cmd":"hello","product_code":"..."}` | `{"status":"ok","device_code":"..."}` |
+| Wi-Fi | `{"cmd":"wifi","ssid":"...","password":"..."}` | `{"status":"ok"}` / `{"status":"error","message":"..."}` |
+| 绑定 | `{"cmd":"bind","token":"<share_token 或空>"}` | `{"status":"ok","device_code":"...","device_secret":"..."}` |
+
+设备返回 `device_code` + `device_secret` 后，App 再调
+`POST /app/iot/devices/bind` 建立「当前用户 ↔ 设备」关系。两步都成功才算配网完成。
+
+**为什么 `device_secret` 由设备返回**：服务端据此确认 App 与设备在同一物理现场
+（BLE 的短距离特性就是信任来源），避免仅凭设备编号就能把别人的摄像头绑到自己账号下。
+
+**权限**：
+
+- Android 12+：`BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT`（运行时申请）；
+- Android ≤11：BLE 扫描被系统强制要求 `ACCESS_FINE_LOCATION`；
+- 权限被永久拒绝时给出「去系统设置开启」的可操作提示（`openAppSettings()`）。
+
+### MQTT 作为 WebRTC 信令
+
+```
+订阅  iot/<group_code>/app/<client_id>/signal
+发布  iot/<group_code>/signal/backend
+```
+
+```jsonc
+{"type":"offer","request_id":"<uuid>","client_id":"...","channel_id":123,"stream":"0BEBC201","sdp":"v=0..."}
+{"type":"answer","request_id":"<uuid>","sdp":"v=0..."}
+{"type":"error","request_id":"<uuid>","code":"...","message":"..."}
+```
+
+流程：
+
+1. 调 `POST /app/gb/play/:channelId` 拿 `stream`；
+2. 用设备服务组里的 MQTT 服务项（host/port）与组凭据连接 Broker；
+3. `GET /app/rtc/ice-servers` 取 ICE 配置（为空则直连）；
+4. `createOffer` → `setLocalDescription` → 等 ICE gathering；
+5. 发布 offer，等待**同一 `request_id`** 的 answer（10 秒超时）；
+6. `setRemoteDescription(answer)`，等 `onTrack` 收到视频轨才判定成功。
+
+**为什么 MQTT 失败要回退 HTTP WHEP**：MQTT 只承载信令，媒体面仍是 WebRTC。
+失败通常与媒体无关（broker 不可达、服务组凭据过期、后端未部署 MQTT 转发），
+而设备/媒体节点往往仍提供 WHEP 地址。回退可以避免一条信令链路故障导致完全看不到画面。
+播放页的尝试顺序为 **MQTT → WHEP → HTTP-FLV**，每层失败都记录具体原因并展示。
+
+**为什么分享令牌一次性**：二维码可能被拍照/转发，长期有效等于把设备永久分享给
+看到图片的任何人；一次性令牌由后端认领后立即作废，泄露窗口只有一次。
+
+### IOT 设备接入的已知边界（需真机验证）
+
+1. **BLE 协议尚未与真实固件联调**：UUID、帧格式按约定实现，
+   若固件使用不同 MTU 分包/自定义特征，需要同步调整 `BleProvisioner.dart`。
+2. **Wi-Fi 名称需手动输入**：未读取系统当前 SSID（Android 需定位权限且限制较多），
+   避免「看起来自动填了实际是错的」。
+3. **MQTT 媒体面依赖后端实现**：App 只实现信令与 WebRTC 协商；
+   `iot/<group>/signal/backend` 的转发、answer 生成需后端配合。
+4. **ICE 直连为主**：`/app/rtc/ice-servers` 为空时不做 NAT 穿透，
+   跨公网场景需要后端下发 STUN/TURN。
+5. **播放页 MQTT 模式需要 `deviceId`**：从「我的设备」进入时会自动带上；
+   从国标监控入口进入仍走原有 WHEP/FLV 路径。
+6. **iOS 权限描述未改动**：需要在 `ios/Runner/Info.plist` 补
+   `NSCameraUsageDescription`、`NSBluetoothAlwaysUsageDescription`
+   与（如需本地网络发现）`NSLocalNetworkUsageDescription`，否则 iOS 真机首次调用会被系统拒绝。
 
 ## 实现说明与已知取舍
 

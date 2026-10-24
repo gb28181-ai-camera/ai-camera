@@ -17,6 +17,39 @@
     <!-- 声明相机为「非必需」，使无摄像头的设备仍可安装（改头像也可从相册选图） -->
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
+    <!-- ══════════════════════════════════════════════════════════
+         IOT 设备接入（v0.3.0）：蓝牙配网 + 扫码
+         ══════════════════════════════════════════════════════════ -->
+
+    <!-- Android 12（API 31）起：扫描/连接 BLE 需要运行时权限。
+         neverForLocation：声明扫描不用于推导位置，可免去定位权限（系统会忽略
+         通过蓝牙推断位置的能力，但我们本来也不使用）。 -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+
+    <!-- Android 11 及以下：BLE 扫描被系统强制要求定位权限，
+         且必须声明 ACCESS_FINE_LOCATION（COARSE 在 API 28+ 不够）。
+         maxSdkVersion=30 让新系统不再索取该权限。 -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30"/>
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30"/>
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30"/>
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="30"/>
+
+    <!-- 蓝牙为「非必需」：没有 BLE 的设备仍可安装，只是无法使用蓝牙配网 -->
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false"/>
+
     <application
         android:label="AI Camera"
         android:name="${applicationName}"

@@ -8,6 +8,8 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../layout/Gaps.dart';
+import '../../services/IotAppController.dart';
+import '../../services/MqttSignalingClient.dart';
 import '../../services/generated/GbController.dart';
 import '../../services/generated/definitions/AppGb.dart';
 import '../../services/generated/definitions/Response.dart';
@@ -25,6 +27,8 @@ enum _GbMode {
   connecting,
   /// WebRTC（flutter_webrtc + WHEP）。
   webrtc,
+  /// WebRTC（flutter_webrtc + MQTT 信令）。
+  mqtt,
   /// HTTP-FLV（media_kit / libmpv）。
   flv,
   /// 两种内核都失败。
@@ -61,12 +65,19 @@ class _GbLivePageState extends State<GbLivePage>
   String _channelTitle = '国标通道';
   bool _initialized = false;
 
+  /// 所属 IOT 设备 ID（`?deviceId=`）。只有它才能查到服务组 / MQTT 配置。
+  int? _deviceId;
+
+  /// 是否优先使用 MQTT 信令（`?mode=mqtt`）。
+  bool _preferMqtt = false;
+
   // ── 会话状态 ──────────────────────────────────────────────
   _GbMode _mode = _GbMode.connecting;
   String _status = '正在点播…';
   String? _error;
   String? _webrtcError;
   String? _flvError;
+  String? _mqttError;
   AppGbPlayInfo? _playInfo;
   String? _streamId;
 
@@ -84,6 +95,7 @@ class _GbLivePageState extends State<GbLivePage>
   final RTCVideoRenderer _renderer = RTCVideoRenderer();
   bool _rendererReady = false;
   GbWhepClient? _whep;
+  MqttWebRtcClient? _mqtt;
 
   // ── media_kit ─────────────────────────────────────────────
   Player? _player;
@@ -132,6 +144,9 @@ class _GbLivePageState extends State<GbLivePage>
 
     final GoRouterState state = GoRouterState.of(context);
     _channelId = int.tryParse(state.uri.queryParameters['channelId'] ?? '');
+    _deviceId = int.tryParse(state.uri.queryParameters['deviceId'] ?? '');
+    // 只有拿到设备 ID 才能查询服务组（MQTT broker / 凭据），否则保持 WHEP。
+    _preferMqtt = state.uri.queryParameters['mode'] == 'mqtt' && _deviceId != null;
     final String? name = state.uri.queryParameters['name'];
     if (name != null && name.isNotEmpty) {
       _channelTitle = name;
@@ -159,6 +174,11 @@ class _GbLivePageState extends State<GbLivePage>
     _whep = null;
     if (whep != null) {
       unawaited(whep.close().catchError((Object _) {}));
+    }
+    final MqttWebRtcClient? mqtt = _mqtt;
+    _mqtt = null;
+    if (mqtt != null) {
+      unawaited(mqtt.close().catchError((Object _) {}));
     }
     if (_rendererReady) {
       _renderer.srcObject = null;
@@ -210,6 +230,7 @@ class _GbLivePageState extends State<GbLivePage>
       _error = null;
       _webrtcError = null;
       _flvError = null;
+      _mqttError = null;
     });
 
     try {
@@ -243,12 +264,28 @@ class _GbLivePageState extends State<GbLivePage>
       _playInfo = info;
       _streamId = info.streamId;
 
+      // 1) MQTT 信令（仅当从「我的设备」带 deviceId 进入且用户选择 MQTT 时）。
+      if (_preferMqtt && _deviceId != null) {
+        if (await _tryMqtt(info, gen)) return;
+        if (!mounted || gen != _generation) {
+          unawaited(_stopBackend());
+          return;
+        }
+        // MQTT 失败不影响媒体面：设备/媒体节点通常仍提供 WHEP，继续尝试。
+        _safeSetState(() {
+          _mode = _GbMode.connecting;
+          _status = 'MQTT 信令不可用，正在回退 WebRTC(WHEP)…';
+        });
+      }
+
+      // 2) WHEP（HTTP 交换 SDP）。
       if (await _tryWebRtc(info, gen)) return;
       if (!mounted || gen != _generation) {
         unawaited(_stopBackend());
         return;
       }
 
+      // 3) HTTP-FLV（原生解码，兼容 H.265 机型差异）。
       _safeSetState(() {
         _mode = _GbMode.connecting;
         _status = 'WebRTC 不可用，正在回退 HTTP-FLV…';
@@ -262,6 +299,7 @@ class _GbLivePageState extends State<GbLivePage>
       _safeSetState(() {
         _mode = _GbMode.error;
         _error = '无法播放该通道画面。\n'
+            '${_preferMqtt ? 'MQTT：${_mqttError ?? '未尝试'}\n' : ''}'
             'WebRTC：${_webrtcError ?? '未返回地址'}\n'
             'HTTP-FLV：${_flvError ?? '未返回地址'}';
       });
@@ -330,6 +368,11 @@ class _GbLivePageState extends State<GbLivePage>
     if (whep != null) {
       await whep.close();
     }
+    final MqttWebRtcClient? mqtt = _mqtt;
+    _mqtt = null;
+    if (mqtt != null) {
+      await mqtt.close();
+    }
     if (_rendererReady) {
       _renderer.srcObject = null;
     }
@@ -340,6 +383,82 @@ class _GbLivePageState extends State<GbLivePage>
     if (_rendererReady) return;
     await _renderer.initialize();
     _rendererReady = true;
+  }
+
+  // ── MQTT 信令 ─────────────────────────────────────────────
+
+  /// 通过 MQTT 交换 SDP 建立 WebRTC。
+  ///
+  /// 需要三样东西：设备 ID（查服务组）、服务组里的 MQTT 服务项（broker + 凭据）、
+  /// 以及可选的 ICE 配置。任何一步失败都记录原因并返回 false，由调用方回退 WHEP。
+  Future<bool> _tryMqtt(AppGbPlayInfo info, int gen) async {
+    final int? deviceId = _deviceId;
+    final int? channelId = _channelId;
+    if (deviceId == null || channelId == null) {
+      _mqttError = '缺少设备 ID，无法使用 MQTT 信令';
+      return false;
+    }
+
+    _safeSetState(() => _status = '正在获取 MQTT 服务配置…');
+    final RIotServices services = await IotAppController.services(deviceId);
+    if (!mounted || gen != _generation) return false;
+    if (!services.isSuccess || services.credentials == null) {
+      _mqttError = services.errorMessage;
+      return false;
+    }
+
+    final MqttSignalingConfig config;
+    try {
+      config = MqttSignalingConfig.fromCredentials(
+        services.credentials!,
+        clientId: MqttSignalingClient.newClientId(),
+      );
+    } catch (e) {
+      _mqttError = _humanize(e);
+      return false;
+    }
+
+    // ICE 配置是可选的：为空表示直连（局域网 / 内网部署），不应阻断播放。
+    final RIceServers iceResp = await IotAppController.iceServers();
+    if (!mounted || gen != _generation) return false;
+    final List<IceServerConfig> iceServers =
+        iceResp.isSuccess
+            ? iceResp.servers
+            : const <IceServerConfig>[];
+    if (!iceResp.isSuccess) {
+      debugPrint('[IOT] ICE 配置获取失败，按直连处理：${iceResp.errorMessage}');
+    }
+
+    _safeSetState(() => _status = '正在建立 MQTT 信令连接…');
+    final MqttWebRtcClient client = MqttWebRtcClient();
+    try {
+      await client.connect(
+        config: config,
+        renderer: _renderer,
+        channelId: channelId,
+        stream: info.stream,
+        iceServers: iceServers,
+      );
+      if (!mounted || gen != _generation) {
+        await client.close();
+        return false;
+      }
+      _mqtt = client;
+      _safeSetState(() {
+        _mode = _GbMode.mqtt;
+        _status = '';
+        _error = null;
+      });
+      return true;
+    } catch (e) {
+      _mqttError = _humanize(e);
+      debugPrint('[IOT] MQTT 信令失败，回退 WHEP：$e');
+      await client.close();
+      if (_rendererReady) {
+        _renderer.srcObject = null;
+      }
+      return false;
+    }
   }
 
   // ── WebRTC ────────────────────────────────────────────────
@@ -475,7 +594,7 @@ class _GbLivePageState extends State<GbLivePage>
 
   /// 是否允许下发云台指令（只有真正出画面时才允许）。
   bool get _canControlPtz =>
-      _mode == _GbMode.webrtc || _mode == _GbMode.flv;
+      _mode == _GbMode.webrtc || _mode == _GbMode.mqtt || _mode == _GbMode.flv;
 
   void _onPtzDirection(String direction, int speed) {
     _ptzSpeed = speed;
@@ -897,7 +1016,8 @@ class _GbLivePageState extends State<GbLivePage>
   }
 
   Widget _buildVideoContent() {
-    if (_mode == _GbMode.webrtc && _rendererReady) {
+    if ((_mode == _GbMode.webrtc || _mode == _GbMode.mqtt) &&
+        _rendererReady) {
       return Transform.scale(
         scale: _videoScale,
         child: RTCVideoView(
@@ -991,7 +1111,30 @@ class _GbLivePageState extends State<GbLivePage>
   }
 
   Widget _buildModeBadge() {
-    final bool webrtc = _mode == _GbMode.webrtc;
+    final String label;
+    final IconData icon;
+    final Color color;
+    switch (_mode) {
+      case _GbMode.mqtt:
+        label = 'MQTT/WebRTC';
+        icon = Icons.hub_outlined;
+        color = AppColors.success;
+        break;
+      case _GbMode.webrtc:
+        label = 'WebRTC';
+        icon = Icons.bolt;
+        color = AppColors.success;
+        break;
+      case _GbMode.flv:
+        label = 'HTTP-FLV';
+        icon = Icons.movie_outlined;
+        color = AppColors.warning;
+        break;
+      case _GbMode.connecting:
+      case _GbMode.paused:
+      case _GbMode.error:
+        return const SizedBox.shrink();
+    }
     return Container(
       padding: EdgeInsets.symmetric(
         horizontal: AppSpacing.sm,
@@ -1004,14 +1147,10 @@ class _GbLivePageState extends State<GbLivePage>
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Icon(
-            webrtc ? Icons.bolt : Icons.movie_outlined,
-            size: 12.dp,
-            color: webrtc ? AppColors.success : AppColors.warning,
-          ),
+          Icon(icon, size: 12.dp, color: color),
           SizedBox(width: 3.dp),
           Text(
-            webrtc ? 'WebRTC' : 'HTTP-FLV',
+            label,
             style: AppText.tag.copyWith(color: Colors.white),
           ),
         ],
@@ -1049,6 +1188,13 @@ class _GbLivePageState extends State<GbLivePage>
             onTap: _toggleTalk,
           ),
           _ToolButton(
+            key: const Key('gb-mqtt-toggle'),
+            icon: Icons.hub_outlined,
+            label: _preferMqtt ? 'MQTT 信令' : 'HTTP 信令',
+            active: _preferMqtt,
+            onTap: _toggleSignaling,
+          ),
+          _ToolButton(
             key: const Key('gb-reconnect'),
             icon: Icons.refresh,
             label: '重连',
@@ -1057,6 +1203,17 @@ class _GbLivePageState extends State<GbLivePage>
         ],
       ),
     );
+  }
+
+  /// 在 MQTT 与 WHEP 两种信令之间切换（仅带 `deviceId` 的 IOT 设备可用）。
+  void _toggleSignaling() {
+    if (_deviceId == null) {
+      // 国标监控入口只带 channelId，拿不到设备服务组；引导用户走 IOT 入口。
+      context.showToast('该通道缺少设备信息，请从「我的设备」进入以使用 MQTT 信令');
+      return;
+    }
+    setState(() => _preferMqtt = !_preferMqtt);
+    unawaited(_start());
   }
 
   Widget _buildPtzCard() {
@@ -1106,9 +1263,21 @@ class _GbLivePageState extends State<GbLivePage>
   }
 
   Widget _buildInfoCard() {
-    final String codecHint = _mode == _GbMode.webrtc
-        ? 'WebRTC 对 H.265 的支持取决于机型；若黑屏会自动回退 HTTP-FLV。'
-        : 'HTTP-FLV 由设备/系统原生解码，H.265 支持取决于设备与系统版本。';
+    final String codecHint;
+    switch (_mode) {
+      case _GbMode.webrtc:
+      case _GbMode.mqtt:
+        codecHint = 'WebRTC 对 H.265 的支持取决于机型；若黑屏会自动回退 HTTP-FLV。';
+        break;
+      case _GbMode.flv:
+        codecHint = 'HTTP-FLV 由设备/系统原生解码，H.265 支持取决于设备与系统版本。';
+        break;
+      case _GbMode.connecting:
+      case _GbMode.paused:
+      case _GbMode.error:
+        codecHint = '播放内核按「MQTT 信令 → WHEP → HTTP-FLV」顺序尝试。';
+        break;
+    }
 
     return Container(
       margin: EdgeInsets.fromLTRB(
@@ -1129,6 +1298,12 @@ class _GbLivePageState extends State<GbLivePage>
           SizedBox(height: AppSpacing.sm),
           InfoRow(label: '通道 ID', value: '${_channelId ?? '--'}'),
           InfoRow(label: '播放状态', value: _modeLabel),
+          InfoRow(
+            label: '信令方式',
+            value: _preferMqtt
+                ? 'MQTT（失败自动回退 WHEP）'
+                : 'HTTP（WHEP）',
+          ),
           if (_playInfo != null) ...<Widget>[
             InfoRow(
               label: '应用 / 流',
@@ -1137,6 +1312,12 @@ class _GbLivePageState extends State<GbLivePage>
             if (_playInfo!.streamId.isNotEmpty)
               InfoRow(label: '会话标识', value: _playInfo!.streamId),
           ],
+          if (_mqttError != null)
+            InfoRow(
+              label: 'MQTT 失败原因',
+              value: _mqttError!,
+              valueColor: AppColors.warning,
+            ),
           SizedBox(height: AppSpacing.sm),
           Text(codecHint, style: AppText.hint),
           SizedBox(height: AppSpacing.xs),
@@ -1153,6 +1334,8 @@ class _GbLivePageState extends State<GbLivePage>
     switch (_mode) {
       case _GbMode.webrtc:
         return 'WebRTC 实时';
+      case _GbMode.mqtt:
+        return 'MQTT 信令实时';
       case _GbMode.flv:
         return 'HTTP-FLV 实时';
       case _GbMode.connecting:
@@ -1210,6 +1393,7 @@ class _GbLivePageState extends State<GbLivePage>
   /// 异常 → 可读中文（WHEP 异常自带文案）。
   String _humanize(Object error) {
     if (error is GbWhepException) return error.message;
+    if (error is MqttSignalingException) return error.message;
     return error.toString();
   }
 }

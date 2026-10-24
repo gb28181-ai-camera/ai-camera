@@ -308,6 +308,31 @@ class _HomePageState extends State<HomePage> {
               ),
             ],
           ),
+          SizedBox(height: AppSpacing.md),
+          // IOT 设备入口：已绑定设备列表 + 添加设备（蓝牙配网 / 扫码）。
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _GbShortcutEntry(
+                  key: const Key('home-iot-devices'),
+                  icon: Icons.videocam_outlined,
+                  title: '我的摄像头',
+                  subtitle: '已绑定设备与实时预览',
+                  onTap: () => context.push('/iot/devices'),
+                ),
+              ),
+              SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: _GbShortcutEntry(
+                  key: const Key('home-iot-add'),
+                  icon: Icons.add_a_photo_outlined,
+                  title: '添加设备',
+                  subtitle: '蓝牙配网 / 扫一扫',
+                  onTap: () => context.push('/iot/add'),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
