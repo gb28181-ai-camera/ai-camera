@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
+} from 'react'
 import {
   Alert, Button, Form, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Transfer,
 } from 'antd'
@@ -50,6 +52,104 @@ interface PlatformFormValues {
   enable?: boolean
 }
 
+/** 新建 / 编辑的初始值。 */
+function buildPlatformInitialValues(editing: GbPlatformItem | null): Partial<PlatformFormValues> {
+  if (!editing) {
+    return { transport: 'UDP', server_port: 5060, enable: true }
+  }
+  return {
+    name: editing.name ?? '',
+    server_gb_id: editing.server_gb_id ?? '',
+    server_gb_domain: editing.server_gb_domain ?? '',
+    server_ip: editing.server_ip ?? '',
+    server_port: editing.server_port ?? 5060,
+    username: editing.username ?? '',
+    // password 由后端脱敏返回，编辑时不回填；留空表示不修改。
+    password: undefined,
+    transport: editing.transport ?? 'UDP',
+    enable: editing.enable ?? true,
+  }
+}
+
+interface PlatformFormHandle {
+  submit: () => Promise<void>
+}
+
+interface PlatformFormContentProps {
+  editing: GbPlatformItem | null
+  onSubmit: (values: PlatformFormValues) => Promise<void>
+}
+
+/**
+ * 上级平台表单内容。
+ *
+ * form 与 Form 同挂载在 Modal children 中（而非页面组件），
+ * 避免弹窗未打开时调用 resetFields 触发 useForm 未连接告警。
+ */
+const PlatformFormContent = forwardRef<PlatformFormHandle, PlatformFormContentProps>(
+  function PlatformFormContent({ editing, onSubmit }, ref) {
+    const [form] = Form.useForm<PlatformFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: PlatformFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form form={form} layout="vertical" initialValues={buildPlatformInitialValues(editing)}>
+        <Form.Item name="name" label="平台名称" rules={[{ required: true, message: '请输入平台名称' }]}>
+          <Input placeholder="请输入上级平台名称" maxLength={100} />
+        </Form.Item>
+        <Form.Item
+          name="server_gb_id"
+          label="平台编码"
+          rules={[{ required: true, message: '请输入平台国标编码' }]}
+        >
+          <Input placeholder="上级平台 SIP 国标编码，如 34020000002000000001" maxLength={20} />
+        </Form.Item>
+        <Form.Item name="server_gb_domain" label="SIP 域">
+          <Input placeholder="上级平台的 SIP 域（可选）" maxLength={50} />
+        </Form.Item>
+        <Space size={16} style={{ display: 'flex' }}>
+          <Form.Item name="server_ip" label="地址" style={{ flex: 1 }}>
+            <Input placeholder="上级平台 IP / 域名" maxLength={100} />
+          </Form.Item>
+          <Form.Item name="server_port" label="端口" style={{ width: 160 }}>
+            <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="5060" />
+          </Form.Item>
+        </Space>
+        <Form.Item name="username" label="用户名">
+          <Input placeholder="SIP 注册用户名" maxLength={50} autoComplete="off" />
+        </Form.Item>
+        <Form.Item
+          name="password"
+          label="密码"
+          extra={editing ? '后端脱敏返回；留空表示不修改' : 'SIP 注册密码（可选）'}
+        >
+          <Input.Password
+            placeholder={editing ? '留空表示不修改' : '请输入密码'}
+            maxLength={100}
+            autoComplete="new-password"
+          />
+        </Form.Item>
+        <Form.Item name="transport" label="传输协议">
+          <Select options={TRANSPORT_OPTIONS} />
+        </Form.Item>
+        <Form.Item name="enable" label="启用状态" valuePropName="checked">
+          <Switch checkedChildren="启用" unCheckedChildren="停用" />
+        </Form.Item>
+      </Form>
+    )
+  },
+)
+
 type ScopeKind = 'groups' | 'regions'
 
 interface ScopeItem {
@@ -82,7 +182,7 @@ const PlatformList: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<GbPlatformItem | null>(null)
   const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm<PlatformFormValues>()
+  const formRef = useRef<PlatformFormHandle>(null)
 
   const [scopeKind, setScopeKind] = useState<ScopeKind | null>(null)
   const [scopeTarget, setScopeTarget] = useState<GbPlatformItem | null>(null)
@@ -120,35 +220,15 @@ const PlatformList: React.FC = () => {
 
   const openCreate = () => {
     setEditing(null)
-    form.resetFields()
-    form.setFieldsValue({
-      transport: 'UDP',
-      server_port: 5060,
-      enable: true,
-    })
     setModalOpen(true)
   }
 
   const openEdit = (row: GbPlatformItem) => {
     setEditing(row)
-    form.resetFields()
-    // password 由后端脱敏返回，编辑时不回填；留空表示不修改。
-    form.setFieldsValue({
-      name: row.name ?? '',
-      server_gb_id: row.server_gb_id ?? '',
-      server_gb_domain: row.server_gb_domain ?? '',
-      server_ip: row.server_ip ?? '',
-      server_port: row.server_port ?? 5060,
-      username: row.username ?? '',
-      password: undefined,
-      transport: row.transport ?? 'UDP',
-      enable: row.enable ?? true,
-    })
     setModalOpen(true)
   }
 
-  const submit = async () => {
-    const values = await form.validateFields()
+  const submit = async (values: PlatformFormValues) => {
     const base: CreateGbPlatformReq = {
       name: values.name.trim(),
       server_gb_id: values.server_gb_id.trim(),
@@ -391,54 +471,12 @@ const PlatformList: React.FC = () => {
         title={editing ? '编辑上级平台' : '新增上级平台'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
-        onOk={() => void submit()}
+        onOk={() => void formRef.current?.submit()}
         confirmLoading={saving}
         destroyOnHidden
         width={720}
       >
-        <Form form={form} layout="vertical">
-          <Form.Item name="name" label="平台名称" rules={[{ required: true, message: '请输入平台名称' }]}>
-            <Input placeholder="请输入上级平台名称" maxLength={100} />
-          </Form.Item>
-          <Form.Item
-            name="server_gb_id"
-            label="平台编码"
-            rules={[{ required: true, message: '请输入平台国标编码' }]}
-          >
-            <Input placeholder="上级平台 SIP 国标编码，如 34020000002000000001" maxLength={20} />
-          </Form.Item>
-          <Form.Item name="server_gb_domain" label="SIP 域">
-            <Input placeholder="上级平台的 SIP 域（可选）" maxLength={50} />
-          </Form.Item>
-          <Space size={16} style={{ display: 'flex' }}>
-            <Form.Item name="server_ip" label="地址" style={{ flex: 1 }}>
-              <Input placeholder="上级平台 IP / 域名" maxLength={100} />
-            </Form.Item>
-            <Form.Item name="server_port" label="端口" style={{ width: 160 }}>
-              <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="5060" />
-            </Form.Item>
-          </Space>
-          <Form.Item name="username" label="用户名">
-            <Input placeholder="SIP 注册用户名" maxLength={50} autoComplete="off" />
-          </Form.Item>
-          <Form.Item
-            name="password"
-            label="密码"
-            extra={editing ? '后端脱敏返回；留空表示不修改' : 'SIP 注册密码（可选）'}
-          >
-            <Input.Password
-              placeholder={editing ? '留空表示不修改' : '请输入密码'}
-              maxLength={100}
-              autoComplete="new-password"
-            />
-          </Form.Item>
-          <Form.Item name="transport" label="传输协议">
-            <Select options={TRANSPORT_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="enable" label="启用状态" valuePropName="checked">
-            <Switch checkedChildren="启用" unCheckedChildren="停用" />
-          </Form.Item>
-        </Form>
+        <PlatformFormContent ref={formRef} editing={editing} onSubmit={submit} />
       </Modal>
 
       {/* 分组 / 区域可见范围（穿梭框） */}

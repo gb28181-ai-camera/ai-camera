@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
+} from 'react'
 import {
   Alert, Button, Col, Descriptions, Form, Input, InputNumber, Modal, Popconfirm, Row, Select,
   Spin, Switch, Table, Tag, message,
@@ -59,6 +61,170 @@ function apiAddress(row: GbMediaServerItem): string {
   return `http://${row.ip}${row.http_port ? `:${row.http_port}` : ''}`
 }
 
+/** 新建 / 编辑的初始值。 */
+function buildMediaServerInitialValues(editing: GbMediaServerItem | null): Partial<MediaServerFormValues> {
+  if (!editing) {
+    return {
+      type: 'zlm',
+      record_day: 7,
+      hook_alive_interval: 15,
+      default_server: false,
+      active: true,
+    }
+  }
+  return {
+    name: editing.name ?? '',
+    server_id: editing.server_id ?? '',
+    type: editing.type || 'zlm',
+    ip: editing.ip ?? '',
+    http_port: editing.http_port ?? undefined,
+    rtp_proxy_port: editing.rtp_proxy_port ?? undefined,
+    rtmp_port: editing.rtmp_port ?? undefined,
+    rtsp_port: editing.rtsp_port ?? undefined,
+    flv_port: editing.flv_port ?? undefined,
+    record_day: editing.record_day ?? 7,
+    hook_alive_interval: editing.hook_alive_interval ?? 15,
+    // secret 后端已脱敏为 ****；留空表示不修改
+    secret: '',
+    default_server: editing.default_server ?? false,
+    active: editing.active ?? true,
+    remark: editing.remark ?? '',
+  }
+}
+
+interface MediaServerFormHandle {
+  submit: () => Promise<void>
+}
+
+interface MediaServerFormContentProps {
+  editing: GbMediaServerItem | null
+  onSubmit: (values: MediaServerFormValues) => Promise<void>
+}
+
+/**
+ * 媒体节点表单内容。
+ *
+ * form 与 Form 一起挂在 Modal children 内（destroyOnHidden 时一起卸载），
+ * 父组件不再在弹窗打开前调用 resetFields/setFieldsValue。
+ */
+const MediaServerFormContent = forwardRef<MediaServerFormHandle, MediaServerFormContentProps>(
+  function MediaServerFormContent({ editing, onSubmit }, ref) {
+    const [form] = Form.useForm<MediaServerFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: MediaServerFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form form={form} layout="vertical" initialValues={buildMediaServerInitialValues(editing)}>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="name" label="节点名称" rules={[{ required: true, message: '请输入节点名称' }]}>
+              <Input placeholder="如：本地 ZLMediaKit" maxLength={255} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="server_id"
+              label="server_id"
+              rules={[{ required: true, message: '请输入节点唯一标识' }]}
+              extra="需与 ZLM 配置的 mediaServerId 一致"
+            >
+              <Input placeholder="如：ai-camera-zlm-01" maxLength={50} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="type" label="类型">
+              <Select options={TYPE_OPTIONS} placeholder="请选择节点类型" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="ip"
+              label="API 地址（IP）"
+              rules={[{ required: true, message: '请输入节点 API IP' }]}
+              extra="后端调用 ZLM HTTP API 的地址"
+            >
+              <Input placeholder="如：127.0.0.1" maxLength={255} />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="http_port" label="HTTP 端口">
+              <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="如：8082" />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="rtp_proxy_port" label="RTP 收流端口">
+              <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="单端口收流端口" />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="rtmp_port" label="RTMP 端口">
+              <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="如：1935" />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="rtsp_port" label="RTSP 端口">
+              <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="如：554" />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="flv_port" label="HTTP-FLV 端口">
+              <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="如：8082" />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="record_day" label="录像保留天数">
+              <InputNumber min={1} max={365} style={{ width: '100%' }} placeholder="默认 7 天" />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="hook_alive_interval" label="心跳间隔（秒）">
+              <InputNumber min={5} max={300} style={{ width: '100%' }} placeholder="默认 15 秒" />
+            </Form.Item>
+          </Col>
+          <Col span={16}>
+            <Form.Item
+              name="secret"
+              label="API Secret"
+              extra={editing ? '留空或 **** 表示不修改（后端已脱敏）' : 'ZLM 的 api.secret'}
+            >
+              <Input.Password
+                placeholder={editing ? '留空表示不修改' : '请输入 ZLM API secret'}
+                autoComplete="new-password"
+                maxLength={255}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="default_server" label="默认节点" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="active" label="启用" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item name="remark" label="备注">
+              <Input.TextArea rows={2} maxLength={500} showCount placeholder="请输入备注" />
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
+    )
+  },
+)
+
 /**
  * 媒体节点（ZLMediaKit）。
  *
@@ -78,7 +244,7 @@ export default function MediaServerList() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<GbMediaServerItem | null>(null)
   const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm<MediaServerFormValues>()
+  const formRef = useRef<MediaServerFormHandle>(null)
 
   const [checkingId, setCheckingId] = useState<number | null>(null)
   const [checkOpen, setCheckOpen] = useState(false)
@@ -111,49 +277,15 @@ export default function MediaServerList() {
 
   const openCreate = () => {
     setEditing(null)
-    form.resetFields()
-    form.setFieldsValue({
-      type: 'zlm',
-      record_day: 7,
-      hook_alive_interval: 15,
-      default_server: false,
-      active: true,
-    })
     setModalOpen(true)
   }
 
   const openEdit = (row: GbMediaServerItem) => {
     setEditing(row)
-    form.resetFields()
-    form.setFieldsValue({
-      name: row.name ?? '',
-      server_id: row.server_id ?? '',
-      type: row.type || 'zlm',
-      ip: row.ip ?? '',
-      http_port: row.http_port ?? undefined,
-      rtp_proxy_port: row.rtp_proxy_port ?? undefined,
-      rtmp_port: row.rtmp_port ?? undefined,
-      rtsp_port: row.rtsp_port ?? undefined,
-      flv_port: row.flv_port ?? undefined,
-      record_day: row.record_day ?? 7,
-      hook_alive_interval: row.hook_alive_interval ?? 15,
-      // secret 后端已脱敏为 ****；留空表示不修改
-      secret: '',
-      default_server: row.default_server ?? false,
-      active: row.active ?? true,
-      remark: row.remark ?? '',
-    })
     setModalOpen(true)
   }
 
-  const handleSave = async () => {
-    let values: MediaServerFormValues
-    try {
-      values = await form.validateFields()
-    } catch {
-      return
-    }
-
+  const handleSave = async (values: MediaServerFormValues) => {
     const common: UpdateGbMediaServerReq = {
       type: values.type,
       ip: values.ip?.trim(),
@@ -365,108 +497,12 @@ export default function MediaServerList() {
         title={editing ? '编辑媒体节点' : '新增媒体节点'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
-        onOk={handleSave}
+        onOk={() => void formRef.current?.submit()}
         confirmLoading={saving}
         destroyOnHidden
         width={760}
       >
-        <Form form={form} layout="vertical">
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="name" label="节点名称" rules={[{ required: true, message: '请输入节点名称' }]}>
-                <Input placeholder="如：本地 ZLMediaKit" maxLength={255} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="server_id"
-                label="server_id"
-                rules={[{ required: true, message: '请输入节点唯一标识' }]}
-                extra="需与 ZLM 配置的 mediaServerId 一致"
-              >
-                <Input placeholder="如：ai-camera-zlm-01" maxLength={50} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="type" label="类型">
-                <Select options={TYPE_OPTIONS} placeholder="请选择节点类型" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="ip"
-                label="API 地址（IP）"
-                rules={[{ required: true, message: '请输入节点 API IP' }]}
-                extra="后端调用 ZLM HTTP API 的地址"
-              >
-                <Input placeholder="如：127.0.0.1" maxLength={255} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="http_port" label="HTTP 端口">
-                <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="如：8082" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="rtp_proxy_port" label="RTP 收流端口">
-                <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="单端口收流端口" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="rtmp_port" label="RTMP 端口">
-                <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="如：1935" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="rtsp_port" label="RTSP 端口">
-                <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="如：554" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="flv_port" label="HTTP-FLV 端口">
-                <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="如：8082" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="record_day" label="录像保留天数">
-                <InputNumber min={1} max={365} style={{ width: '100%' }} placeholder="默认 7 天" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="hook_alive_interval" label="心跳间隔（秒）">
-                <InputNumber min={5} max={300} style={{ width: '100%' }} placeholder="默认 15 秒" />
-              </Form.Item>
-            </Col>
-            <Col span={16}>
-              <Form.Item
-                name="secret"
-                label="API Secret"
-                extra={editing ? '留空或 **** 表示不修改（后端已脱敏）' : 'ZLM 的 api.secret'}
-              >
-                <Input.Password
-                  placeholder={editing ? '留空表示不修改' : '请输入 ZLM API secret'}
-                  autoComplete="new-password"
-                  maxLength={255}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="default_server" label="默认节点" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="active" label="启用" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="remark" label="备注">
-                <Input.TextArea rows={2} maxLength={500} showCount placeholder="请输入备注" />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
+        <MediaServerFormContent ref={formRef} editing={editing} onSubmit={handleSave} />
       </Modal>
 
       <Modal

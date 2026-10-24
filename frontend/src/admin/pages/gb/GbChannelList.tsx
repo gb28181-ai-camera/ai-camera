@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
+} from 'react'
 import {
   Button, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Switch, Table, Tag, Typography, message,
 } from 'antd'
@@ -46,6 +48,156 @@ interface ChannelFormValues {
   record_plan_id?: number | null
   remark?: string
 }
+
+/** 编辑通道的初始值（详情在打开弹窗前已拉取）。 */
+function buildChannelInitialValues(editing: GbChannelDetailResp | null): Partial<ChannelFormValues> {
+  if (!editing) return {}
+  return {
+    name: editing.name ?? '',
+    manufacturer: editing.manufacturer ?? '',
+    model: editing.model ?? '',
+    owner: editing.owner ?? '',
+    civil_code: editing.civil_code ?? '',
+    address: editing.address ?? '',
+    parent_id: editing.parent_id ?? '',
+    channel_type: editing.channel_type ?? null,
+    ptz_type: editing.ptz_type ?? null,
+    status: editing.status ?? 'ON',
+    stream_id: editing.stream_id ?? '',
+    has_audio: editing.has_audio ?? false,
+    enable_broadcast: editing.enable_broadcast ?? false,
+    active: editing.active !== false,
+    record_plan_id: editing.record_plan_id ?? null,
+    remark: editing.remark ?? '',
+  }
+}
+
+interface ChannelFormHandle {
+  submit: () => Promise<void>
+}
+
+interface ChannelFormContentProps {
+  editing: GbChannelDetailResp | null
+  recordPlanOptions: { label: string; value: number }[]
+  onSubmit: (values: ChannelFormValues) => Promise<void>
+}
+
+/**
+ * 编辑通道表单内容。
+ *
+ * 表单实例与 Form 同挂载在 Modal children 内；详情已在父组件拉取完成后
+ * 再打开弹窗，因此这里用 initialValues 一次性回填即可。
+ */
+const ChannelFormContent = forwardRef<ChannelFormHandle, ChannelFormContentProps>(
+  function ChannelFormContent({ editing, recordPlanOptions, onSubmit }, ref) {
+    const [form] = Form.useForm<ChannelFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: ChannelFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form form={form} layout="vertical" initialValues={buildChannelInitialValues(editing)}>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="name" label="通道名称">
+              <Input placeholder="请输入通道名称" maxLength={255} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="status" label="通道状态">
+              <Select options={CHANNEL_STATUS_OPTIONS} placeholder="请选择通道状态" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="manufacturer" label="厂商">
+              <Input placeholder="请输入厂商" maxLength={100} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="model" label="型号">
+              <Input placeholder="请输入型号" maxLength={100} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="owner" label="设备归属">
+              <Input placeholder="请输入设备归属" maxLength={100} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="civil_code" label="行政区划代码">
+              <Input placeholder="请输入行政区划代码" maxLength={20} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="parent_id" label="父级编码">
+              <Input placeholder="请输入父级通道编码" maxLength={20} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="stream_id" label="流 ID">
+              <Input placeholder="请输入流 ID" maxLength={100} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="channel_type" label="通道类型">
+              <InputNumber min={0} style={{ width: '100%' }} placeholder="GB/T 28181 通道类型" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="ptz_type" label="云台类型">
+              <InputNumber min={0} style={{ width: '100%' }} placeholder="GB/T 28181 云台类型" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="record_plan_id" label="录像计划">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="不选表示不绑定录像计划"
+                options={recordPlanOptions}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item name="address" label="安装地址">
+              <Input placeholder="请输入安装地址" maxLength={255} />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="has_audio" label="含音频" valuePropName="checked">
+              <Switch checkedChildren="是" unCheckedChildren="否" />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="enable_broadcast" label="启用广播" valuePropName="checked">
+              <Switch checkedChildren="是" unCheckedChildren="否" />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="active" label="启用通道" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item name="remark" label="备注">
+              <Input.TextArea rows={3} maxLength={500} showCount placeholder="请输入备注" />
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
+    )
+  },
+)
 
 /** 时间格式化：后端返回 ISO 字符串，此处仅展示到分钟 */
 function fmtDT(v?: string): string {
@@ -103,7 +255,7 @@ export default function GbChannelList() {
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState<GbChannelDetailResp | null>(null)
   const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm<ChannelFormValues>()
+  const formRef = useRef<ChannelFormHandle>(null)
 
   // 设置区域 / 设置分组弹窗
   const [regionOpen, setRegionOpen] = useState(false)
@@ -202,40 +354,14 @@ export default function GbChannelList() {
         message.error(res.message || '获取通道详情失败')
         return
       }
-      const detail = res.data
-      setEditing(detail)
-      form.resetFields()
-      form.setFieldsValue({
-        name: detail.name ?? '',
-        manufacturer: detail.manufacturer ?? '',
-        model: detail.model ?? '',
-        owner: detail.owner ?? '',
-        civil_code: detail.civil_code ?? '',
-        address: detail.address ?? '',
-        parent_id: detail.parent_id ?? '',
-        channel_type: detail.channel_type ?? null,
-        ptz_type: detail.ptz_type ?? null,
-        status: detail.status ?? 'ON',
-        stream_id: detail.stream_id ?? '',
-        has_audio: detail.has_audio ?? false,
-        enable_broadcast: detail.enable_broadcast ?? false,
-        active: detail.active !== false,
-        record_plan_id: detail.record_plan_id ?? null,
-        remark: detail.remark ?? '',
-      })
+      setEditing(res.data)
       setEditOpen(true)
     } catch (err) {
       notifyError(err, '获取通道详情失败')
     }
   }
 
-  const handleSaveEdit = async () => {
-    let values: ChannelFormValues
-    try {
-      values = await form.validateFields()
-    } catch {
-      return // 表单校验未通过，antd 已在字段下方展示原因
-    }
+  const handleSaveEdit = async (values: ChannelFormValues) => {
     if (!editing?.id) return
     const payload: UpdateGbChannelReq = {
       name: values.name ?? '',
@@ -466,101 +592,17 @@ export default function GbChannelList() {
         title={`编辑通道${editing?.name ? ` - ${editing.name}` : ''}`}
         open={editOpen}
         onCancel={() => setEditOpen(false)}
-        onOk={() => void handleSaveEdit()}
+        onOk={() => void formRef.current?.submit()}
         confirmLoading={saving}
         width={760}
         destroyOnHidden
       >
-        <Form form={form} layout="vertical">
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="name" label="通道名称">
-                <Input placeholder="请输入通道名称" maxLength={255} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="status" label="通道状态">
-                <Select options={CHANNEL_STATUS_OPTIONS} placeholder="请选择通道状态" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="manufacturer" label="厂商">
-                <Input placeholder="请输入厂商" maxLength={100} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="model" label="型号">
-                <Input placeholder="请输入型号" maxLength={100} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="owner" label="设备归属">
-                <Input placeholder="请输入设备归属" maxLength={100} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="civil_code" label="行政区划代码">
-                <Input placeholder="请输入行政区划代码" maxLength={20} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="parent_id" label="父级编码">
-                <Input placeholder="请输入父级通道编码" maxLength={20} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="stream_id" label="流 ID">
-                <Input placeholder="请输入流 ID" maxLength={100} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="channel_type" label="通道类型">
-                <InputNumber min={0} style={{ width: '100%' }} placeholder="GB/T 28181 通道类型" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="ptz_type" label="云台类型">
-                <InputNumber min={0} style={{ width: '100%' }} placeholder="GB/T 28181 云台类型" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="record_plan_id" label="录像计划">
-                <Select
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  placeholder="不选表示不绑定录像计划"
-                  options={recordPlanOptions}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="address" label="安装地址">
-                <Input placeholder="请输入安装地址" maxLength={255} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="has_audio" label="含音频" valuePropName="checked">
-                <Switch checkedChildren="是" unCheckedChildren="否" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="enable_broadcast" label="启用广播" valuePropName="checked">
-                <Switch checkedChildren="是" unCheckedChildren="否" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="active" label="启用通道" valuePropName="checked">
-                <Switch checkedChildren="启用" unCheckedChildren="停用" />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="remark" label="备注">
-                <Input.TextArea rows={3} maxLength={500} showCount placeholder="请输入备注" />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
+        <ChannelFormContent
+          ref={formRef}
+          editing={editing}
+          recordPlanOptions={recordPlanOptions}
+          onSubmit={handleSaveEdit}
+        />
       </Modal>
 
       {/* 设置区域 */}

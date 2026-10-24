@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import {
   Button, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Table, Tag, message,
 } from 'antd'
@@ -53,6 +53,103 @@ interface SubscribeFormValues {
   remark?: string
 }
 
+/** 表单子组件对外暴露的提交方法（由 Modal 的 onOk 调用）。 */
+interface SubscribeFormHandle {
+  submit: () => Promise<void>
+}
+
+interface SubscribeFormContentProps {
+  deviceOptions: { label: string; value: number }[]
+  devices: GbDeviceItem[]
+  onSubmit: (values: SubscribeFormValues) => Promise<void>
+}
+
+/**
+ * 新增订阅表单内容。
+ *
+ * form 实例放在这里而不是页面组件里：Modal 关闭时 children 不渲染
+ * （destroyOnHidden），useForm 与 Form 同时挂载/卸载，避免
+ * 「Instance created by useForm is not connected to any Form element」。
+ */
+const SubscribeFormContent = forwardRef<SubscribeFormHandle, SubscribeFormContentProps>(
+  function SubscribeFormContent({ deviceOptions, devices, onSubmit }, ref) {
+    const [form] = Form.useForm<SubscribeFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: SubscribeFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return // 校验失败，antd 已在字段下方展示原因
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    /** 选择设备后同步回填国标编码（也可手工只填国标编码） */
+    const handleDeviceChange = (deviceID?: number) => {
+      const device = devices.find((item) => item.id === deviceID)
+      form.setFieldsValue({
+        device_id: deviceID,
+        gb_device_id: device?.gb_device_id || device?.device_code || '',
+      })
+    }
+
+    return (
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{ type: 'catalog', expires: 3600 }}
+      >
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="device_id" label="国标设备" extra="选择后自动回填国标编码">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="请选择国标设备"
+                options={deviceOptions}
+                onChange={(value?: number) => handleDeviceChange(value)}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="gb_device_id"
+              label="国标设备编码"
+              rules={[{ required: true, message: '请输入或选择国标设备编码' }]}
+            >
+              <Input placeholder="20 位国标编码" maxLength={20} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="type" label="订阅类型" rules={[{ required: true, message: '请选择订阅类型' }]}>
+              <Select options={SUBSCRIBE_TYPE_OPTIONS} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="expires" label="间隔（秒）" extra="缺省 3600 秒">
+              <InputNumber min={1} style={{ width: '100%' }} placeholder="3600" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item name="call_id" label="Call-ID">
+              <Input placeholder="可选，SIP 订阅的 Call-ID" maxLength={255} />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item name="remark" label="备注">
+              <Input.TextArea rows={3} maxLength={500} showCount placeholder="请输入备注" />
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
+    )
+  },
+)
+
 /** 时间格式化：后端返回 ISO 字符串，此处仅展示到分钟 */
 function fmtDT(v?: string): string {
   if (!v) return '-'
@@ -91,7 +188,7 @@ export default function GbSubscribeList() {
   // 新增订阅
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [form] = Form.useForm<SubscribeFormValues>()
+  const createFormRef = useRef<SubscribeFormHandle>(null)
   const [devices, setDevices] = useState<GbDeviceItem[]>([])
 
   const fetchData = useCallback(async () => {
@@ -140,28 +237,9 @@ export default function GbSubscribeList() {
     setPage(1)
   }
 
-  const openCreate = () => {
-    form.resetFields()
-    form.setFieldsValue({ type: 'catalog', expires: 3600 })
-    setCreateOpen(true)
-  }
+  const openCreate = () => setCreateOpen(true)
 
-  /** 选择设备后同步回填国标编码（也可手工只填国标编码） */
-  const handleDeviceChange = (deviceID?: number) => {
-    const device = devices.find((item) => item.id === deviceID)
-    form.setFieldsValue({
-      device_id: deviceID,
-      gb_device_id: device?.gb_device_id || device?.device_code || '',
-    })
-  }
-
-  const handleCreate = async () => {
-    let values: SubscribeFormValues
-    try {
-      values = await form.validateFields()
-    } catch {
-      return // 表单校验未通过，antd 已在字段下方展示原因
-    }
+  const handleCreate = async (values: SubscribeFormValues) => {
     const payload: CreateGbSubscribeReq = {
       device_id: values.device_id,
       gb_device_id: values.gb_device_id || undefined,
@@ -293,56 +371,17 @@ export default function GbSubscribeList() {
         title="新增订阅"
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
-        onOk={() => void handleCreate()}
+        onOk={() => void createFormRef.current?.submit()}
         confirmLoading={creating}
         width={640}
         destroyOnHidden
       >
-        <Form form={form} layout="vertical">
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="device_id" label="国标设备" extra="选择后自动回填国标编码">
-                <Select
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  placeholder="请选择国标设备"
-                  options={deviceOptions}
-                  onChange={(value?: number) => handleDeviceChange(value)}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="gb_device_id"
-                label="国标设备编码"
-                rules={[{ required: true, message: '请输入或选择国标设备编码' }]}
-              >
-                <Input placeholder="20 位国标编码" maxLength={20} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="type" label="订阅类型" rules={[{ required: true, message: '请选择订阅类型' }]}>
-                <Select options={SUBSCRIBE_TYPE_OPTIONS} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="expires" label="间隔（秒）" extra="缺省 3600 秒">
-                <InputNumber min={1} style={{ width: '100%' }} placeholder="3600" />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="call_id" label="Call-ID">
-                <Input placeholder="可选，SIP 订阅的 Call-ID" maxLength={255} />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="remark" label="备注">
-                <Input.TextArea rows={3} maxLength={500} showCount placeholder="请输入备注" />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
+        <SubscribeFormContent
+          ref={createFormRef}
+          deviceOptions={deviceOptions}
+          devices={devices}
+          onSubmit={handleCreate}
+        />
       </Modal>
     </PageContainer>
   )

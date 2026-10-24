@@ -219,7 +219,7 @@ test.describe('11a 国标设备与接入', () => {
       await expect(onboarding).toBeVisible()
       await expect(onboarding.getByText('SIP 密码')).toBeVisible()
       await expect(onboarding.getByText('SIP 域名')).toBeVisible()
-      await expect(onboarding.getByText('二维码内容')).toBeVisible()
+      await expect(onboarding.getByText('激活二维码', { exact: true })).toBeVisible()
 
       // 从接口读回真实编码，再断言它确实展示在弹窗里（避免只断言「有弹窗」）
       const activated = await expectApiOk(
@@ -258,7 +258,7 @@ test.describe('11a 国标设备与接入', () => {
       await expect(modal.getByText(gbDeviceID, { exact: true })).toBeVisible()
       await expect(modal.getByText('SIP 密码')).toBeVisible()
       await expect(modal.getByText('SIP 域名')).toBeVisible()
-      await expect(modal.getByText('二维码内容')).toBeVisible()
+      await expect(modal.getByText('激活二维码', { exact: true })).toBeVisible()
 
       // 5) 接口核对：gb_device_id 已落库、注册状态为 pending
       const detail = await expectApiOk(await apiCall(page, 'GET', `/web/gb/devices/${deviceID}`))

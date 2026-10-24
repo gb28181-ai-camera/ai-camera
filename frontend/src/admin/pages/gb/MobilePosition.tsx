@@ -1,11 +1,15 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
+} from 'react'
 import {
-  Button, Card, DatePicker, Form, InputNumber, message, Modal, Space, Table, Tag,
+  Button, Card, DatePicker, Empty, Form, InputNumber, message, Modal, Space, Table, Tag, Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { AimOutlined, ReloadOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons'
 import type { Dayjs } from 'dayjs'
 import axios from 'axios'
+import ReactECharts from 'echarts-for-react'
+import type { EChartsOption } from 'echarts'
 import PageContainer from '../../components/PageContainer'
 import OptionSelect from '../../components/OptionSelect'
 import ActionButtons from '../../components/ActionButtons'
@@ -41,6 +45,47 @@ interface HistoryQuery {
   end?: string
 }
 
+/**
+ * 从位置记录中提取可绘制的经纬度。
+ *
+ * GB28181 设备未定位时会上报 0/0，这不是有效坐标；
+ * 经纬度任一非数字时同样跳过，避免把无效点画进坐标系把范围撑坏。
+ */
+function toCoord(value?: number): number | null {
+  if (value === undefined || value === null) return null
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
+function coordOf(row: GbPositionResp): [number, number] | null {
+  const lng = toCoord(row.longitude)
+  const lat = toCoord(row.latitude)
+  if (lng === null || lat === null) return null
+  if (lng === 0 && lat === 0) return null
+  return [lng, lat]
+}
+
+/** 轨迹按上报时间升序，保证折线顺序与运动方向一致。 */
+function sortByReportTime(rows: GbPositionResp[]): GbPositionResp[] {
+  return [...rows].sort((a, b) => {
+    const ta = a.report_time ? new Date(a.report_time).getTime() : 0
+    const tb = b.report_time ? new Date(b.report_time).getTime() : 0
+    return ta - tb
+  })
+}
+
+/** 统一坐标轴样式：scale=true 让范围贴合数据，不强制从 0 开始。 */
+function coordAxisOption(name: string, nameGap: number) {
+  return {
+    type: 'value' as const,
+    name,
+    nameLocation: 'middle' as const,
+    nameGap,
+    scale: true,
+    axisLabel: { formatter: (value: string | number) => Number(value).toFixed(4) },
+  }
+}
+
 interface SubscribeFormValues {
   channel_id: number
   interval: number
@@ -49,13 +94,72 @@ interface SubscribeFormValues {
 /** 通道下拉框（数据源：`GET /web/gb/channels/options`）。 */
 const channelFetcher = () => GbChannelController.gbChannelOptions()
 
+interface SubscribeFormHandle {
+  submit: () => Promise<void>
+}
+
+interface SubscribeFormContentProps {
+  defaultChannelId?: number
+  onSubmit: (values: SubscribeFormValues) => Promise<void>
+}
+
+/**
+ * 位置订阅表单内容。
+ *
+ * 表单实例随 Modal children 一起挂载，父组件不再在弹窗打开前
+ * resetFields/setFieldsValue（那会触发 useForm 未连接告警）。
+ */
+const SubscribeFormContent = forwardRef<SubscribeFormHandle, SubscribeFormContentProps>(
+  function SubscribeFormContent({ defaultChannelId, onSubmit }, ref) {
+    const [form] = Form.useForm<SubscribeFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: SubscribeFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{ channel_id: defaultChannelId, interval: 60 }}
+      >
+        <Form.Item
+          name="channel_id"
+          label="通道"
+          rules={[{ required: true, message: '请选择通道' }]}
+        >
+          <OptionSelect placeholder="请选择要订阅位置的通道" fetcher={channelFetcher} />
+        </Form.Item>
+        <Form.Item
+          name="interval"
+          label="订阅间隔（秒）"
+          rules={[{ required: true, message: '请输入订阅间隔' }]}
+          extra="后端缺省为 60 秒；设备会按该间隔上报位置。"
+        >
+          <InputNumber min={1} max={3600} style={{ width: '100%' }} placeholder="60" />
+        </Form.Item>
+      </Form>
+    )
+  },
+)
+
 /**
  * 移动位置：国标移动设备（车载 / 单兵）上报的位置。
  *
- * - 上半部分展示每个通道的最新位置（`realtime`）；
- * - 下半部分按通道与时间范围查询历史轨迹（`history`）。
+ * - 上半部分：最新位置的 ECharts 散点图（x=经度，y=纬度）+ 通道标签；
+ * - 下半部分：选中通道的历史轨迹折线（按上报时间升序）。
  *
- * 本期不引入地图底图，直接用表格展示经纬度与运动信息。
+ * 刻意不引入地图库：没有瓦片底图与投影换算，直接用经纬度当平面坐标，
+ * 图上明确标注「无底图，仅坐标分布」；坐标轴 scale=true 让范围自适应数据。
+ * 表格仍然保留，坐标精确值以表格为准。
  */
 const MobilePosition: React.FC = () => {
   const permCodes = useAuthStore((s) => s.permCodes)
@@ -88,6 +192,46 @@ const MobilePosition: React.FC = () => {
   const [historyPage, setHistoryPage] = useState(1)
   const [historyPageSize, setHistoryPageSize] = useState(20)
   const [historyLoading, setHistoryLoading] = useState(false)
+
+  /**
+   * 轨迹图数据：与表格分页解耦，一次取最多 500 个点。
+   *
+   * 表格按 20 条分页，若直接用当前页画折线，翻页时轨迹会「跳段」；
+   * 因此单独拉一次大页数据供图表使用，表格仍保持分页。
+   */
+  const [track, setTrack] = useState<GbPositionResp[]>([])
+  const [trackLoading, setTrackLoading] = useState(false)
+
+  useEffect(() => {
+    if (!historyQuery.channelId) {
+      setTrack([])
+      return undefined
+    }
+    let cancelled = false
+    setTrackLoading(true)
+    GbPositionController.pageGbPositionHistory(
+      1,
+      500,
+      undefined,
+      historyQuery.channelId,
+      undefined,
+      historyQuery.start,
+      historyQuery.end,
+    )
+      .then((res) => {
+        if (!cancelled) setTrack(sortByReportTime(res.data?.items ?? []))
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setTrack([])
+          message.error(apiErrorMessage(err, '查询轨迹图数据失败'))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTrackLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [historyQuery])
 
   const fetchHistory = useCallback(async () => {
     if (!historyQuery.channelId) {
@@ -139,17 +283,16 @@ const MobilePosition: React.FC = () => {
 
   /* ── 位置订阅 ── */
   const [subscribeOpen, setSubscribeOpen] = useState(false)
+  const [subscribeChannelId, setSubscribeChannelId] = useState<number | undefined>()
   const [subscribing, setSubscribing] = useState(false)
-  const [subscribeForm] = Form.useForm<SubscribeFormValues>()
+  const subscribeFormRef = useRef<SubscribeFormHandle>(null)
 
   const openSubscribe = (channelId?: number) => {
-    subscribeForm.resetFields()
-    subscribeForm.setFieldsValue({ channel_id: channelId, interval: 60 })
+    setSubscribeChannelId(channelId)
     setSubscribeOpen(true)
   }
 
-  const submitSubscribe = async () => {
-    const values = await subscribeForm.validateFields()
+  const submitSubscribe = async (values: SubscribeFormValues) => {
     setSubscribing(true)
     try {
       await GbPositionController.subscribeGbPosition({
@@ -164,6 +307,84 @@ const MobilePosition: React.FC = () => {
       setSubscribing(false)
     }
   }
+
+  /** 最新位置散点图：每个通道一个点，标签显示通道名称。 */
+  const realtimeOption = useMemo<EChartsOption>(() => {
+    const points = realtime.flatMap((row) => {
+      const pair = coordOf(row)
+      if (!pair) return []
+      const label = row.channel_name || row.gb_channel_id || `通道 ${row.channel_id ?? '-'}`
+      return [{ name: label, value: pair }]
+    })
+    return {
+      title: {
+        text: '最新位置坐标分布',
+        subtext: '无底图，仅坐标分布（x=经度，y=纬度）',
+        left: 'center',
+        textStyle: { fontSize: 14 },
+        subtextStyle: { color: '#8c8c8c', fontSize: 12 },
+      },
+      tooltip: { trigger: 'item' },
+      grid: { left: 70, right: 40, top: 70, bottom: 60 },
+      xAxis: coordAxisOption('经度', 28),
+      yAxis: coordAxisOption('纬度', 44),
+      series: [
+        {
+          type: 'scatter',
+          name: '最新位置',
+          data: points,
+          symbolSize: 14,
+          itemStyle: { color: '#1677ff' },
+          // {b} 是数据项 name（通道名称），比回调更易维护。
+          label: { show: true, position: 'top', formatter: '{b}', fontSize: 12 },
+          emphasis: { scale: true },
+        },
+      ],
+    }
+  }, [realtime])
+
+  /** 历史轨迹折线：按上报时间升序连接同一通道的坐标点。 */
+  const historyOption = useMemo<EChartsOption>(() => {
+    const points = track.flatMap((row) => {
+      const pair = coordOf(row)
+      if (!pair) return []
+      const time = row.report_time ? formatDT(row.report_time) : ''
+      return [{ name: time, value: pair }]
+    })
+    return {
+      title: {
+        text: '历史轨迹',
+        subtext: '无底图，仅坐标轨迹（x=经度，y=纬度）',
+        left: 'center',
+        textStyle: { fontSize: 14 },
+        subtextStyle: { color: '#8c8c8c', fontSize: 12 },
+      },
+      tooltip: { trigger: 'item' },
+      grid: { left: 70, right: 40, top: 70, bottom: 60 },
+      xAxis: coordAxisOption('经度', 28),
+      yAxis: coordAxisOption('纬度', 44),
+      series: [
+        {
+          type: 'line',
+          name: '历史轨迹',
+          data: points,
+          symbolSize: 6,
+          smooth: false,
+          lineStyle: { width: 2, color: '#fa8c16' },
+          itemStyle: { color: '#fa8c16' },
+        },
+      ],
+    }
+  }, [track])
+
+  const realtimePointCount = useMemo(
+    () => realtime.filter((row) => coordOf(row) !== null).length,
+    [realtime],
+  )
+  const trackPointCount = useMemo(
+    () => track.filter((row) => coordOf(row) !== null).length,
+    [track],
+  )
 
   const positionColumns: ColumnsType<GbPositionResp> = [
     { title: '设备名称', dataIndex: 'device_name', width: 160, ellipsis: true, render: (v?: string) => v || '-' },
@@ -234,6 +455,21 @@ const MobilePosition: React.FC = () => {
         style={{ marginBottom: 16 }}
         extra={<Tag color="blue">{realtime.length} 个通道</Tag>}
       >
+        {realtimePointCount > 0 ? (
+          <ReactECharts
+            className="e2e-gb-position-realtime-chart"
+            option={realtimeOption}
+            style={{ height: 320, marginBottom: 12 }}
+            opts={{ renderer: 'canvas' }}
+            notMerge
+          />
+        ) : (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="暂无有效经纬度，无法绘制坐标分布"
+            style={{ margin: '24px 0' }}
+          />
+        )}
         <Table<GbPositionResp>
           rowKey={(row) => String(row.id ?? `${row.channel_id ?? ''}-${row.report_time ?? ''}`)}
           size="small"
@@ -278,6 +514,37 @@ const MobilePosition: React.FC = () => {
           </Button>
         </Space>
 
+        <div style={{ marginBottom: 8 }}>
+          <Typography.Text type="secondary">
+            轨迹图最多展示最近 500 个坐标点；无底图，仅坐标分布（x=经度，y=纬度）。
+          </Typography.Text>
+        </div>
+        {!historyQuery.channelId ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="请选择通道并查询历史轨迹"
+            style={{ margin: '24px 0' }}
+          />
+        ) : trackLoading ? (
+          <div style={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Typography.Text type="secondary">轨迹加载中…</Typography.Text>
+          </div>
+        ) : trackPointCount > 0 ? (
+          <ReactECharts
+            className="e2e-gb-position-history-chart"
+            option={historyOption}
+            style={{ height: 320, marginBottom: 12 }}
+            opts={{ renderer: 'canvas' }}
+            notMerge
+          />
+        ) : (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="所选通道在该时间段内暂无有效坐标"
+            style={{ margin: '24px 0' }}
+          />
+        )}
+
         <Table<GbPositionResp>
           rowKey={(row) => String(row.id ?? `${row.channel_id ?? ''}-${row.report_time ?? ''}`)}
           size="small"
@@ -302,28 +569,16 @@ const MobilePosition: React.FC = () => {
         title="订阅移动位置"
         open={subscribeOpen}
         onCancel={() => setSubscribeOpen(false)}
-        onOk={() => void submitSubscribe()}
+        onOk={() => void subscribeFormRef.current?.submit()}
         confirmLoading={subscribing}
         destroyOnHidden
         width={560}
       >
-        <Form form={subscribeForm} layout="vertical">
-          <Form.Item
-            name="channel_id"
-            label="通道"
-            rules={[{ required: true, message: '请选择通道' }]}
-          >
-            <OptionSelect placeholder="请选择要订阅位置的通道" fetcher={channelFetcher} />
-          </Form.Item>
-          <Form.Item
-            name="interval"
-            label="订阅间隔（秒）"
-            rules={[{ required: true, message: '请输入订阅间隔' }]}
-            extra="后端缺省为 60 秒；设备会按该间隔上报位置。"
-          >
-            <InputNumber min={1} max={3600} style={{ width: '100%' }} placeholder="60" />
-          </Form.Item>
-        </Form>
+        <SubscribeFormContent
+          ref={subscribeFormRef}
+          defaultChannelId={subscribeChannelId}
+          onSubmit={submitSubscribe}
+        />
       </Modal>
     </PageContainer>
   )

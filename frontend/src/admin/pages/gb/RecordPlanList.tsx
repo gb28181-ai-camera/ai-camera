@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
+} from 'react'
 import {
   Alert,
   Button,
@@ -32,6 +34,7 @@ import ActionButtons from '../../components/ActionButtons'
 import { GbChannelController } from '../../api/generated/GbChannelController'
 import { GbRecordPlanController } from '../../api/generated/GbRecordPlanController'
 import type { GbRecordPlanItem } from '../../api/generated/definitions/GbRecordPlanItem'
+import type { GbRecordPlanDetailResp } from '../../api/generated/definitions/GbRecordPlanDetailResp'
 import type { GbRecordPlanItemReq } from '../../api/generated/definitions/GbRecordPlanItemReq'
 import type { OptionItem } from '../../api/generated/definitions/OptionItem'
 import { useAuthStore } from '../../store/authStore'
@@ -84,6 +87,194 @@ function fmtDT(value?: string): string {
   return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm:ss') : value
 }
 
+/** 新建 / 编辑时的表单初值（详情未到时先用列表行数据撑住）。 */
+function buildPlanInitialValues(
+  editing: GbRecordPlanItem | null,
+  detail: GbRecordPlanDetailResp | null,
+): Partial<PlanFormValues> {
+  if (!editing) {
+    return {
+      name: '',
+      active: true,
+      snap: false,
+      remark: '',
+      items: [{
+        week_day: 1,
+        start_time: timeToDayjs('08:00:00'),
+        end_time: timeToDayjs('18:00:00'),
+      }],
+    }
+  }
+  return {
+    name: detail?.name ?? editing.name ?? '',
+    active: detail?.active ?? editing.active ?? true,
+    snap: detail?.snap ?? editing.snap ?? false,
+    remark: detail?.remark ?? editing.remark ?? '',
+    items: (detail?.items ?? []).map((item) => ({
+      week_day: item.week_day ?? 0,
+      start_time: timeToDayjs(item.start_time),
+      end_time: timeToDayjs(item.end_time),
+    })),
+  }
+}
+
+interface PlanFormHandle {
+  submit: () => Promise<void>
+}
+
+interface PlanFormContentProps {
+  editing: GbRecordPlanItem | null
+  detail: GbRecordPlanDetailResp | null
+  /** 父组件在「打开弹窗」与「详情到达」时递增，触发一次表单重填。 */
+  resetKey: number
+  onSubmit: (values: PlanFormValues) => Promise<void>
+}
+
+/**
+ * 录像计划表单内容。
+ *
+ * form 与 Form 同在 Modal 的 children 内挂载；详情异步返回时通过 resetKey
+ * 主动重填，而不是让父组件在 Form 尚未挂载时调用 resetFields。
+ */
+const PlanFormContent = forwardRef<PlanFormHandle, PlanFormContentProps>(
+  function PlanFormContent({ editing, detail, resetKey, onSubmit }, ref) {
+    const [form] = Form.useForm<PlanFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: PlanFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    useEffect(() => {
+      // resetKey 变化 = 重新打开或详情到达；此时 Form 已挂载，安全。
+      form.resetFields()
+      form.setFieldsValue(buildPlanInitialValues(editing, detail))
+    }, [form, resetKey, editing, detail])
+
+    return (
+      <Form form={form} layout="vertical">
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item
+              name="name"
+              label="计划名称"
+              rules={[{ required: true, message: '请输入计划名称' }]}
+            >
+              <Input placeholder="如：园区全天录像" maxLength={100} />
+            </Form.Item>
+          </Col>
+          <Col span={6}>
+            <Form.Item name="active" label="是否启用" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+          <Col span={6}>
+            <Form.Item name="snap" label="抓图" valuePropName="checked">
+              <Switch checkedChildren="开" unCheckedChildren="关" />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Form.Item name="remark" label="备注">
+          <Input.TextArea rows={2} maxLength={500} placeholder="请输入备注" />
+        </Form.Item>
+
+        <Form.Item label="时间段（按星期配置，可多条）" required>
+          <Form.List
+            name="items"
+            rules={[
+              {
+                validator: async (_, value: PlanItemFormValue[] | undefined) => {
+                  if (!value || value.length === 0) {
+                    throw new Error('请至少添加一个时间段')
+                  }
+                },
+              },
+            ]}
+          >
+            {(fields, { add, remove }, { errors }) => (
+              <>
+                {fields.map(({ key: fieldKey, ...restField }) => (
+                  <Row gutter={8} key={fieldKey} align="middle" style={{ marginBottom: 8 }}>
+                    <Col span={5}>
+                      <Form.Item
+                        {...restField}
+                        name={[restField.name, 'week_day']}
+                        rules={[{ required: true, message: '请选择星期' }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <Select placeholder="星期" options={WEEK_DAY_OPTIONS} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={7}>
+                      <Form.Item
+                        {...restField}
+                        name={[restField.name, 'start_time']}
+                        rules={[{ required: true, message: '请选择开始时间' }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <TimePicker format="HH:mm:ss" style={{ width: '100%' }} placeholder="开始时间" />
+                      </Form.Item>
+                    </Col>
+                    <Col span={7}>
+                      <Form.Item
+                        {...restField}
+                        name={[restField.name, 'end_time']}
+                        rules={[{ required: true, message: '请选择结束时间' }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <TimePicker format="HH:mm:ss" style={{ width: '100%' }} placeholder="结束时间" />
+                      </Form.Item>
+                    </Col>
+                    <Col span={5}>
+                      <Button
+                        type="text"
+                        danger
+                        icon={<MinusCircleOutlined />}
+                        onClick={() => remove(restField.name)}
+                      >
+                        删除
+                      </Button>
+                    </Col>
+                  </Row>
+                ))}
+                <Button
+                  type="dashed"
+                  block
+                  icon={<PlusOutlined />}
+                  onClick={() =>
+                    add({
+                      week_day: 1,
+                      start_time: timeToDayjs('08:00:00'),
+                      end_time: timeToDayjs('18:00:00'),
+                    })
+                  }
+                >
+                  添加时间段
+                </Button>
+                <Form.ErrorList errors={errors} />
+              </>
+            )}
+          </Form.List>
+        </Form.Item>
+
+        <Alert
+          type="info"
+          showIcon
+          message="本期仅保存配置，不会触发定时录像；时间格式为 HH:mm:ss，week_day 0 表示周日。"
+        />
+      </Form>
+    )
+  },
+)
+
 /**
  * 录像计划：维护一周内的录像时间段，并把计划绑定到国标通道。
  *
@@ -106,9 +297,11 @@ const RecordPlanList: React.FC = () => {
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<GbRecordPlanItem | null>(null)
+  const [detail, setDetail] = useState<GbRecordPlanDetailResp | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm<PlanFormValues>()
+  const [formResetKey, setFormResetKey] = useState(0)
+  const formRef = useRef<PlanFormHandle>(null)
 
   const [bindOpen, setBindOpen] = useState(false)
   const [bindPlan, setBindPlan] = useState<GbRecordPlanItem | null>(null)
@@ -154,51 +347,24 @@ const RecordPlanList: React.FC = () => {
 
   const openCreate = () => {
     setEditing(null)
-    form.resetFields()
-    form.setFieldsValue({
-      name: '',
-      active: true,
-      snap: false,
-      remark: '',
-      items: [
-        {
-          week_day: 1,
-          start_time: timeToDayjs('08:00:00'),
-          end_time: timeToDayjs('18:00:00'),
-        },
-      ],
-    })
+    setDetail(null)
+    setFormResetKey((key) => key + 1)
     setModalOpen(true)
   }
 
   const openEdit = async (row: GbRecordPlanItem) => {
     if (!row.id) return
     setEditing(row)
-    form.resetFields()
-    form.setFieldsValue({
-      name: row.name ?? '',
-      active: row.active ?? true,
-      snap: row.snap ?? false,
-      remark: row.remark ?? '',
-      items: [],
-    })
+    setDetail(null)
+    setFormResetKey((key) => key + 1)
     setModalOpen(true)
     setDetailLoading(true)
     try {
       const res = await GbRecordPlanController.getGbRecordPlan(row.id)
-      const detail = res.data
-      if (detail) {
-        form.setFieldsValue({
-          name: detail.name ?? '',
-          active: detail.active ?? true,
-          snap: detail.snap ?? false,
-          remark: detail.remark ?? '',
-          items: (detail.items ?? []).map((item) => ({
-            week_day: item.week_day ?? 0,
-            start_time: timeToDayjs(item.start_time),
-            end_time: timeToDayjs(item.end_time),
-          })),
-        })
+      if (res.data) {
+        setDetail(res.data)
+        // 详情到达后再触发一次重填，覆盖列表行里缺失的时间段。
+        setFormResetKey((key) => key + 1)
       }
     } catch {
       // 详情拿不到时不要留一个空时间段表单，否则保存会清空原计划的时间段
@@ -208,8 +374,7 @@ const RecordPlanList: React.FC = () => {
     }
   }
 
-  const handleSave = async () => {
-    const values = await form.validateFields()
+  const handleSave = async (values: PlanFormValues) => {
     const items: GbRecordPlanItemReq[] = (values.items ?? []).map((item) => ({
       week_day: item.week_day ?? 0,
       start_time: item.start_time?.format('HH:mm:ss') ?? '',
@@ -408,127 +573,19 @@ const RecordPlanList: React.FC = () => {
         open={modalOpen}
         confirmLoading={saving}
         okButtonProps={{ disabled: detailLoading }}
-        onOk={() => void handleSave()}
+        onOk={() => void formRef.current?.submit()}
         onCancel={() => setModalOpen(false)}
         destroyOnHidden
         width={760}
       >
         <Spin spinning={detailLoading}>
-          <Form form={form} layout="vertical">
-            <Row gutter={16}>
-              <Col span={12}>
-                <Form.Item
-                  name="name"
-                  label="计划名称"
-                  rules={[{ required: true, message: '请输入计划名称' }]}
-                >
-                  <Input placeholder="如：园区全天录像" maxLength={100} />
-                </Form.Item>
-              </Col>
-              <Col span={6}>
-                <Form.Item name="active" label="是否启用" valuePropName="checked">
-                  <Switch checkedChildren="启用" unCheckedChildren="停用" />
-                </Form.Item>
-              </Col>
-              <Col span={6}>
-                <Form.Item name="snap" label="抓图" valuePropName="checked">
-                  <Switch checkedChildren="开" unCheckedChildren="关" />
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Form.Item name="remark" label="备注">
-              <Input.TextArea rows={2} maxLength={500} placeholder="请输入备注" />
-            </Form.Item>
-
-            <Form.Item label="时间段（按星期配置，可多条）" required>
-              <Form.List
-                name="items"
-                rules={[
-                  {
-                    validator: async (_, value: PlanItemFormValue[] | undefined) => {
-                      if (!value || value.length === 0) {
-                        throw new Error('请至少添加一个时间段')
-                      }
-                    },
-                  },
-                ]}
-              >
-                {(fields, { add, remove }, { errors }) => (
-                  <>
-                    {fields.map(({ key: fieldKey, ...restField }) => (
-                      <Row gutter={8} key={fieldKey} align="middle" style={{ marginBottom: 8 }}>
-                        <Col span={5}>
-                          <Form.Item
-                            {...restField}
-                            name={[restField.name, 'week_day']}
-                            rules={[{ required: true, message: '请选择星期' }]}
-                            style={{ marginBottom: 0 }}
-                          >
-                            <Select
-                              placeholder="星期"
-                              options={WEEK_DAY_OPTIONS}
-                            />
-                          </Form.Item>
-                        </Col>
-                        <Col span={7}>
-                          <Form.Item
-                            {...restField}
-                            name={[restField.name, 'start_time']}
-                            rules={[{ required: true, message: '请选择开始时间' }]}
-                            style={{ marginBottom: 0 }}
-                          >
-                            <TimePicker format="HH:mm:ss" style={{ width: '100%' }} placeholder="开始时间" />
-                          </Form.Item>
-                        </Col>
-                        <Col span={7}>
-                          <Form.Item
-                            {...restField}
-                            name={[restField.name, 'end_time']}
-                            rules={[{ required: true, message: '请选择结束时间' }]}
-                            style={{ marginBottom: 0 }}
-                          >
-                            <TimePicker format="HH:mm:ss" style={{ width: '100%' }} placeholder="结束时间" />
-                          </Form.Item>
-                        </Col>
-                        <Col span={5}>
-                          <Button
-                            type="text"
-                            danger
-                            icon={<MinusCircleOutlined />}
-                            onClick={() => remove(restField.name)}
-                          >
-                            删除
-                          </Button>
-                        </Col>
-                      </Row>
-                    ))}
-                    <Button
-                      type="dashed"
-                      block
-                      icon={<PlusOutlined />}
-                      onClick={() =>
-                        add({
-                          week_day: 1,
-                          start_time: timeToDayjs('08:00:00'),
-                          end_time: timeToDayjs('18:00:00'),
-                        })
-                      }
-                    >
-                      添加时间段
-                    </Button>
-                    <Form.ErrorList errors={errors} />
-                  </>
-                )}
-              </Form.List>
-            </Form.Item>
-
-            <Alert
-              type="info"
-              showIcon
-              message="本期仅保存配置，不会触发定时录像；时间格式为 HH:mm:ss，week_day 0 表示周日。"
-            />
-          </Form>
+          <PlanFormContent
+            ref={formRef}
+            editing={editing}
+            detail={detail}
+            resetKey={formResetKey}
+            onSubmit={handleSave}
+          />
         </Spin>
       </Modal>
 

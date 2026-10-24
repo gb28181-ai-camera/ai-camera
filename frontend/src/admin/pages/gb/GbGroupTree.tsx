@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
+} from 'react'
 import type { Key } from 'react'
 import {
   Button, Card, Col, Descriptions, Empty, Form, Input, InputNumber, Modal, Popconfirm, Row, Space, Switch,
@@ -63,6 +65,144 @@ function findGroup(nodes: GbGroupTreeNode[], id: number): GbGroupTreeNode | null
   return null
 }
 
+/** 树节点 → TreeSelect 数据（排除自身及其子孙，避免父子成环）。 */
+function toTreeSelectData(nodes: GbGroupTreeNode[], excludeId?: number): GroupTreeSelectNode[] {
+  return nodes
+    .filter((node) => node.id !== excludeId)
+    .map((node) => ({
+      key: Number(node.id ?? 0),
+      value: Number(node.id ?? 0),
+      title: String(node.name ?? ''),
+      children: node.children && node.children.length > 0
+        ? toTreeSelectData(node.children, excludeId)
+        : undefined,
+    }))
+}
+
+/** 新建 / 编辑的初始值。 */
+function buildGroupInitialValues(
+  editing: GbGroupTreeNode | null,
+  parent?: GbGroupTreeNode | null,
+): Partial<GroupFormValues> {
+  if (!editing) {
+    return {
+      parent_id: parent?.id,
+      sequence: 10,
+      active: true,
+    }
+  }
+  return {
+    name: editing.name ?? '',
+    parent_id: editing.parent_id ?? undefined,
+    sequence: editing.sequence ?? 10,
+    device_id: editing.device_id ?? '',
+    parent_device_id: editing.parent_device_id ?? '',
+    business_group: editing.business_group ?? '',
+    civil_code: editing.civil_code ?? '',
+    alias: editing.alias ?? '',
+    active: editing.active !== false,
+    remark: editing.remark ?? '',
+  }
+}
+
+interface GroupFormHandle {
+  submit: () => Promise<void>
+}
+
+interface GroupFormContentProps {
+  tree: GbGroupTreeNode[]
+  editing: GbGroupTreeNode | null
+  /** 新建子分组时传入父节点。 */
+  parent: GbGroupTreeNode | null
+  onSubmit: (values: GroupFormValues) => Promise<void>
+}
+
+/**
+ * 业务分组表单内容。
+ *
+ * form 与 Form 一起挂载在 Modal children 内：Modal 未打开时 children
+ * 不渲染，useForm 实例也不会被创建，从而避免未连接告警。
+ */
+const GroupFormContent = forwardRef<GroupFormHandle, GroupFormContentProps>(
+  function GroupFormContent({ tree, editing, parent, onSubmit }, ref) {
+    const [form] = Form.useForm<GroupFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: GroupFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form form={form} layout="vertical" initialValues={buildGroupInitialValues(editing, parent)}>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="name" label="分组名称" rules={[{ required: true, message: '请输入分组名称' }]}>
+              <Input placeholder="如：园区一组" maxLength={255} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="parent_id" label="上级分组">
+              <TreeSelect
+                allowClear
+                placeholder="不选则为根分组"
+                treeData={toTreeSelectData(tree, editing?.id)}
+                treeDefaultExpandAll
+              />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="device_id" label="分组国标编码" extra="GB/T 28181 业务分组编码">
+              <Input placeholder="请输入分组国标编码" maxLength={20} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="parent_device_id" label="父分组国标编码">
+              <Input placeholder="请输入父分组国标编码" maxLength={20} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="business_group" label="业务分组类型编码">
+              <Input placeholder="请输入业务分组类型编码" maxLength={20} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="civil_code" label="行政区划代码">
+              <Input placeholder="请输入行政区划代码" maxLength={20} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="alias" label="别名">
+              <Input placeholder="请输入别名" maxLength={255} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="sequence" label="排序">
+              <InputNumber min={0} max={9999} style={{ width: '100%' }} placeholder="数值越小越靠前" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="active" label="状态" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item name="remark" label="备注">
+              <Input.TextArea rows={3} maxLength={500} showCount placeholder="请输入备注" />
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
+    )
+  },
+)
+
 /**
  * 业务分组：与区域正交的树形组织维度，决定「按分组推送目录」的可见范围。
  * 左侧树 + 右侧详情；新增 / 编辑走弹窗，删除前确认且后端会校验子节点与通道引用。
@@ -80,7 +220,9 @@ export default function GbGroupTree() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<GbGroupTreeNode | null>(null)
   const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm<GroupFormValues>()
+  // 新建子分组时的父节点（仅用于表单初值，不参与其它逻辑）。
+  const [parentGroup, setParentGroup] = useState<GbGroupTreeNode | null>(null)
+  const formRef = useRef<GroupFormHandle>(null)
 
   const selected = useMemo(
     () => (selectedID === undefined ? null : findGroup(tree, selectedID)),
@@ -105,19 +247,6 @@ export default function GbGroupTree() {
 
   useEffect(() => { void fetchData() }, [fetchData])
 
-  /** 树节点 → TreeSelect 数据（排除自身及其子孙，避免父子成环） */
-  const toTreeSelectData = (nodes: GbGroupTreeNode[], excludeId?: number): GroupTreeSelectNode[] =>
-    nodes
-      .filter((node) => node.id !== excludeId)
-      .map((node) => ({
-        key: Number(node.id ?? 0),
-        value: Number(node.id ?? 0),
-        title: String(node.name ?? ''),
-        children: node.children && node.children.length > 0
-          ? toTreeSelectData(node.children, excludeId)
-          : undefined,
-      }))
-
   /** 树节点 → antd Tree 数据 */
   const toTreeData = (nodes: GbGroupTreeNode[]): TreeDataNode[] =>
     nodes.map((node) => ({
@@ -137,40 +266,17 @@ export default function GbGroupTree() {
 
   const openCreate = (parent?: GbGroupTreeNode | null) => {
     setEditing(null)
-    form.resetFields()
-    form.setFieldsValue({
-      parent_id: parent?.id,
-      sequence: 10,
-      active: true,
-    })
+    setParentGroup(parent ?? null)
     setModalOpen(true)
   }
 
   const openEdit = (node: GbGroupTreeNode) => {
     setEditing(node)
-    form.resetFields()
-    form.setFieldsValue({
-      name: node.name ?? '',
-      parent_id: node.parent_id ?? undefined,
-      sequence: node.sequence ?? 10,
-      device_id: node.device_id ?? '',
-      parent_device_id: node.parent_device_id ?? '',
-      business_group: node.business_group ?? '',
-      civil_code: node.civil_code ?? '',
-      alias: node.alias ?? '',
-      active: node.active !== false,
-      remark: node.remark ?? '',
-    })
+    setParentGroup(null)
     setModalOpen(true)
   }
 
-  const handleSave = async () => {
-    let values: GroupFormValues
-    try {
-      values = await form.validateFields()
-    } catch {
-      return // 表单校验未通过，antd 已在字段下方展示原因
-    }
+  const handleSave = async (values: GroupFormValues) => {
     setSaving(true)
     try {
       if (editing?.id) {
@@ -356,70 +462,18 @@ export default function GbGroupTree() {
         title={editing ? '编辑业务分组' : '新建业务分组'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
-        onOk={() => void handleSave()}
+        onOk={() => void formRef.current?.submit()}
         confirmLoading={saving}
         width={720}
         destroyOnHidden
       >
-        <Form form={form} layout="vertical">
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="name" label="分组名称" rules={[{ required: true, message: '请输入分组名称' }]}>
-                <Input placeholder="如：园区一组" maxLength={255} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="parent_id" label="上级分组">
-                <TreeSelect
-                  allowClear
-                  placeholder="不选则为根分组"
-                  treeData={toTreeSelectData(tree, editing?.id)}
-                  treeDefaultExpandAll
-                />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="device_id" label="分组国标编码" extra="GB/T 28181 业务分组编码">
-                <Input placeholder="请输入分组国标编码" maxLength={20} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="parent_device_id" label="父分组国标编码">
-                <Input placeholder="请输入父分组国标编码" maxLength={20} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="business_group" label="业务分组类型编码">
-                <Input placeholder="请输入业务分组类型编码" maxLength={20} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="civil_code" label="行政区划代码">
-                <Input placeholder="请输入行政区划代码" maxLength={20} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="alias" label="别名">
-                <Input placeholder="请输入别名" maxLength={255} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="sequence" label="排序">
-                <InputNumber min={0} max={9999} style={{ width: '100%' }} placeholder="数值越小越靠前" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="active" label="状态" valuePropName="checked">
-                <Switch checkedChildren="启用" unCheckedChildren="停用" />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="remark" label="备注">
-                <Input.TextArea rows={3} maxLength={500} showCount placeholder="请输入备注" />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
+        <GroupFormContent
+          ref={formRef}
+          tree={tree}
+          editing={editing}
+          parent={parentGroup}
+          onSubmit={handleSave}
+        />
         <div style={{ color: '#8c8c8c', fontSize: 12 }}>
           <ApartmentOutlined /> 删除分组前需先移除其子分组，并解除通道对该分组的引用。
         </div>

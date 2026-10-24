@@ -3,6 +3,7 @@ import { Alert, Button, Descriptions, Modal, Space, Table, Tag, Typography, mess
 import type { ColumnsType } from 'antd/es/table'
 import { QrcodeOutlined, ReloadOutlined } from '@ant-design/icons'
 import axios from 'axios'
+import { QRCodeSVG } from 'qrcode.react'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import StatusTag from '../../components/StatusTag'
@@ -224,29 +225,45 @@ export default function DeviceActivationList() {
               ]}
             />
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500 }}>二维码内容</div>
-              <div
-                style={{
-                  border: '1px solid #d9d9d9',
-                  borderRadius: 6,
-                  padding: '8px 12px',
-                  background: '#fafafa',
-                }}
-              >
-                {activation.qr_content ? (
-                  <Typography.Paragraph
-                    copyable={{ text: activation.qr_content }}
-                    style={{ marginBottom: 0, fontFamily: 'monospace', wordBreak: 'break-all' }}
+              <div style={{ marginBottom: 8, fontWeight: 500 }}>激活二维码</div>
+              {activation.qr_content ? (
+                // 与另外两个激活入口保持一致：二维码 + 文本双展示。
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <div
+                    style={{
+                      border: '1px solid #d9d9d9',
+                      borderRadius: 6,
+                      padding: 12,
+                      background: '#fff',
+                      display: 'inline-block',
+                    }}
                   >
-                    {activation.qr_content}
-                  </Typography.Paragraph>
-                ) : (
-                  '-'
-                )}
-              </div>
-              <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-                当前前端未引入二维码库，以上为二维码 JSON 内容，可复制后由扫码工具生成二维码。
-              </Typography.Text>
+                    <QRCodeSVG
+                      value={activation.qr_content}
+                      size={180}
+                      level="M"
+                      title="设备激活二维码"
+                    />
+                  </div>
+                  <div
+                    style={{
+                      border: '1px solid #d9d9d9',
+                      borderRadius: 6,
+                      padding: '8px 12px',
+                      background: '#fafafa',
+                    }}
+                  >
+                    <Typography.Paragraph
+                      copyable={{ text: activation.qr_content }}
+                      style={{ marginBottom: 0, fontFamily: 'monospace', wordBreak: 'break-all' }}
+                    >
+                      {activation.qr_content}
+                    </Typography.Paragraph>
+                  </div>
+                </Space>
+              ) : (
+                <Typography.Text type="secondary">后端未返回二维码内容，请重新生成激活凭证。</Typography.Text>
+              )}
             </div>
           </Space>
         ) : null}

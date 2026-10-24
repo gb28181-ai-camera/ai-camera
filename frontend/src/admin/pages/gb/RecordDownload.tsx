@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
+} from 'react'
 import {
   Alert,
   Button,
@@ -32,6 +34,72 @@ interface DownloadFormValues {
   channel_id: number
   range: [Dayjs, Dayjs]
 }
+
+interface DownloadFormHandle {
+  submit: () => Promise<void>
+}
+
+interface DownloadFormContentProps {
+  channelOptions: { label: string; value: number }[]
+  onSubmit: (values: DownloadFormValues) => Promise<void>
+}
+
+/**
+ * 开始下载表单内容。
+ *
+ * 表单实例与 Form 一起挂载在 Modal 的 children 中，避免 useForm 在
+ * Modal 尚未渲染 Form 时被调用而产生控制台告警。
+ */
+const DownloadFormContent = forwardRef<DownloadFormHandle, DownloadFormContentProps>(
+  function DownloadFormContent({ channelOptions, onSubmit }, ref) {
+    const [form] = Form.useForm<DownloadFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: DownloadFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{ range: [dayjs().startOf('day'), dayjs().endOf('day')] }}
+      >
+        <Form.Item
+          name="channel_id"
+          label="通道"
+          rules={[{ required: true, message: '请选择通道' }]}
+        >
+          <Select<number>
+            showSearch
+            optionFilterProp="label"
+            placeholder="请选择国标通道"
+            options={channelOptions}
+          />
+        </Form.Item>
+        <Form.Item
+          name="range"
+          label="录像时间段"
+          rules={[{ required: true, message: '请选择录像时间段' }]}
+        >
+          <RangePicker showTime style={{ width: '100%' }} />
+        </Form.Item>
+        <Alert
+          type="info"
+          showIcon
+          message="下载任务保存在服务进程内存，重启会丢失；本期只做单文件直接下载，不做合并打包。"
+        />
+      </Form>
+    )
+  },
+)
 
 function toGbTime(value: Dayjs): string {
   return value.format('YYYY-MM-DDTHH:mm:ss')
@@ -85,7 +153,7 @@ const RecordDownload: React.FC = () => {
 
   const [modalOpen, setModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm<DownloadFormValues>()
+  const formRef = useRef<DownloadFormHandle>(null)
 
   useEffect(() => {
     void GbChannelController.gbChannelOptions()
@@ -132,14 +200,9 @@ const RecordDownload: React.FC = () => {
     return () => window.clearInterval(timer)
   }, [hasDownloading, fetchData])
 
-  const openCreate = () => {
-    form.resetFields()
-    form.setFieldsValue({ range: [dayjs().startOf('day'), dayjs().endOf('day')] })
-    setModalOpen(true)
-  }
+  const openCreate = () => setModalOpen(true)
 
-  const handleCreate = async () => {
-    const values = await form.validateFields()
+  const handleCreate = async (values: DownloadFormValues) => {
     setSaving(true)
     try {
       await GbPlaybackController.startGbDownload({
@@ -328,37 +391,16 @@ const RecordDownload: React.FC = () => {
         open={modalOpen}
         confirmLoading={saving}
         okText="开始下载"
-        onOk={() => void handleCreate()}
+        onOk={() => void formRef.current?.submit()}
         onCancel={() => setModalOpen(false)}
         destroyOnHidden
         width={560}
       >
-        <Form form={form} layout="vertical">
-          <Form.Item
-            name="channel_id"
-            label="通道"
-            rules={[{ required: true, message: '请选择通道' }]}
-          >
-            <Select<number>
-              showSearch
-              optionFilterProp="label"
-              placeholder="请选择国标通道"
-              options={channelSelectOptions}
-            />
-          </Form.Item>
-          <Form.Item
-            name="range"
-            label="录像时间段"
-            rules={[{ required: true, message: '请选择录像时间段' }]}
-          >
-            <RangePicker showTime style={{ width: '100%' }} />
-          </Form.Item>
-          <Alert
-            type="info"
-            showIcon
-            message="下载任务保存在服务进程内存，重启会丢失；本期只做单文件直接下载，不做合并打包。"
-          />
-        </Form>
+        <DownloadFormContent
+          ref={formRef}
+          channelOptions={channelSelectOptions}
+          onSubmit={handleCreate}
+        />
       </Modal>
     </PageContainer>
   )

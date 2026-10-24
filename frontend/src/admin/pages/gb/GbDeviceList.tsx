@@ -7,6 +7,7 @@ import {
   BellOutlined, DeleteOutlined, InfoCircleOutlined, QrcodeOutlined, SyncOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
+import { QRCodeSVG } from 'qrcode.react'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
@@ -451,28 +452,48 @@ export default function GbDeviceList() {
               ]}
             />
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500 }}>二维码内容</div>
-              <div
-                style={{
-                  border: '1px solid #d9d9d9',
-                  borderRadius: 6,
-                  padding: '8px 12px',
-                  background: '#fafafa',
-                }}
-              >
-                {activation.qr_content ? (
-                  <Typography.Paragraph
-                    copyable={{ text: activation.qr_content }}
-                    style={{ marginBottom: 0, fontFamily: 'monospace', wordBreak: 'break-all' }}
+              <div style={{ marginBottom: 8, fontWeight: 500 }}>激活二维码</div>
+              {activation.qr_content ? (
+                // qr_content 是后端拼好的 JSON 字符串，扫码端按约定解析；
+                // 二维码与文本同时展示，扫码失败时仍可复制内容手工导入。
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <div
+                    style={{
+                      border: '1px solid #d9d9d9',
+                      borderRadius: 6,
+                      padding: 12,
+                      background: '#fff',
+                      display: 'inline-block',
+                    }}
                   >
-                    {activation.qr_content}
-                  </Typography.Paragraph>
-                ) : (
-                  '-'
-                )}
-              </div>
+                    <QRCodeSVG
+                      value={activation.qr_content}
+                      size={180}
+                      level="M"
+                      title="设备激活二维码"
+                    />
+                  </div>
+                  <div
+                    style={{
+                      border: '1px solid #d9d9d9',
+                      borderRadius: 6,
+                      padding: '8px 12px',
+                      background: '#fafafa',
+                    }}
+                  >
+                    <Typography.Paragraph
+                      copyable={{ text: activation.qr_content }}
+                      style={{ marginBottom: 0, fontFamily: 'monospace', wordBreak: 'break-all' }}
+                    >
+                      {activation.qr_content}
+                    </Typography.Paragraph>
+                  </div>
+                </Space>
+              ) : (
+                <Typography.Text type="secondary">后端未返回二维码内容，请确认设备已生成激活凭证。</Typography.Text>
+              )}
               <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-                当前前端未引入二维码库，以上为二维码 JSON 内容，可复制后由扫码工具生成二维码。
+                使用摄像头 App / 扫码工具扫描二维码即可导入国标接入信息；二维码内容为 JSON 字符串。
               </Typography.Text>
             </div>
           </Space>

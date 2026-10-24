@@ -35,9 +35,9 @@ export class GbCloudRecordController {
     }
 
     static getGbCloudRecordDownloadPath: string = "/web/gb/cloud-records/{id}/download";
-    /// 云端录像下载地址
-    static async getGbCloudRecordDownload(id: string | number, headers?: any): Promise<RGbCloudRecordDownload> {
-      return request(`/web/gb/cloud-records/${id}/download`, {
+    /// 云端录像下载
+    static async getGbCloudRecordDownload(id: string | number, ids?: string, headers?: any): Promise<RGbCloudRecordDownload> {
+      return request(`/web/gb/cloud-records/${id}/download?ids=${ids ?? "" }`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "GET",
         headers,

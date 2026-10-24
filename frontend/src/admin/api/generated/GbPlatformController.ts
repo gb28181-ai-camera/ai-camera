@@ -69,6 +69,17 @@ export class GbPlatformController {
       });
     }
 
+    static pushGbPlatformCatalogPath: string = "/web/gb/platforms/{id}/catalog-push";
+    /// 手动推送目录
+    static async pushGbPlatformCatalog(id: string | number, headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/platforms/${id}/catalog-push`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: null,
+        headers,
+      });
+    }
+
     static pageGbPlatformChannelsPath: string = "/web/gb/platforms/{id}/channels";
     /// 级联通道分页
     static async pageGbPlatformChannels(id: string | number, page?: number, page_size?: number, keyword?: string, channel_id?: number, headers?: any): Promise<RPageGbPlatformChannel> {
@@ -130,6 +141,38 @@ export class GbPlatformController {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "PUT",
         data: JSON.stringify(data),
+        headers,
+      });
+    }
+
+    static startGbPlatformCascadePath: string = "/web/gb/platforms/cascade/start";
+    /// 启动级联
+    static async startGbPlatformCascade(headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/platforms/cascade/start`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: null,
+        headers,
+      });
+    }
+
+    static getGbPlatformCascadeStatusPath: string = "/web/gb/platforms/cascade/status";
+    /// 级联运行状态
+    static async getGbPlatformCascadeStatus(headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/platforms/cascade/status`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
+        headers,
+      });
+    }
+
+    static stopGbPlatformCascadePath: string = "/web/gb/platforms/cascade/stop";
+    /// 停止级联
+    static async stopGbPlatformCascade(headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/platforms/cascade/stop`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: null,
         headers,
       });
     }

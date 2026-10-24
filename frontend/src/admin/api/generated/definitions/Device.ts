@@ -23,8 +23,9 @@ export type Device = Definition & {
 	/** 版本与模式 */
 	firmware_id?: number;
 	firmware_ver?: string;
-	/** ── 国标接入（GB28181，v0.2.0 新增 13 列）────────────────────── ⚠️ gb_device_id 与 device_code 是**两个不同的 ID 命名空间**： device_code 为业务编号（如 CAM_001），供 /web/devices/:id/heartbeat 使用； gb_device_id 为 20 位国标编码，是 SIP From 头携带的值。 二者不得互相复用。gb_device_id 为空的设备不参与 SIP（信令层回 403）。 唯一约束为**部分唯一索引**（WHERE gb_device_id IS NOT NULL AND deleted_at IS NULL）， 无法用 GORM tag 表达，由 DDL 脚本创建；AutoMigrate 只负责列本身。 依据：docs/开发文档/数据库设计/sql/ddl/09-国标视频.sql 第 0 节。 */
+	/** ── 国标接入（GB28181，v0.2.0 新增 13 列 + 2022 扩展 gb_version）────── ⚠️ gb_device_id 与 device_code 是**两个不同的 ID 命名空间**： device_code 为业务编号（如 CAM_001），供 /web/devices/:id/heartbeat 使用； gb_device_id 为 20 位国标编码，是 SIP From 头携带的值。 二者不得互相复用。gb_device_id 为空的设备不参与 SIP（信令层回 403）。 唯一约束为**部分唯一索引**（WHERE gb_device_id IS NOT NULL AND deleted_at IS NULL）， 无法用 GORM tag 表达，由 DDL 脚本创建；AutoMigrate 只负责列本身。 依据：docs/开发文档/数据库设计/sql/ddl/09-国标视频.sql 第 0 节。 */
 	gb_device_id?: string;
+	gb_version?: string;
 	id?: number;
 	info_interval?: number;
 	iot_card?: IotCard;

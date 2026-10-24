@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
+} from 'react'
 import {
   Alert, Button, Col, Form, Input, Modal, Popconfirm, Row, Space, Switch, Table, Tag, message,
 } from 'antd'
@@ -32,6 +34,101 @@ function fmtDT(v?: string): string {
   return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : v
 }
 
+/** 新建 / 编辑的初始值。 */
+function buildStreamPushInitialValues(editing: GbStreamPushItem | null): Partial<StreamPushFormValues> {
+  if (!editing) {
+    return { app: 'push', active: true }
+  }
+  return {
+    name: editing.name ?? '',
+    app: editing.app ?? '',
+    stream: editing.stream ?? '',
+    active: editing.active ?? true,
+    remark: editing.remark ?? '',
+  }
+}
+
+interface StreamPushFormHandle {
+  submit: () => Promise<void>
+}
+
+interface StreamPushFormContentProps {
+  editing: GbStreamPushItem | null
+  onCopy: (url?: string) => void
+  onSubmit: (values: StreamPushFormValues) => Promise<void>
+}
+
+/**
+ * 推流配置表单内容。
+ *
+ * form 与 Form 同在 Modal children 中挂载，父组件不再提前调用
+ * resetFields/setFieldsValue，消除 useForm 未连接告警。
+ */
+const StreamPushFormContent = forwardRef<StreamPushFormHandle, StreamPushFormContentProps>(
+  function StreamPushFormContent({ editing, onCopy, onSubmit }, ref) {
+    const [form] = Form.useForm<StreamPushFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: StreamPushFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form form={form} layout="vertical" initialValues={buildStreamPushInitialValues(editing)}>
+        {editing ? (
+          <Form.Item label="推流地址（平台生成）" extra="由媒体节点配置自动生成，不可编辑">
+            <Space.Compact style={{ width: '100%' }}>
+              <Input value={editing.push_url ?? ''} readOnly placeholder="暂无可用地址" />
+              <Button icon={<CopyOutlined />} onClick={() => onCopy(editing.push_url)}>
+                复制
+              </Button>
+            </Space.Compact>
+          </Form.Item>
+        ) : null}
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
+              <Input placeholder="如：大门编码器" maxLength={255} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="app"
+              label="应用名"
+              rules={[{ required: true, message: '请输入应用名' }]}
+              extra="ZLM 的 app 名，与流 ID 组合后唯一"
+            >
+              <Input placeholder="如：push" maxLength={50} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="stream" label="流 ID" rules={[{ required: true, message: '请输入流 ID' }]}>
+              <Input placeholder="如：encoder01" maxLength={100} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="active" label="启用配置" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item name="remark" label="备注">
+              <Input.TextArea rows={2} maxLength={500} showCount placeholder="请输入备注" />
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
+    )
+  },
+)
+
 /**
  * 推流配置。
  *
@@ -59,7 +156,7 @@ export default function StreamPushList() {
   const [editing, setEditing] = useState<GbStreamPushItem | null>(null)
   const [saving, setSaving] = useState(false)
   const [actingId, setActingId] = useState<number | null>(null)
-  const [form] = Form.useForm<StreamPushFormValues>()
+  const formRef = useRef<StreamPushFormHandle>(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -117,32 +214,15 @@ export default function StreamPushList() {
 
   const openCreate = () => {
     setEditing(null)
-    form.resetFields()
-    form.setFieldsValue({ app: 'push', active: true })
     setModalOpen(true)
   }
 
   const openEdit = (row: GbStreamPushItem) => {
     setEditing(row)
-    form.resetFields()
-    form.setFieldsValue({
-      name: row.name ?? '',
-      app: row.app ?? '',
-      stream: row.stream ?? '',
-      active: row.active ?? true,
-      remark: row.remark ?? '',
-    })
     setModalOpen(true)
   }
 
-  const handleSave = async () => {
-    let values: StreamPushFormValues
-    try {
-      values = await form.validateFields()
-    } catch {
-      return
-    }
-
+  const handleSave = async (values: StreamPushFormValues) => {
     const payload: CreateGbStreamPushReq = {
       name: values.name.trim(),
       app: values.app.trim(),
@@ -369,55 +449,17 @@ export default function StreamPushList() {
         title={editing ? '编辑推流配置' : '新增推流配置'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
-        onOk={handleSave}
+        onOk={() => void formRef.current?.submit()}
         confirmLoading={saving}
         destroyOnHidden
         width={640}
       >
-        <Form form={form} layout="vertical">
-          {editing ? (
-            <Form.Item label="推流地址（平台生成）" extra="由媒体节点配置自动生成，不可编辑">
-              <Space.Compact style={{ width: '100%' }}>
-                <Input value={editing.push_url ?? ''} readOnly placeholder="暂无可用地址" />
-                <Button icon={<CopyOutlined />} onClick={() => handleCopy(editing.push_url)}>
-                  复制
-                </Button>
-              </Space.Compact>
-            </Form.Item>
-          ) : null}
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-                <Input placeholder="如：大门编码器" maxLength={255} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="app"
-                label="应用名"
-                rules={[{ required: true, message: '请输入应用名' }]}
-                extra="ZLM 的 app 名，与流 ID 组合后唯一"
-              >
-                <Input placeholder="如：push" maxLength={50} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="stream" label="流 ID" rules={[{ required: true, message: '请输入流 ID' }]}>
-                <Input placeholder="如：encoder01" maxLength={100} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="active" label="启用配置" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="remark" label="备注">
-                <Input.TextArea rows={2} maxLength={500} showCount placeholder="请输入备注" />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
+        <StreamPushFormContent
+          ref={formRef}
+          editing={editing}
+          onCopy={(url) => void handleCopy(url)}
+          onSubmit={handleSave}
+        />
       </Modal>
     </PageContainer>
   )

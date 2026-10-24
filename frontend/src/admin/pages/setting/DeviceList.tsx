@@ -7,6 +7,7 @@ import type { ColumnsType } from 'antd/es/table'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ThunderboltOutlined, QrcodeOutlined,
 } from '@ant-design/icons'
+import { QRCodeSVG } from 'qrcode.react'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
@@ -601,13 +602,36 @@ const DeviceList: React.FC = () => {
               ]}
             />
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500 }}>二维码内容</div>
-              <Typography.Paragraph
-                copyable={{ text: gbActivation.qr_content }}
-                style={{ marginBottom: 0, fontFamily: 'monospace', wordBreak: 'break-all' }}
-              >
-                {gbActivation.qr_content || '-'}
-              </Typography.Paragraph>
+              <div style={{ marginBottom: 8, fontWeight: 500 }}>激活二维码</div>
+              {gbActivation.qr_content ? (
+                // 与「国标视频 → 国标设备」的激活凭证弹窗保持一致：二维码 + 文本双展示。
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <div
+                    style={{
+                      border: '1px solid #d9d9d9',
+                      borderRadius: 6,
+                      padding: 12,
+                      background: '#fff',
+                      display: 'inline-block',
+                    }}
+                  >
+                    <QRCodeSVG
+                      value={gbActivation.qr_content}
+                      size={180}
+                      level="M"
+                      title="设备激活二维码"
+                    />
+                  </div>
+                  <Typography.Paragraph
+                    copyable={{ text: gbActivation.qr_content }}
+                    style={{ marginBottom: 0, fontFamily: 'monospace', wordBreak: 'break-all' }}
+                  >
+                    {gbActivation.qr_content}
+                  </Typography.Paragraph>
+                </Space>
+              ) : (
+                <Typography.Text type="secondary">后端未返回二维码内容，请重新生成激活凭证。</Typography.Text>
+              )}
             </div>
           </Space>
         ) : null}

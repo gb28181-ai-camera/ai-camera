@@ -5,6 +5,8 @@ import type { Definition } from './Definition';
 export type GbPlayResp = Definition & {
 	/** App 恒为 "rtp"。 */
 	app?: string;
+	/** Codec 实际协商到的视频编码，如 H264 / H265。 来自 ZLM getMediaInfo 的 tracks.codec_id_name，用于前端展示与排障； 查询失败时留空（不影响播放本身），后端只记 WARN。 */
+	codec?: string;
 	/** FLV 完整 HTTP-FLV URL。 */
 	flv?: string;
 	/** HLS 完整 HLS URL。 */

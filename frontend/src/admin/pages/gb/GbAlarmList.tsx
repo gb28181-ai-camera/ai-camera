@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
+} from 'react'
 import {
   Button, DatePicker, Descriptions, Form, Image, Input, message, Modal, Popconfirm, Space, Table, Tag,
 } from 'antd'
@@ -63,6 +65,48 @@ interface HandleFormValues {
   remark: string
 }
 
+interface HandleFormHandle {
+  submit: () => Promise<void>
+}
+
+interface HandleFormContentProps {
+  onSubmit: (values: HandleFormValues) => Promise<void>
+}
+
+/**
+ * 处理报警表单内容：form 与 Form 同在 Modal children 内挂载，
+ * 父组件不再在 setHandleOpen 之前调用 resetFields。
+ */
+const HandleFormContent = forwardRef<HandleFormHandle, HandleFormContentProps>(
+  function HandleFormContent({ onSubmit }, ref) {
+    const [form] = Form.useForm<HandleFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: HandleFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form form={form} layout="vertical">
+        <Form.Item
+          name="remark"
+          label="处理意见"
+          rules={[{ required: true, message: '请填写处理意见' }]}
+        >
+          <Input.TextArea rows={4} maxLength={500} showCount placeholder="请填写处理情况" />
+        </Form.Item>
+      </Form>
+    )
+  },
+)
+
 /**
  * 国标报警：设备通过 MANSCDP Alarm 主动上报的报警。
  *
@@ -99,7 +143,7 @@ const GbAlarmList: React.FC = () => {
   const [handleTargetId, setHandleTargetId] = useState<number | undefined>()
   const [handleSubtitle, setHandleSubtitle] = useState('')
   const [saving, setSaving] = useState(false)
-  const [handleForm] = Form.useForm<HandleFormValues>()
+  const handleFormRef = useRef<HandleFormHandle>(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -161,13 +205,11 @@ const GbAlarmList: React.FC = () => {
     if (row.id === undefined) return
     setHandleTargetId(row.id)
     setHandleSubtitle([row.device_name, row.channel_name].filter(Boolean).join(' / '))
-    handleForm.resetFields()
     setHandleOpen(true)
   }
 
-  const submitHandle = async () => {
+  const submitHandle = async (values: HandleFormValues) => {
     if (handleTargetId === undefined) return
-    const values = await handleForm.validateFields()
     setSaving(true)
     try {
       await GbAlarmController.handleGbAlarm(handleTargetId, { handled: true, remark: values.remark })
@@ -449,7 +491,7 @@ const GbAlarmList: React.FC = () => {
         title={`处理国标报警${handleTargetId ? ` #${handleTargetId}` : ''}`}
         open={handleOpen}
         onCancel={() => setHandleOpen(false)}
-        onOk={() => void submitHandle()}
+        onOk={() => void handleFormRef.current?.submit()}
         confirmLoading={saving}
         destroyOnHidden
         width={640}
@@ -457,15 +499,7 @@ const GbAlarmList: React.FC = () => {
         <div style={{ color: '#8c8c8c', marginBottom: 12 }}>
           {handleSubtitle || '请填写处理意见'}
         </div>
-        <Form form={handleForm} layout="vertical">
-          <Form.Item
-            name="remark"
-            label="处理意见"
-            rules={[{ required: true, message: '请填写处理意见' }]}
-          >
-            <Input.TextArea rows={4} maxLength={500} showCount placeholder="请填写处理情况" />
-          </Form.Item>
-        </Form>
+        <HandleFormContent ref={handleFormRef} onSubmit={submitHandle} />
       </Modal>
 
       {/* 抓图预览 */}

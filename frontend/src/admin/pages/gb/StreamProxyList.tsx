@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
+} from 'react'
 import {
   Button, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Switch, Table, Tag, message,
 } from 'antd'
@@ -41,6 +43,126 @@ function fmtDT(v?: string): string {
   return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : v
 }
 
+/** 新建 / 编辑的初始值。 */
+function buildStreamProxyInitialValues(editing: GbStreamProxyItem | null): Partial<StreamProxyFormValues> {
+  if (!editing) {
+    return {
+      app: 'proxy',
+      timeout_ms: 10000,
+      enable_audio: true,
+      enable_mp4: false,
+      enable: true,
+    }
+  }
+  return {
+    name: editing.name ?? '',
+    app: editing.app ?? '',
+    stream: editing.stream ?? '',
+    src_url: editing.src_url ?? '',
+    timeout_ms: editing.timeout_ms ?? 10000,
+    enable_audio: editing.enable_audio ?? true,
+    enable_mp4: editing.enable_mp4 ?? false,
+    enable: editing.enable ?? true,
+    remark: editing.remark ?? '',
+  }
+}
+
+interface StreamProxyFormHandle {
+  submit: () => Promise<void>
+}
+
+interface StreamProxyFormContentProps {
+  editing: GbStreamProxyItem | null
+  onSubmit: (values: StreamProxyFormValues) => Promise<void>
+}
+
+/**
+ * 拉流代理表单内容：form 与 Form 同挂载在 Modal children 中，
+ * 避免父组件在 Form 渲染前调用 useForm 方法产生告警。
+ */
+const StreamProxyFormContent = forwardRef<StreamProxyFormHandle, StreamProxyFormContentProps>(
+  function StreamProxyFormContent({ editing, onSubmit }, ref) {
+    const [form] = Form.useForm<StreamProxyFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: StreamProxyFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form form={form} layout="vertical" initialValues={buildStreamProxyInitialValues(editing)}>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
+              <Input placeholder="如：大门摄像头拉流" maxLength={255} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="app"
+              label="应用名"
+              rules={[{ required: true, message: '请输入应用名' }]}
+              extra="ZLM 的 app 名，与流 ID 组合后唯一"
+            >
+              <Input placeholder="如：proxy" maxLength={50} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="stream" label="流 ID" rules={[{ required: true, message: '请输入流 ID' }]}>
+              <Input placeholder="如：camera01" maxLength={100} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="timeout_ms" label="拉流超时（毫秒）">
+              <InputNumber min={1000} max={120000} step={1000} style={{ width: '100%' }} placeholder="默认 10000" />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item
+              name="src_url"
+              label="源地址"
+              rules={[
+                { required: true, message: '请输入源地址' },
+                { pattern: /^(rtsp|rtmp|http|https):\/\//i, message: '源地址需以 rtsp://、rtmp:// 或 http(s):// 开头' },
+              ]}
+              extra="支持 rtsp / rtmp / http(s) 源地址"
+            >
+              <Input placeholder="如：rtsp://10.0.0.9:554/live" maxLength={500} />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="enable" label="启用" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="enable_audio" label="启用音频" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="enable_mp4" label="录制 MP4" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item name="remark" label="备注">
+              <Input.TextArea rows={2} maxLength={500} showCount placeholder="请输入备注" />
+            </Form.Item>
+          </Col>
+        </Row>
+      </Form>
+    )
+  },
+)
+
 /**
  * 拉流代理：平台让 ZLM 主动从 rtsp/rtmp/http 源拉流。
  * 新增/编辑只落配置；Start/Stop 才真正调用 ZLM。
@@ -65,7 +187,7 @@ export default function StreamProxyList() {
   const [editing, setEditing] = useState<GbStreamProxyItem | null>(null)
   const [saving, setSaving] = useState(false)
   const [actingId, setActingId] = useState<number | null>(null)
-  const [form] = Form.useForm<StreamProxyFormValues>()
+  const formRef = useRef<StreamProxyFormHandle>(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -109,42 +231,15 @@ export default function StreamProxyList() {
 
   const openCreate = () => {
     setEditing(null)
-    form.resetFields()
-    form.setFieldsValue({
-      app: 'proxy',
-      timeout_ms: 10000,
-      enable_audio: true,
-      enable_mp4: false,
-      enable: true,
-    })
     setModalOpen(true)
   }
 
   const openEdit = (row: GbStreamProxyItem) => {
     setEditing(row)
-    form.resetFields()
-    form.setFieldsValue({
-      name: row.name ?? '',
-      app: row.app ?? '',
-      stream: row.stream ?? '',
-      src_url: row.src_url ?? '',
-      timeout_ms: row.timeout_ms ?? 10000,
-      enable_audio: row.enable_audio ?? true,
-      enable_mp4: row.enable_mp4 ?? false,
-      enable: row.enable ?? true,
-      remark: row.remark ?? '',
-    })
     setModalOpen(true)
   }
 
-  const handleSave = async () => {
-    let values: StreamProxyFormValues
-    try {
-      values = await form.validateFields()
-    } catch {
-      return
-    }
-
+  const handleSave = async (values: StreamProxyFormValues) => {
     const payload: CreateGbStreamProxyReq = {
       name: values.name.trim(),
       app: values.app.trim(),
@@ -361,73 +456,12 @@ export default function StreamProxyList() {
         title={editing ? '编辑拉流代理' : '新增拉流代理'}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
-        onOk={handleSave}
+        onOk={() => void formRef.current?.submit()}
         confirmLoading={saving}
         destroyOnHidden
         width={680}
       >
-        <Form form={form} layout="vertical">
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-                <Input placeholder="如：大门摄像头拉流" maxLength={255} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="app"
-                label="应用名"
-                rules={[{ required: true, message: '请输入应用名' }]}
-                extra="ZLM 的 app 名，与流 ID 组合后唯一"
-              >
-                <Input placeholder="如：proxy" maxLength={50} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="stream" label="流 ID" rules={[{ required: true, message: '请输入流 ID' }]}>
-                <Input placeholder="如：camera01" maxLength={100} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="timeout_ms" label="拉流超时（毫秒）">
-                <InputNumber min={1000} max={120000} step={1000} style={{ width: '100%' }} placeholder="默认 10000" />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item
-                name="src_url"
-                label="源地址"
-                rules={[
-                  { required: true, message: '请输入源地址' },
-                  { pattern: /^(rtsp|rtmp|http|https):\/\//i, message: '源地址需以 rtsp://、rtmp:// 或 http(s):// 开头' },
-                ]}
-                extra="支持 rtsp / rtmp / http(s) 源地址"
-              >
-                <Input placeholder="如：rtsp://10.0.0.9:554/live" maxLength={500} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="enable" label="启用" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="enable_audio" label="启用音频" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="enable_mp4" label="录制 MP4" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={24}>
-              <Form.Item name="remark" label="备注">
-                <Input.TextArea rows={2} maxLength={500} showCount placeholder="请输入备注" />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
+        <StreamProxyFormContent ref={formRef} editing={editing} onSubmit={handleSave} />
       </Modal>
     </PageContainer>
   )

@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, {
+  forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
+} from 'react'
 import {
   Alert, Button, Empty, Form, Input, message, Modal, Popconfirm, Select, Space, Table, Tag,
 } from 'antd'
@@ -30,6 +32,63 @@ interface CustomFormValues {
   custom_name: string
   custom_device_id: string
 }
+
+interface CustomFormHandle {
+  submit: () => Promise<void>
+}
+
+interface CustomFormContentProps {
+  target: GbPlatformChannelItem | null
+  onSubmit: (values: CustomFormValues) => Promise<void>
+}
+
+/**
+ * 定制级联通道表单内容：form 与 Form 同挂载在 Modal children 中，
+ * 父组件不再在弹窗打开前调用 resetFields/setFieldsValue。
+ */
+const CustomFormContent = forwardRef<CustomFormHandle, CustomFormContentProps>(
+  function CustomFormContent({ target, onSubmit }, ref) {
+    const [form] = Form.useForm<CustomFormValues>()
+
+    useImperativeHandle(ref, () => ({
+      async submit() {
+        let values: CustomFormValues
+        try {
+          values = await form.validateFields()
+        } catch {
+          return
+        }
+        await onSubmit(values)
+      },
+    }), [form, onSubmit])
+
+    return (
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          custom_name: target?.custom_name || target?.channel_name || '',
+          custom_device_id: target?.custom_device_id || target?.gb_channel_id || '',
+        }}
+      >
+        <Form.Item
+          name="custom_name"
+          label="定制名称"
+          rules={[{ required: true, message: '请输入定制名称' }]}
+        >
+          <Input placeholder="上级平台看到的通道名称" maxLength={255} />
+        </Form.Item>
+        <Form.Item
+          name="custom_device_id"
+          label="定制编码"
+          rules={[{ required: true, message: '请输入定制国标编码' }]}
+        >
+          <Input placeholder="上级平台看到的通道国标编码" maxLength={20} />
+        </Form.Item>
+      </Form>
+    )
+  },
+)
 
 /** 添加通道弹窗的表格列。 */
 const channelColumns: ColumnsType<GbChannelItem> = [
@@ -75,7 +134,7 @@ const PlatformChannelList: React.FC = () => {
   const [customOpen, setCustomOpen] = useState(false)
   const [customTarget, setCustomTarget] = useState<GbPlatformChannelItem | null>(null)
   const [customSaving, setCustomSaving] = useState(false)
-  const [customForm] = Form.useForm<CustomFormValues>()
+  const customFormRef = useRef<CustomFormHandle>(null)
 
   const loadPlatforms = useCallback(async () => {
     setPlatformsLoading(true)
@@ -156,17 +215,11 @@ const PlatformChannelList: React.FC = () => {
   /* ── 定制通道 ── */
   const openCustom = (row: GbPlatformChannelItem) => {
     setCustomTarget(row)
-    customForm.resetFields()
-    customForm.setFieldsValue({
-      custom_name: row.custom_name || row.channel_name || '',
-      custom_device_id: row.custom_device_id || row.gb_channel_id || '',
-    })
     setCustomOpen(true)
   }
 
-  const submitCustom = async () => {
+  const submitCustom = async (values: CustomFormValues) => {
     if (!platformId || !customTarget?.channel_id) return
-    const values = await customForm.validateFields()
     setCustomSaving(true)
     try {
       await GbPlatformController.updateGbPlatformChannelCustom(
@@ -339,7 +392,7 @@ const PlatformChannelList: React.FC = () => {
         title={`定制级联通道${customTarget?.channel_name ? ` - ${customTarget.channel_name}` : ''}`}
         open={customOpen}
         onCancel={() => setCustomOpen(false)}
-        onOk={() => void submitCustom()}
+        onOk={() => void customFormRef.current?.submit()}
         confirmLoading={customSaving}
         destroyOnHidden
         width={640}
@@ -351,22 +404,11 @@ const PlatformChannelList: React.FC = () => {
           message="定制编码全局唯一"
           description="同一通道推送给多个上级平台时，需要为其中一个平台修改定制编码。"
         />
-        <Form form={customForm} layout="vertical">
-          <Form.Item
-            name="custom_name"
-            label="定制名称"
-            rules={[{ required: true, message: '请输入定制名称' }]}
-          >
-            <Input placeholder="上级平台看到的通道名称" maxLength={255} />
-          </Form.Item>
-          <Form.Item
-            name="custom_device_id"
-            label="定制编码"
-            rules={[{ required: true, message: '请输入定制国标编码' }]}
-          >
-            <Input placeholder="上级平台看到的通道国标编码" maxLength={20} />
-          </Form.Item>
-        </Form>
+        <CustomFormContent
+          ref={customFormRef}
+          target={customTarget}
+          onSubmit={submitCustom}
+        />
       </Modal>
     </PageContainer>
   )

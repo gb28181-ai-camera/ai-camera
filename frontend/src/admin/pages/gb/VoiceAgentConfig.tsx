@@ -24,6 +24,28 @@ interface ParamFieldDef {
   secret?: boolean
 }
 
+/**
+ * 后端新增的扩展参数字段。
+ *
+ * 生成的 `VoiceAgentConfigResp` / `UpdateVoiceAgentReq` 还没有 extra_params
+ * （需要重新执行 api-gen.sh）；这里用交叉类型做**前置声明**，不改生成文件。
+ * 由于 extra_params 是可选属性，原类型可直接赋值给交叉类型，无需 as 断言。
+ */
+type VoiceAgentConfigRespWithExtras = VoiceAgentConfigResp & {
+  extra_params?: Record<string, string>
+}
+type UpdateVoiceAgentReqWithExtras = UpdateVoiceAgentReq & {
+  extra_params?: Record<string, string>
+}
+
+/** 扩展参数在表单里的字段名前缀，避免与固定字段重名。 */
+const EXTRA_FIELD_PREFIX = 'extra_'
+
+/** 表单字段名：extra_<category>_<schema key>。 */
+function extraFieldName(category: Category, key: string): string {
+  return `${EXTRA_FIELD_PREFIX}${category}_${key}`
+}
+
 interface VoiceAgentFormValues {
   stt_provider?: string
   stt_model?: string
@@ -229,7 +251,7 @@ const VoiceAgentConfig: React.FC = () => {
       const list = providerRes.data ?? []
       setProviders(list)
 
-      const config: VoiceAgentConfigResp | undefined = configRes.data
+      const config: VoiceAgentConfigRespWithExtras | undefined = configRes.data
       if (config) {
         form.setFieldsValue({
           stt_provider: config.stt_provider ?? '',
@@ -272,6 +294,22 @@ const VoiceAgentConfig: React.FC = () => {
             form.setFieldValue(`vad_${def.key}`, vadValues[def.key])
           }
         }
+
+        // 扩展参数回显：只回填当前 provider schema 中「没有固定键」的项。
+        // 后端返回的键已去掉 param_ 前缀，直接与 schema.key 对齐。
+        const extras = config.extra_params ?? {}
+        for (const category of ['stt', 'llm', 'tts'] as const) {
+          const code = config[`${category}_provider`]
+          const providerItem = list.find((item) => item.category === category && item.code === code)
+          const schema = parseParamSchema(providerItem?.param_schema)
+          for (const def of schema) {
+            if (PARAM_FIELD_MAP[category][def.key.toLowerCase()]) continue
+            if (!(def.key in extras)) continue
+            // InputNumber 需要 number；文本/密码保持字符串。
+            const value = def.type === 'number' ? Number(extras[def.key]) : extras[def.key]
+            form.setFieldValue(extraFieldName(category, def.key), value)
+          }
+        }
       }
     } catch (err) {
       message.error(apiErrorMessage(err, '获取语音 Agent 配置失败'))
@@ -312,9 +350,18 @@ const VoiceAgentConfig: React.FC = () => {
     const fieldMap = PARAM_FIELD_MAP[category]
     for (const def of schema) {
       const target = fieldMap[def.key.toLowerCase()]
-      if (target && def.key in defaults) {
-        form.setFieldValue(target, defaults[def.key])
+      if (target) {
+        if (def.key in defaults) {
+          form.setFieldValue(target, defaults[def.key])
+        }
+        continue
       }
+      // 没有固定键的 schema 项走 ExtraParams 表单字段。
+      // 新 provider 未提供默认值时清空，避免上一个 provider 的扩展值串台。
+      form.setFieldValue(
+        extraFieldName(category, def.key),
+        def.key in defaults ? defaults[def.key] : undefined,
+      )
     }
   }
 
@@ -324,20 +371,19 @@ const VoiceAgentConfig: React.FC = () => {
     const defs = schema.length > 0 ? schema : FALLBACK_FIELDS[category]
     const fieldMap = PARAM_FIELD_MAP[category]
     const nodes: React.ReactNode[] = []
-    const unmapped: string[] = []
 
     for (const def of defs) {
       const target = fieldMap[def.key.toLowerCase()]
-      if (!target) {
-        unmapped.push(def.label)
-        continue
-      }
+      // 没有固定键的 schema 项（如 TTS 的 model、Azure 的 region）渲染为
+      // 扩展参数字段，提交时进 ExtraParams、回显时从 config.extra_params 读取。
+      const name = target ?? extraFieldName(category, def.key)
       nodes.push(
         <Col xs={24} md={def.type === 'textarea' ? 24 : 12} key={`${category}-${def.key}`}>
           <Form.Item
-            name={target}
+            name={name}
             label={def.label}
             rules={def.required ? [{ required: true, message: `请输入${def.label}` }] : undefined}
+            extra={target ? undefined : 'provider 扩展参数'}
           >
             {renderParamInput(def)}
           </Form.Item>
@@ -345,15 +391,6 @@ const VoiceAgentConfig: React.FC = () => {
       )
     }
 
-    if (unmapped.length > 0) {
-      nodes.push(
-        <Col span={24} key={`${category}-unmapped`}>
-          <Typography.Text type="secondary">
-            当前 provider 的以下参数暂未开放配置：{unmapped.join('、')}
-          </Typography.Text>
-        </Col>,
-      )
-    }
     return <>{nodes}</>
   }
 
@@ -409,7 +446,24 @@ const VoiceAgentConfig: React.FC = () => {
       vadParams = values.vad_params
     }
 
-    const payload: UpdateVoiceAgentReq = {
+    // 扩展参数：只收集当前 provider schema 中「没有固定键」且有值的字段。
+    // 键保持 provider 原始 key（后端负责加 param_ 前缀落库）。
+    const extraParams: Record<string, string> = {}
+    for (const category of ['stt', 'llm', 'tts'] as const) {
+      const providerCode = values[`${category}_provider`]
+      const providerItem = providers.find(
+        (item) => item.category === category && item.code === providerCode,
+      )
+      const schema = parseParamSchema(providerItem?.param_schema)
+      for (const def of schema) {
+        if (PARAM_FIELD_MAP[category][def.key.toLowerCase()]) continue
+        const raw = values[extraFieldName(category, def.key)]
+        if (raw === undefined || raw === null || raw === '') continue
+        extraParams[def.key] = String(raw)
+      }
+    }
+
+    const payload: UpdateVoiceAgentReqWithExtras = {
       stt_provider: values.stt_provider,
       stt_model: values.stt_model,
       stt_endpoint: values.stt_endpoint,
@@ -439,6 +493,8 @@ const VoiceAgentConfig: React.FC = () => {
 
       pipecat_endpoint: values.pipecat_endpoint,
       pipecat_token: values.pipecat_token,
+
+      extra_params: Object.keys(extraParams).length > 0 ? extraParams : undefined,
     }
 
     setSaving(true)

@@ -69,7 +69,7 @@ test.describe('11c 国标报警与运维', () => {
     await expect(page.getByText('历史轨迹', { exact: true })).toBeVisible()
     // antd Select 的占位符渲染为 `.ant-select-selection-placeholder`（不是 input placeholder）
     await expect(page.locator('.ant-select-selection-placeholder').filter({ hasText: '请选择通道' })).toBeVisible()
-    await expect(page.getByText('请选择通道并查询历史轨迹')).toBeVisible()
+    await expect(page.getByText('轨迹图最多展示最近 500 个坐标点', { exact: false })).toBeVisible()
 
     await page.getByRole('button', { name: /订阅位置/ }).click()
     const modal = page.locator('.e2e-gb-position-subscribe-modal')

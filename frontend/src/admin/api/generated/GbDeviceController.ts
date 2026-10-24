@@ -8,6 +8,7 @@ import type { GbSubscribeActionReq } from './definitions/GbSubscribeActionReq';
 import type { RGbActivation } from './definitions/RGbActivation';
 import type { RGbDevice } from './definitions/RGbDevice';
 import type { RPageGbDevice } from './definitions/RPageGbDevice';
+import type { RReport } from './definitions/RReport';
 
 export class GbDeviceController {
 
@@ -45,6 +46,17 @@ export class GbDeviceController {
     /// 生成设备激活凭证
     static async generateGbActivation(id: string | number, headers?: any): Promise<RGbActivation> {
       return request(`/web/gb/devices/${id}/activation`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: null,
+        headers,
+      });
+    }
+
+    static diagnoseGbDevicePath: string = "/web/gb/devices/{id}/diagnose";
+    /// 设备接入与 NAT 诊断
+    static async diagnoseGbDevice(id: string | number, headers?: any): Promise<RReport> {
+      return request(`/web/gb/devices/${id}/diagnose`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "POST",
         data: null,

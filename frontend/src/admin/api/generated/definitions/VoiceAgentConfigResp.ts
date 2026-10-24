@@ -4,6 +4,8 @@ import type { Definition } from './Definition';
 
 export type VoiceAgentConfigResp = Definition & {
 	barge_in?: boolean;
+	/** ExtraParams 扩展参数：provider param_schema 中没有固定键的项。 键为原始参数名（已去掉落库时的 param_ 前缀），敏感键按 **** 脱敏。 */
+	extra_params?: Record<string, any>;
 	llm_api_key?: string;
 	llm_endpoint?: string;
 	llm_max_tokens?: number;
