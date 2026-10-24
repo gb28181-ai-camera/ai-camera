@@ -59,6 +59,23 @@ type GbPtzScanReq struct {
 	GroupID int `json:"group_id" example:"1"`
 }
 
+// GbPtzPreciseReq PTZ 精准控制请求（GB/T 28181-2022，A.2.3.1.11）。
+//
+// 与 2016 的 8 字节 PTZCmd「方向 + 速度」不同，PTZPreciseCtrl 是
+// 「绝对角度 + 倍率」的定位控制，因此三个字段都是 double 且可只传其一。
+//
+// ★ 三个字段用指针：0 是合法值（云台回正 Pan=0、Tilt=0），必须能区分
+// 「未传」与「传了 0」。三者全不传时服务层直接 400 —— 空指令既不会让设备
+// 动作，也会让前端误以为「已经控制成功」。
+type GbPtzPreciseReq struct {
+	// Pan 水平角度（度）。取值范围由设备决定，平台不做臆测性限制。
+	Pan *float64 `json:"pan" example:"10.5"`
+	// Tilt 垂直角度（度）。
+	Tilt *float64 `json:"tilt" example:"20"`
+	// Zoom 变焦倍数（1 表示 1 倍）。
+	Zoom *float64 `json:"zoom" example:"2.5"`
+}
+
 // GbPtzWiperReq 雨刷请求。
 //
 // 契约未单列字段，路由为 POST /ptz/:channelId/wiper；用 On 表达开/关，

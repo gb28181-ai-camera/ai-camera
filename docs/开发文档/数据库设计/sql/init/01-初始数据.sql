@@ -1759,6 +1759,23 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12214);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
 SELECT 12216, '1221', 4, '开始停止播放', '', '', '', 'button', 'pc', 'gb:live:play', '按钮', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12216);
+-- GB/T 28181-2022 云台扩展按钮（实时播放下）。
+-- 注意：id 12221 已被「回放控制」占用，这里第 5 个按钮改用 12224，避免主键冲突。
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12217, '1221', 4, '实时位置', '', '', '', 'button', 'pc', 'gb:live:ptz-position', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12217);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12218, '1221', 4, '精准控制', '', '', '', 'button', 'pc', 'gb:live:ptz-precise', '按钮', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12218);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12219, '1221', 4, '巡航轨迹', '', '', '', 'button', 'pc', 'gb:live:cruise-track', '按钮', 8, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12219);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12220, '1221', 4, '看守位', '', '', '', 'button', 'pc', 'gb:live:home-position', '按钮', 9, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12220);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12224, '1221', 4, '存储卡', '', '', '', 'button', 'pc', 'gb:live:sdcard', '按钮', 10, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12224);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
 SELECT 12221, '1222', 4, '回放控制', '', '', '', 'button', 'pc', 'gb:playback:control', '按钮', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 12221);
@@ -2270,6 +2287,28 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/w
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 618, 12116, 'POST', '/web/gb/devices/:id/diagnose', '设备可达性与 NAT 诊断', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/devices/:id/diagnose');
+
+-- ── 12.5b GB28181-2022 云台扩展接口（ac_menu_api 723–728）──────
+--     全部挂在实时播放的 2022 按钮上；路径必须与 gb_live.go 路由逐字一致，
+--     否则 Casbin 按 path 匹配不到，超管访问也会 403。
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 723, 12217, 'GET', '/web/gb/ptz/:channelId/position', '查询 PTZ 精准位置', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/ptz/:channelId/position');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 724, 12218, 'POST', '/web/gb/ptz/:channelId/precise', 'PTZ 精准控制', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/ptz/:channelId/precise');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 725, 12219, 'GET', '/web/gb/ptz/:channelId/cruise-tracks', '巡航轨迹列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/ptz/:channelId/cruise-tracks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 726, 12219, 'GET', '/web/gb/ptz/:channelId/cruise-tracks/:number', '巡航轨迹明细', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/ptz/:channelId/cruise-tracks/:number');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 727, 12220, 'GET', '/web/gb/ptz/:channelId/home-position', '查询看守位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/ptz/:channelId/home-position');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 728, 12224, 'GET', '/web/gb/ptz/:channelId/sdcard', '查询存储卡状态', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/ptz/:channelId/sdcard');
 
 -- ── 12.6 角色授权：super_admin（角色 1）──────────────────────
 --     国标菜单 / 按钮的 permission_code 以 gb: 前缀标识，

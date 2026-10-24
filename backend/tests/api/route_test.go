@@ -80,6 +80,13 @@ var contractGbRoutes = []string{
 	"POST /web/gb/ptz/:channelId/cruise",
 	"POST /web/gb/ptz/:channelId/scan",
 	"POST /web/gb/ptz/:channelId/wiper",
+	// GB28181-2022 扩展（同步等待设备业务应答）
+	"GET /web/gb/ptz/:channelId/position",
+	"POST /web/gb/ptz/:channelId/precise",
+	"GET /web/gb/ptz/:channelId/cruise-tracks",
+	"GET /web/gb/ptz/:channelId/cruise-tracks/:number",
+	"GET /web/gb/ptz/:channelId/home-position",
+	"GET /web/gb/ptz/:channelId/sdcard",
 	"POST /web/gb/voice/:channelId/broadcast/start",
 	"POST /web/gb/voice/:channelId/broadcast/stop",
 	"POST /web/gb/voice/:channelId/talk/start",

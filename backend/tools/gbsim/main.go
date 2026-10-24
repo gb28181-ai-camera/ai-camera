@@ -94,6 +94,7 @@ func parseFlags(args []string, out io.Writer) (*Config, error) {
 	fs.DurationVar(&cfg.KeepaliveInterval, "keepalive", defaultKeepalive, "Keepalive 心跳发送周期")
 	fs.DurationVar(&riskEvery, "risk-interval", defaultRiskInterval, "AI 风险上报周期（⚠️ 本批次尚未实现，仅接受参数）")
 	fs.BoolVar(&cfg.Verbose, "verbose", false, "输出 SIP / MANSCDP 报文级日志")
+	fs.BoolVar(&cfg.Enable2022, "2022", true, "应答 GB28181-2022 查询（精准位置/巡航轨迹/看守位/存储卡）；false 模拟 2016 设备不应答")
 	fs.BoolVar(&showHelp, "help", false, "显示帮助")
 
 	if err := fs.Parse(args); err != nil {
@@ -423,10 +424,165 @@ func (d *messageDispatcher) Handle(body []byte, contentType string) [][]byte {
 		return d.one(d.encodeDeviceInfo(env.SN))
 	case manscdp.CmdDeviceStatus:
 		return d.one(d.encodeDeviceStatus(env.SN))
+
+	// ── GB/T 28181-2022 查询 ──
+	// 默认应答；--2022=false 时可用来模拟 2016 设备（平台应在发报文前拦截，
+	// 因此正常情况下这里根本收不到这些 CmdType）。
+	case manscdp.CmdPTZPosition:
+		if !d.allow2022(env.CmdType) {
+			return nil
+		}
+		return d.one(d.encodePTZPosition(env.SN, env.DeviceID))
+	case manscdp.CmdCruiseTrackListQuery:
+		if !d.allow2022(env.CmdType) {
+			return nil
+		}
+		return d.one(d.encodeCruiseTrackList(env.SN, env.DeviceID))
+	case manscdp.CmdCruiseTrackQuery:
+		if !d.allow2022(env.CmdType) {
+			return nil
+		}
+		// 单条轨迹查询要读 Number；解码失败时按 0（第一条）处理并告警，
+		// 避免因为一个可选字段让整条应答消失。
+		var q manscdp.CruiseTrackQuery
+		if err := manscdp.Decode(body, d.cfg.Charset, &q); err != nil {
+			d.logger.Warn("解析 CruiseTrackQuery 失败，按轨迹 0 处理", "error", err)
+		}
+		return d.one(d.encodeCruiseTrack(env.SN, env.DeviceID, q.Number))
+	case manscdp.CmdHomePositionQuery:
+		if !d.allow2022(env.CmdType) {
+			return nil
+		}
+		return d.one(d.encodeHomePosition(env.SN, env.DeviceID))
+	case manscdp.CmdSDCardStatus:
+		if !d.allow2022(env.CmdType) {
+			return nil
+		}
+		return d.one(d.encodeSDCardStatus(env.SN, env.DeviceID))
+
 	default:
 		d.logger.Warn("暂未实现的 MANSCDP 指令（后续批次补充）", "cmd_type", env.CmdType)
 		return nil
 	}
+}
+
+// allow2022 判断是否应答 2022 查询。
+func (d *messageDispatcher) allow2022(cmdType string) bool {
+	if d.cfg != nil && d.cfg.Enable2022 {
+		return true
+	}
+	d.logger.Info("收到 2022 查询但 --2022=false，模拟 2016 设备不应答", "cmd_type", cmdType)
+	return false
+}
+
+// encodePTZPosition 编码 PTZ 精准位置应答（固定值，仅用于回归）。
+func (d *messageDispatcher) encodePTZPosition(sn int, deviceID string) []byte {
+	body, err := manscdp.Encode(&manscdp.PTZPositionResponse{
+		CmdType:  manscdp.CmdPTZPosition,
+		SN:       sn,
+		DeviceID: deviceID,
+		Pan:      12.5,
+		Tilt:     30,
+		Zoom:     2,
+	}, d.cfg.Charset)
+	if err != nil {
+		d.logger.Error("编码 PTZPosition 响应失败", "error", err)
+		return nil
+	}
+	return body
+}
+
+// encodeCruiseTrackList 编码巡航轨迹列表应答（固定 2 条）。
+func (d *messageDispatcher) encodeCruiseTrackList(sn int, deviceID string) []byte {
+	tracks := []manscdp.CruiseTrack{
+		{Number: 0, Name: "东门巡航"},
+		{Number: 1, Name: "仓库巡航"},
+	}
+	body, err := manscdp.Encode(&manscdp.CruiseTrackListResponse{
+		CmdType:  manscdp.CmdCruiseTrackListQuery,
+		SN:       sn,
+		DeviceID: deviceID,
+		SumNum:   len(tracks),
+		CruiseTrackList: &manscdp.CruiseTrackList{
+			Num:    len(tracks),
+			Tracks: tracks,
+		},
+	}, d.cfg.Charset)
+	if err != nil {
+		d.logger.Error("编码 CruiseTrackList 响应失败", "error", err)
+		return nil
+	}
+	return body
+}
+
+// encodeCruiseTrack 编码单条轨迹明细（固定 2 个巡航点）。
+func (d *messageDispatcher) encodeCruiseTrack(sn int, deviceID string, number int) []byte {
+	points := []manscdp.CruisePoint{
+		{PresetIndex: 1, StayTime: 10, Speed: 5},
+		{PresetIndex: 2, StayTime: 20, Speed: 6},
+	}
+	name := "东门巡航"
+	if number != 0 {
+		name = fmt.Sprintf("巡航轨迹%d", number)
+	}
+	body, err := manscdp.Encode(&manscdp.CruiseTrackResponse{
+		CmdType:  manscdp.CmdCruiseTrackQuery,
+		SN:       sn,
+		DeviceID: deviceID,
+		Number:   number,
+		Name:     name,
+		CruisePointList: &manscdp.CruisePointList{
+			Num:    len(points),
+			Points: points,
+		},
+	}, d.cfg.Charset)
+	if err != nil {
+		d.logger.Error("编码 CruiseTrack 响应失败", "error", err)
+		return nil
+	}
+	return body
+}
+
+// encodeHomePosition 编码看守位应答（启用、预置位 1、间隔 300 秒）。
+func (d *messageDispatcher) encodeHomePosition(sn int, deviceID string) []byte {
+	body, err := manscdp.Encode(&manscdp.HomePositionResponse{
+		CmdType:  manscdp.CmdHomePositionQuery,
+		SN:       sn,
+		DeviceID: deviceID,
+		HomePosition: &manscdp.HomePosition{
+			Enabled:     1,
+			ResetTime:   300,
+			PresetIndex: 1,
+		},
+	}, d.cfg.Charset)
+	if err != nil {
+		d.logger.Error("编码 HomePosition 响应失败", "error", err)
+		return nil
+	}
+	return body
+}
+
+// encodeSDCardStatus 编码存储卡状态应答（1 张卡，32GB，剩余 16GB）。
+func (d *messageDispatcher) encodeSDCardStatus(sn int, deviceID string) []byte {
+	cards := []manscdp.SDCardInfo{
+		{Capacity: 32768, FreeSpace: 16384, Status: 0},
+	}
+	body, err := manscdp.Encode(&manscdp.SDCardStatusResponse{
+		CmdType:  manscdp.CmdSDCardStatus,
+		SN:       sn,
+		DeviceID: deviceID,
+		SDCardStatusInfo: &manscdp.SDCardStatusInfo{
+			Num:            len(cards),
+			Status:         0,
+			FormatProgress: 0,
+			Cards:          cards,
+		},
+	}, d.cfg.Charset)
+	if err != nil {
+		d.logger.Error("编码 SDCardStatus 响应失败", "error", err)
+		return nil
+	}
+	return body
 }
 
 // one 把一条正文包成切片，便于统一返回类型。

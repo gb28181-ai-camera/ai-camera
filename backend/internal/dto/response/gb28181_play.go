@@ -110,6 +110,125 @@ type RGbPresetList struct {
 	Data []GbPresetItem `json:"data"`
 }
 
+// ════════════════════════════════════════════════════════════════
+// GB/T 28181-2022 云台扩展查询应答
+//
+// 字段严格对应 internal/gb28181/protocol/manscdp/types_2022.go 的 2022 类型：
+//   - Pan/Tilt/Zoom 用 *float64：0 是合法值，必须区分「设备未上报」与「上报了 0」；
+//   - 标准中 minOccurs="0" 的字段（视场角/可视距离/看守位块）缺失时省略；
+//   - 容量单位沿用标准：MB。
+// 未在 manscdp 中确认的字段一律不在这里新增，避免前端展示「看起来有值、
+// 实际设备从未上报」的假数据。
+// ════════════════════════════════════════════════════════════════
+
+// GbPtzPositionResp PTZ 精准位置（A.2.6.15）。
+type GbPtzPositionResp struct {
+	// Pan 水平角度（度）。设备未上报时省略（与「上报了 0」区分）。
+	Pan *float64 `json:"pan,omitempty" example:"10.5"`
+	// Tilt 垂直角度（度）。设备未上报时省略。
+	Tilt *float64 `json:"tilt,omitempty" example:"20"`
+	// Zoom 变焦倍数。设备未上报时省略。
+	Zoom *float64 `json:"zoom,omitempty" example:"2.5"`
+	// HorizontalFieldAngle 水平视场角（度）。★ manscdp 中标注「待真机确认」，
+	// 设备不上报时省略。
+	HorizontalFieldAngle *float64 `json:"horizontal_field_angle,omitempty" example:"60"`
+	// VerticalFieldAngle 垂直视场角（度）。★ 待真机确认。
+	VerticalFieldAngle *float64 `json:"vertical_field_angle,omitempty" example:"35"`
+	// MaxViewDistance 可视距离（米）。★ 待真机确认。
+	MaxViewDistance *float64 `json:"max_view_distance,omitempty" example:"100"`
+}
+
+// RGbPtzPosition PTZ 精准位置响应。
+type RGbPtzPosition struct {
+	BaseResponse
+	Data GbPtzPositionResp `json:"data"`
+}
+
+// GbCruiseTrackItem 一条巡航轨迹的摘要（A.2.6.13）。
+type GbCruiseTrackItem struct {
+	// Number 轨迹编号，从 0 开始。
+	Number int `json:"number" example:"0"`
+	// Name 轨迹名称。
+	Name string `json:"name" example:"厂区巡航"`
+}
+
+// RGbCruiseTrackList 巡航轨迹列表响应。
+type RGbCruiseTrackList struct {
+	BaseResponse
+	Data []GbCruiseTrackItem `json:"data"`
+}
+
+// GbCruisePointItem 一个巡航点（A.2.6.14）。
+type GbCruisePointItem struct {
+	// PresetIndex 预置位编号。
+	PresetIndex int `json:"preset_index" example:"1"`
+	// StayTime 停留时间（秒）。
+	StayTime int `json:"stay_time" example:"10"`
+	// Speed 云台速度 1–15。
+	Speed int `json:"speed" example:"5"`
+}
+
+// GbCruiseTrackDetailResp 单条巡航轨迹明细（A.2.6.14）。
+type GbCruiseTrackDetailResp struct {
+	Number int                 `json:"number" example:"0"`
+	Name   string              `json:"name" example:"厂区巡航"`
+	Points []GbCruisePointItem `json:"points"`
+}
+
+// RGbCruiseTrackDetail 单条巡航轨迹响应。
+type RGbCruiseTrackDetail struct {
+	BaseResponse
+	Data GbCruiseTrackDetailResp `json:"data"`
+}
+
+// GbHomePositionResp 看守位（A.2.6.12）。
+//
+// Supported 是平台派生字段：标准中 HomePosition 块 minOccurs="0"，
+// 设备不支持时整块省略。若不单独暴露该标志，前端会把「块缺失」
+// 误显示成「已关闭（Enabled=0）」，这两种语义完全不同。
+type GbHomePositionResp struct {
+	Supported bool `json:"supported" example:"true"`
+	// Enabled 0 关闭 / 1 开启。
+	Enabled int `json:"enabled" example:"1"`
+	// ResetTime 自动归位时间间隔（秒）。
+	ResetTime int `json:"reset_time" example:"300"`
+	// PresetIndex 归位调用的预置位编号 0–255。
+	PresetIndex int `json:"preset_index" example:"1"`
+}
+
+// RGbHomePosition 看守位响应。
+type RGbHomePosition struct {
+	BaseResponse
+	Data GbHomePositionResp `json:"data"`
+}
+
+// GbSDCardItem 单张存储卡（A.2.6.16）。
+type GbSDCardItem struct {
+	// Capacity 总空间（MB）。
+	Capacity int64 `json:"capacity" example:"32768"`
+	// FreeSpace 剩余空间（MB）。
+	FreeSpace int64 `json:"free_space" example:"16384"`
+	// Status 卡状态。★ 标准未明确取值含义，原样透传。
+	Status int `json:"status" example:"0"`
+}
+
+// GbSDCardStatusResp 存储卡状态（A.2.6.16）。
+type GbSDCardStatusResp struct {
+	// Num 卡片数量。
+	Num int `json:"num" example:"1"`
+	// Status 整体状态。★ 取值含义待真机确认，原样透传。
+	Status int `json:"status" example:"0"`
+	// FormatProgress 格式化进度 0–100；0 表示未在格式化。
+	FormatProgress int            `json:"format_progress" example:"0"`
+	Cards          []GbSDCardItem `json:"cards"`
+}
+
+// RGbSDCardStatus 存储卡状态响应。
+type RGbSDCardStatus struct {
+	BaseResponse
+	Data GbSDCardStatusResp `json:"data"`
+}
+
 // GbVoiceSessionResp 语音会话（契约 §15.4）。
 type GbVoiceSessionResp struct {
 	SessionID string `json:"session_id"`

@@ -36,6 +36,14 @@ func registerGbLiveRoutes(wAuth *gin.RouterGroup) {
 		gb.POST("/ptz/:channelId/scan", ptzH.Scan)
 		gb.POST("/ptz/:channelId/wiper", ptzH.Wiper)
 
+		// ── 云台 2022 扩展（同步等待设备业务应答，最长 5 秒）──
+		gb.GET("/ptz/:channelId/position", ptzH.PTZPosition)
+		gb.POST("/ptz/:channelId/precise", ptzH.Precise)
+		gb.GET("/ptz/:channelId/cruise-tracks", ptzH.CruiseTracks)
+		gb.GET("/ptz/:channelId/cruise-tracks/:number", ptzH.CruiseTrack)
+		gb.GET("/ptz/:channelId/home-position", ptzH.HomePosition)
+		gb.GET("/ptz/:channelId/sdcard", ptzH.SDCardStatus)
+
 		// ── 语音广播 / 对讲 ──────────────────────────────────
 		gb.POST("/voice/:channelId/broadcast/start", voiceH.StartBroadcast)
 		gb.POST("/voice/:channelId/broadcast/stop", voiceH.StopBroadcast)

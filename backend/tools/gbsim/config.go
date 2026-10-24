@@ -60,6 +60,12 @@ type Config struct {
 	KeepaliveInterval time.Duration // Keepalive 心跳周期
 	RiskInterval      time.Duration // 预留：AI 风险上报周期（本批次未实现）
 	Verbose           bool          // 打印 SIP / MANSCDP 报文级日志
+
+	// Enable2022 是否应答 GB/T 28181-2022 查询。
+	// 默认 true（--2022=true）；设为 false 可模拟一台 2016 设备 ——
+	// 平台对 2016 设备的 2022 查询应在发报文前就被拦截，这个开关用来
+	// 验证「平台不会误发、误等」。模拟器自身不区分协议版本，只决定是否应答。
+	Enable2022 bool
 }
 
 // Validate 校验配置的基本合法性。它只做「本地即可判定」的检查，

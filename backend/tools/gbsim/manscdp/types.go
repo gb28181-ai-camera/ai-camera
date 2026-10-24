@@ -27,6 +27,15 @@ const (
 	CmdDeviceStatus = "DeviceStatus"
 	CmdKeepalive    = "Keepalive"
 	CmdAlarm        = "Alarm"
+
+	// GB/T 28181-2022 新增（附录 A.2.4 / A.2.6）。
+	// 取值必须与平台侧 internal/gb28181/protocol/version 完全一致，
+	// 否则平台会按「无等待方」丢弃应答，表现为查询必超时。
+	CmdPTZPosition          = "PTZPosition"
+	CmdCruiseTrackListQuery = "CruiseTrackListQuery"
+	CmdCruiseTrackQuery     = "CruiseTrackQuery"
+	CmdHomePositionQuery    = "HomePositionQuery"
+	CmdSDCardStatus         = "SDCardStatus"
 )
 
 // Envelope 只承载根元素与三个公共字段，用于「先看是什么报文，再决定解成哪个结构」。
@@ -132,6 +141,121 @@ type Alarm struct {
 	AlarmDescription string   `xml:"AlarmDescription,omitempty"`
 	Longitude        float64  `xml:"Longitude,omitempty"`
 	Latitude         float64  `xml:"Latitude,omitempty"`
+}
+
+// ────────────────────────────────────────────────────────────────
+// GB/T 28181-2022 查询应答
+//
+// 字段名与平台侧 internal/gb28181/protocol/manscdp/types_2022.go 逐字一致：
+// 模拟器的价值就是「用已知正确的报文喂平台」，两边字段漂移会让回归测试失效。
+// ────────────────────────────────────────────────────────────────
+
+// PTZPositionResponse 是 PTZ 精准状态查询应答（A.2.6.15）。
+//
+// Pan/Tilt/Zoom 直接挂在 Response 下，不是嵌套在 <PTZPosition> 里。
+type PTZPositionResponse struct {
+	XMLName  xml.Name `xml:"Response"`
+	CmdType  string   `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	Pan      float64  `xml:"Pan"`
+	Tilt     float64  `xml:"Tilt"`
+	Zoom     float64  `xml:"Zoom"`
+}
+
+// CruiseTrackQuery 是平台下发的单条巡航轨迹查询（A.2.4.12）。
+type CruiseTrackQuery struct {
+	XMLName  xml.Name `xml:"Query"`
+	CmdType  string   `xml:"CmdType"`
+	SN       int      `xml:"SN"`
+	DeviceID string   `xml:"DeviceID"`
+	Number   int      `xml:"Number"`
+}
+
+// CruiseTrackListResponse 是巡航轨迹列表应答（A.2.6.13）。
+type CruiseTrackListResponse struct {
+	XMLName         xml.Name         `xml:"Response"`
+	CmdType         string           `xml:"CmdType"`
+	SN              int              `xml:"SN"`
+	DeviceID        string           `xml:"DeviceID"`
+	SumNum          int              `xml:"SumNum"`
+	CruiseTrackList *CruiseTrackList `xml:"CruiseTrackList,omitempty"`
+}
+
+// CruiseTrackList 轨迹集合；Num 是属性。
+type CruiseTrackList struct {
+	Num    int           `xml:"Num,attr"`
+	Tracks []CruiseTrack `xml:"CruiseTrack"`
+}
+
+// CruiseTrack 一条轨迹的摘要。
+type CruiseTrack struct {
+	Number int    `xml:"Number"`
+	Name   string `xml:"Name,omitempty"`
+}
+
+// CruiseTrackResponse 是单条巡航轨迹应答（A.2.6.14）。
+type CruiseTrackResponse struct {
+	XMLName         xml.Name         `xml:"Response"`
+	CmdType         string           `xml:"CmdType"`
+	SN              int              `xml:"SN"`
+	DeviceID        string           `xml:"DeviceID"`
+	Number          int              `xml:"Number"`
+	Name            string           `xml:"Name,omitempty"`
+	CruisePointList *CruisePointList `xml:"CruisePointList,omitempty"`
+}
+
+// CruisePointList 轨迹点集合；Num 是属性。
+type CruisePointList struct {
+	Num    int           `xml:"Num,attr"`
+	Points []CruisePoint `xml:"CruisePoint"`
+}
+
+// CruisePoint 一个巡航点（预置位 + 停留时间 + 速度）。
+type CruisePoint struct {
+	PresetIndex int `xml:"PresetIndex"`
+	StayTime    int `xml:"StayTime"`
+	Speed       int `xml:"Speed"`
+}
+
+// HomePositionResponse 是看守位查询应答（A.2.6.12）。
+type HomePositionResponse struct {
+	XMLName      xml.Name      `xml:"Response"`
+	CmdType      string        `xml:"CmdType"`
+	SN           int           `xml:"SN"`
+	DeviceID     string        `xml:"DeviceID"`
+	HomePosition *HomePosition `xml:"HomePosition,omitempty"`
+}
+
+// HomePosition 看守位配置。
+type HomePosition struct {
+	Enabled     int `xml:"Enabled"`
+	ResetTime   int `xml:"ResetTime"`
+	PresetIndex int `xml:"PresetIndex"`
+}
+
+// SDCardStatusResponse 是存储卡状态应答（A.2.6.16）。
+type SDCardStatusResponse struct {
+	XMLName          xml.Name          `xml:"Response"`
+	CmdType          string            `xml:"CmdType"`
+	SN               int               `xml:"SN"`
+	DeviceID         string            `xml:"DeviceID"`
+	SDCardStatusInfo *SDCardStatusInfo `xml:"SDCardStatusInfo,omitempty"`
+}
+
+// SDCardStatusInfo 存储卡状态块。
+type SDCardStatusInfo struct {
+	Num            int          `xml:"Num,attr"`
+	Status         int          `xml:"Status,omitempty"`
+	FormatProgress int          `xml:"FormatProgress,omitempty"`
+	Cards          []SDCardInfo `xml:"SDCard"`
+}
+
+// SDCardInfo 单张存储卡；容量单位 MB。
+type SDCardInfo struct {
+	Capacity  int64 `xml:"Capacity"`
+	FreeSpace int64 `xml:"FreeSpace"`
+	Status    int   `xml:"Status,omitempty"`
 }
 
 // NewKeepalive 构造一条心跳报文。

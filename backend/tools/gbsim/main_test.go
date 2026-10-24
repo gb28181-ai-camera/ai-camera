@@ -36,6 +36,7 @@ func sampleConfig() *Config {
 		Channels:   2,
 		Mode:       ModeUDP,
 		Charset:    defaultCharset,
+		Enable2022: true,
 	}
 }
 
@@ -611,5 +612,149 @@ func TestParseSSRC(t *testing.T) {
 		if _, err := parseSSRC(bad); err == nil {
 			t.Errorf("非法 SSRC %q 应报错", bad)
 		}
+	}
+}
+
+// ────────────────────────────────────────────────────────────────
+// GB/T 28181-2022 查询应答
+// ────────────────────────────────────────────────────────────────
+
+func encodeSimQuery(t *testing.T, v interface{}) []byte {
+	t.Helper()
+	body, err := manscdp.Encode(v, defaultCharset)
+	if err != nil {
+		t.Fatalf("编码查询失败：%v", err)
+	}
+	return body
+}
+
+func new2022Dispatcher(cfg *Config) *messageDispatcher {
+	return &messageDispatcher{cfg: cfg, channels: cfg.BuildChannels(), logger: silentLogger()}
+}
+
+// TestDispatcherAnswers2022Queries 覆盖五类 2022 查询的完整应答。
+func TestDispatcherAnswers2022Queries(t *testing.T) {
+	cfg := sampleConfig()
+	d := new2022Dispatcher(cfg)
+	channelID := cfg.BuildChannels()[0].DeviceID
+
+	t.Run("PTZPosition", func(t *testing.T) {
+		sn := 7001
+		replies := d.Handle(encodeSimQuery(t, &manscdp.Query{
+			CmdType: manscdp.CmdPTZPosition, SN: sn, DeviceID: channelID,
+		}), "Application/MANSCDP+xml")
+		if len(replies) != 1 {
+			t.Fatalf("应有 1 条应答，实际 %d", len(replies))
+		}
+		var resp manscdp.PTZPositionResponse
+		if err := manscdp.Decode(replies[0], defaultCharset, &resp); err != nil {
+			t.Fatalf("解码失败：%v", err)
+		}
+		if resp.CmdType != manscdp.CmdPTZPosition || resp.SN != sn || resp.DeviceID != channelID {
+			t.Fatalf("公共字段回显错误：%+v", resp)
+		}
+		if resp.Pan != 12.5 || resp.Tilt != 30 || resp.Zoom != 2 {
+			t.Fatalf("位置字段错误：pan=%v tilt=%v zoom=%v", resp.Pan, resp.Tilt, resp.Zoom)
+		}
+	})
+
+	t.Run("CruiseTrackList", func(t *testing.T) {
+		sn := 7002
+		replies := d.Handle(encodeSimQuery(t, &manscdp.Query{
+			CmdType: manscdp.CmdCruiseTrackListQuery, SN: sn, DeviceID: channelID,
+		}), "Application/MANSCDP+xml")
+		if len(replies) != 1 {
+			t.Fatalf("应有 1 条应答，实际 %d", len(replies))
+		}
+		var resp manscdp.CruiseTrackListResponse
+		if err := manscdp.Decode(replies[0], defaultCharset, &resp); err != nil {
+			t.Fatalf("解码失败：%v", err)
+		}
+		if resp.SumNum != 2 || resp.CruiseTrackList == nil || len(resp.CruiseTrackList.Tracks) != 2 {
+			t.Fatalf("轨迹数量错误：%+v", resp)
+		}
+		if resp.CruiseTrackList.Tracks[0].Name != "东门巡航" {
+			t.Fatalf("GB2312 中文往返失败：%q", resp.CruiseTrackList.Tracks[0].Name)
+		}
+	})
+
+	t.Run("CruiseTrack", func(t *testing.T) {
+		sn := 7003
+		replies := d.Handle(encodeSimQuery(t, &manscdp.CruiseTrackQuery{
+			CmdType: manscdp.CmdCruiseTrackQuery, SN: sn, DeviceID: channelID, Number: 1,
+		}), "Application/MANSCDP+xml")
+		if len(replies) != 1 {
+			t.Fatalf("应有 1 条应答，实际 %d", len(replies))
+		}
+		var resp manscdp.CruiseTrackResponse
+		if err := manscdp.Decode(replies[0], defaultCharset, &resp); err != nil {
+			t.Fatalf("解码失败：%v", err)
+		}
+		if resp.Number != 1 || resp.Name != "巡航轨迹1" {
+			t.Fatalf("轨迹编号/名称错误：%+v", resp)
+		}
+		if resp.CruisePointList == nil || len(resp.CruisePointList.Points) != 2 {
+			t.Fatalf("巡航点数量错误：%+v", resp.CruisePointList)
+		}
+		if resp.CruisePointList.Points[0].PresetIndex != 1 ||
+			resp.CruisePointList.Points[0].StayTime != 10 ||
+			resp.CruisePointList.Points[0].Speed != 5 {
+			t.Fatalf("首个巡航点错误：%+v", resp.CruisePointList.Points[0])
+		}
+	})
+
+	t.Run("HomePosition", func(t *testing.T) {
+		sn := 7004
+		replies := d.Handle(encodeSimQuery(t, &manscdp.Query{
+			CmdType: manscdp.CmdHomePositionQuery, SN: sn, DeviceID: channelID,
+		}), "Application/MANSCDP+xml")
+		if len(replies) != 1 {
+			t.Fatalf("应有 1 条应答，实际 %d", len(replies))
+		}
+		var resp manscdp.HomePositionResponse
+		if err := manscdp.Decode(replies[0], defaultCharset, &resp); err != nil {
+			t.Fatalf("解码失败：%v", err)
+		}
+		if resp.HomePosition == nil {
+			t.Fatalf("HomePosition 块缺失")
+		}
+		if resp.HomePosition.Enabled != 1 || resp.HomePosition.ResetTime != 300 ||
+			resp.HomePosition.PresetIndex != 1 {
+			t.Fatalf("看守位字段错误：%+v", resp.HomePosition)
+		}
+	})
+
+	t.Run("SDCardStatus", func(t *testing.T) {
+		sn := 7005
+		replies := d.Handle(encodeSimQuery(t, &manscdp.Query{
+			CmdType: manscdp.CmdSDCardStatus, SN: sn, DeviceID: channelID,
+		}), "Application/MANSCDP+xml")
+		if len(replies) != 1 {
+			t.Fatalf("应有 1 条应答，实际 %d", len(replies))
+		}
+		var resp manscdp.SDCardStatusResponse
+		if err := manscdp.Decode(replies[0], defaultCharset, &resp); err != nil {
+			t.Fatalf("解码失败：%v", err)
+		}
+		info := resp.SDCardStatusInfo
+		if info == nil || info.Num != 1 || len(info.Cards) != 1 {
+			t.Fatalf("存储卡块错误：%+v", info)
+		}
+		if info.Cards[0].Capacity != 32768 || info.Cards[0].FreeSpace != 16384 {
+			t.Fatalf("容量字段错误：%+v", info.Cards[0])
+		}
+	})
+}
+
+// TestDispatcher2022Disabled 验证 --2022=false 时模拟 2016 设备不应答。
+func TestDispatcher2022Disabled(t *testing.T) {
+	cfg := sampleConfig()
+	cfg.Enable2022 = false
+	d := new2022Dispatcher(cfg)
+	body := encodeSimQuery(t, &manscdp.Query{
+		CmdType: manscdp.CmdPTZPosition, SN: 7006, DeviceID: cfg.BuildChannels()[0].DeviceID,
+	})
+	if replies := d.Handle(body, "Application/MANSCDP+xml"); len(replies) != 0 {
+		t.Fatalf("关闭 2022 后不应有应答，实际 %d 条", len(replies))
 	}
 }

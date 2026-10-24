@@ -66,6 +66,13 @@ export interface PtzControlProps {
   onCruise?: (action: PtzRunAction) => void
   /** 扫描（左右自动扫描） */
   onScan?: (action: PtzRunAction) => void
+  /**
+   * 附加区域（例如 GB28181-2022 的精准位置/精准控制/巡航轨迹）。
+   *
+   * 组件本身保持「纯 UI、不调接口」：2022 面板的数据请求与权限判断放在
+   * 页面层，通过该槽位注入，避免 PtzControl 依赖 API 生成代码。
+   */
+  extra?: React.ReactNode
   className?: string
   style?: React.CSSProperties
 }
@@ -178,6 +185,7 @@ export default function PtzControl({
   presetCount = DEFAULT_PRESET_COUNT,
   onCruise,
   onScan,
+  extra,
   className,
   style,
 }: PtzControlProps) {
@@ -374,6 +382,9 @@ export default function PtzControl({
           {scanning ? '停止扫描' : '开始扫描'}
         </Button>
       </Space>
+
+      {/* 附加区域：由页面注入（例如 GB28181-2022 能力面板） */}
+      {extra ? <div className="e2e-ptz-extra">{extra}</div> : null}
     </div>
   )
 }

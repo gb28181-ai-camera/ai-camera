@@ -6,10 +6,16 @@ import request from '../request';
 import type { BaseResponse } from './definitions/BaseResponse';
 import type { GbPresetReq } from './definitions/GbPresetReq';
 import type { GbPtzCruiseReq } from './definitions/GbPtzCruiseReq';
+import type { GbPtzPreciseReq } from './definitions/GbPtzPreciseReq';
 import type { GbPtzReq } from './definitions/GbPtzReq';
 import type { GbPtzScanReq } from './definitions/GbPtzScanReq';
 import type { GbPtzWiperReq } from './definitions/GbPtzWiperReq';
+import type { RGbCruiseTrackDetail } from './definitions/RGbCruiseTrackDetail';
+import type { RGbCruiseTrackList } from './definitions/RGbCruiseTrackList';
+import type { RGbHomePosition } from './definitions/RGbHomePosition';
 import type { RGbPresetList } from './definitions/RGbPresetList';
+import type { RGbPtzPosition } from './definitions/RGbPtzPosition';
+import type { RGbSDCardStatus } from './definitions/RGbSDCardStatus';
 
 export class GbPtzController {
 
@@ -28,6 +34,57 @@ export class GbPtzController {
     /// 巡航控制
     static async cruiseGbPtz(channelId: string | number, data: GbPtzCruiseReq, headers?: any): Promise<BaseResponse> {
       return request(`/web/gb/ptz/${channelId}/cruise`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: JSON.stringify(data),
+        headers,
+      });
+    }
+
+    static listGbPtzCruiseTracksPath: string = "/web/gb/ptz/{channelId}/cruise-tracks";
+    /// 巡航轨迹列表
+    static async listGbPtzCruiseTracks(channelId: string | number, headers?: any): Promise<RGbCruiseTrackList> {
+      return request(`/web/gb/ptz/${channelId}/cruise-tracks`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
+        headers,
+      });
+    }
+
+    static getGbPtzCruiseTrackPath: string = "/web/gb/ptz/{channelId}/cruise-tracks/{number}";
+    /// 巡航轨迹明细
+    static async getGbPtzCruiseTrack(channelId: string | number, number: string | number, headers?: any): Promise<RGbCruiseTrackDetail> {
+      return request(`/web/gb/ptz/${channelId}/cruise-tracks/${number}`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
+        headers,
+      });
+    }
+
+    static getGbPtzHomePositionPath: string = "/web/gb/ptz/{channelId}/home-position";
+    /// 查询看守位
+    static async getGbPtzHomePosition(channelId: string | number, headers?: any): Promise<RGbHomePosition> {
+      return request(`/web/gb/ptz/${channelId}/home-position`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
+        headers,
+      });
+    }
+
+    static gbPtzPositionPath: string = "/web/gb/ptz/{channelId}/position";
+    /// 查询 PTZ 精准位置
+    static async gbPtzPosition(channelId: string | number, headers?: any): Promise<RGbPtzPosition> {
+      return request(`/web/gb/ptz/${channelId}/position`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
+        headers,
+      });
+    }
+
+    static preciseGbPtzPath: string = "/web/gb/ptz/{channelId}/precise";
+    /// PTZ 精准控制
+    static async preciseGbPtz(channelId: string | number, data: GbPtzPreciseReq, headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/ptz/${channelId}/precise`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "POST",
         data: JSON.stringify(data),
@@ -84,6 +141,16 @@ export class GbPtzController {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "POST",
         data: JSON.stringify(data),
+        headers,
+      });
+    }
+
+    static getGbPtzSDCardPath: string = "/web/gb/ptz/{channelId}/sdcard";
+    /// 查询存储卡状态
+    static async getGbPtzSDCard(channelId: string | number, headers?: any): Promise<RGbSDCardStatus> {
+      return request(`/web/gb/ptz/${channelId}/sdcard`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
         headers,
       });
     }
