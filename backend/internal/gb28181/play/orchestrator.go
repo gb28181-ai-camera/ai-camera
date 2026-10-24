@@ -141,6 +141,11 @@ func (o *Orchestrator) Play(ctx context.Context, dev *model.Device, ch *model.Gb
 	if strings.TrimSpace(ch.GbChannelID) == "" {
 		return nil, errors.New("通道缺少国标编码，无法点播")
 	}
+	// TCP-ACTIVE 在单端口模式下不可用：必须在分配 SSRC / 发 INVITE **之前**拒绝，
+	// 否则会白占一个 SSRC 并让设备进入「已应答但平台不来连」的半死状态。
+	if sipserver.StreamModeOf(dev) == sdp.TransportTCPActive {
+		return nil, ErrTCPActiveUnsupported
+	}
 
 	svc, err := SIPService()
 	if err != nil {

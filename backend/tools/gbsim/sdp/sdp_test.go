@@ -238,3 +238,36 @@ func TestBuildPlayDefaultsSessionName(t *testing.T) {
 		t.Errorf("默认会话名应为 Play：\n%s", text)
 	}
 }
+
+// TestBuildPlayTCP 设备侧对 TCP-PASSIVE INVITE 的应答：
+// m= 用 TCP/RTP/AVP，a=setup 回 active（设备是主动连出方）。
+func TestBuildPlayTCP(t *testing.T) {
+	text := BuildPlay(PlayParams{
+		DeviceID:  "34020000001320000001",
+		LocalIP:   "192.168.1.50",
+		LocalPort: 30001,
+		SSRC:      "0200000001",
+		TCP:       true,
+		Setup:     "active",
+	})
+	for _, want := range []string{
+		"m=video 30001 TCP/RTP/AVP 96\r\n",
+		"a=rtpmap:96 PS/90000\r\n",
+		"a=setup:active\r\n",
+		"y=0200000001\r\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("TCP 设备 SDP 缺少 %q：\n%s", strings.TrimSpace(want), text)
+		}
+	}
+	// active 侧不需要 connection:new（那是被动监听方的语义）。
+	if strings.Contains(text, "a=connection:new") {
+		t.Errorf("a=setup:active 不应带 connection:new：\n%s", text)
+	}
+
+	// 显式 passive 时补 connection:new，供对端方向的会话复用。
+	passive := BuildPlay(PlayParams{DeviceID: "1", LocalIP: "127.0.0.1", LocalPort: 2, SSRC: "9", TCP: true})
+	if !strings.Contains(passive, "a=setup:passive\r\n") || !strings.Contains(passive, "a=connection:new\r\n") {
+		t.Errorf("TCP 默认应为 passive + connection:new：\n%s", passive)
+	}
+}

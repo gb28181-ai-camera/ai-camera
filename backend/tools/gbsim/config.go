@@ -91,18 +91,21 @@ func (c *Config) Validate() error {
 	if c.Expires <= 0 {
 		return fmt.Errorf("--expires 必须为正数秒：%d", c.Expires)
 	}
-	switch strings.ToLower(c.Transport) {
+	switch strings.ToLower(strings.TrimSpace(c.Transport)) {
 	case "udp":
 	case "tcp":
-		// 实测：TCP 信令在本批次的设计下起不来。
-		// UDP 之所以能「收发同端口」，是因为 sipgo 的传输层按 laddr 字符串在连接池里
-		// 命中监听 socket；TCP 的监听套接字不进同一个池，于是 client 会试图再 bind
-		// 一次同一个端口，直接 `bind: Only one usage of each socket address`。
-		// TCP 需要改成「只由 client 长连接dial 出去、不另开监听」的模型，留给后续批次。
-		return fmt.Errorf("--transport tcp 本批次尚未支持（TCP 信令需要改用长连接模型），请使用 udp")
+		// TCP 信令采用「只由 client 长连接 dial 出去、不另开监听」的模型（见 sipua.startTCP）。
+		// 早期照搬 UDP 的 ListenAndServe 会失败：UDP 的监听 socket 会进 sipgo 的连接池，
+		// 出向请求按 laddr 命中它；TCP 的监听 socket 不在同一个池里，client 再 bind
+		// 同一端口就会 `bind: Only one usage of each socket address`。
+	case "":
+		c.Transport = defaultTransport
 	default:
-		return fmt.Errorf("--transport 只支持 udp，当前 %q", c.Transport)
+		return fmt.Errorf("--transport 只支持 udp / tcp，当前 %q", c.Transport)
 	}
+	// tcp-active 保留可解析：它对应「平台主动连设备」，与平台单端口收流互斥。
+	// 运行期会在 INVITE 阶段明确回 488（见 sipua.handleInvite），而不是在参数层拒绝 ——
+	// 这样测试仍能启动模拟器、复现「平台拒绝 TCP-ACTIVE」的完整链路。
 	switch strings.ToLower(c.Mode) {
 	case ModeUDP, ModeTCPPassive, ModeTCPActive:
 	default:

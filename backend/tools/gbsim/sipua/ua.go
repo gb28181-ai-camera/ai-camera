@@ -2,7 +2,10 @@
 //
 // 它覆盖 GB28181 **设备侧**用到的动作：REGISTER（含 Digest）、周期 Keepalive、
 // 接收平台下发的 MESSAGE 并回 200 OK，以及实时点播的 INVITE → 200 OK(SDP) → ACK → BYE
-// 全套会话（见 invite.go）。云台应答、回放（MANSRTSP）、TCP 媒体模式留给后续批次。
+// 全套会话（见 invite.go）。云台应答、回放（MANSRTSP）留给后续批次。
+//
+// 传输层支持 UDP 与 TCP：TCP 采用「客户端长连接」模型（只由 client dial 出去、
+// 不另开监听），见 startTCP。
 //
 // 底层用 github.com/emiago/sipgo 的事务层，不自己实现 RFC 3261 的状态机。
 // 注意 sipgo 只提供**客户端** Digest（Client.DoDigestAuth），服务端 Digest 是另一个项目
@@ -14,6 +17,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +52,13 @@ type Config struct {
 	Expires   int    // 注册有效期（秒）
 	UserAgent string // User-Agent 头，仅用于日志辨识
 	Logger    *slog.Logger
+
+	// MediaMode 是设备侧配置的媒体传输模式（udp / tcp-passive / tcp-active）。
+	//
+	// 只用于一件事：`tcp-active` 时在 INVITE 阶段明确回 488。
+	// 真正的媒体传输以平台 INVITE 的 SDP 为准 —— 平台才是协商发起方，
+	// 模拟器的 flag 不应覆盖线上协商结果（否则测的就不是平台了）。
+	MediaMode string
 
 	// SSRCOverride 非空时，设备在 200 OK 里回一个**与平台不同**的 SSRC（--ssrc-override）。
 	// 用途是覆盖平台的 SSRC 校正路径（§13.3.2）：平台发现不一致且开了 ssrc_check 时
@@ -201,6 +213,14 @@ func (u *UA) LastRegisterResponse() *sip.Response {
 func (u *UA) Start(ctx context.Context) error {
 	u.baseCtx = ctx
 	network := u.transport()
+	// SIP over TCP 走「客户端长连接」模型：不监听任何本地端口。
+	// UDP 的「收发同端口」之所以成立，是因为 sipgo 的监听 socket 进了连接池、
+	// 出向请求按 laddr 命中它；TCP 的监听 socket 不在同一个池里，若照搬 UDP
+	// 的 ListenAndServe，client 会再 bind 一次同端口并失败
+	// （bind: Only one usage of each socket address）。
+	if isTCPNetwork(network) {
+		return u.startTCP(ctx, network)
+	}
 	ready := make(chan struct{})
 	listenCtx := context.WithValue(ctx, sipgo.ListenReadyCtxKey, sipgo.ListenReadyCtxValue(ready))
 	go func() {
@@ -217,6 +237,41 @@ func (u *UA) Start(ctx context.Context) error {
 		return ctx.Err()
 	case <-time.After(3 * time.Second):
 		return fmt.Errorf("信令监听 %d 秒内未就绪（%s %s）", 3, network, u.LocalAddr())
+	}
+}
+
+// startTCP 建立 SIP over TCP 的客户端长连接模型。
+//
+// 模型要点（这也是早期实现失败的原因）：
+//   - **不监听**本地端口，避免与 client 自己绑定的源端口冲突；
+//   - 首次出向请求（REGISTER）时，sipgo 的 TransportTCP 按 Laddr dial 平台，
+//     并把这条连接的读循环接到 transport 的 handleMessage；
+//   - 平台沿同一连接下发的 MESSAGE / INVITE / BYE 因此会进入 Server 的
+//     handler，无需任何监听套接字；
+//   - 连接按「远端地址」进了 sipgo 的连接池，平台回包与后续出向请求复用同一条。
+//
+// 这里先做一次短超时的可达性探测：地址写错时在 Start 阶段就给出明确错误，
+// 而不是让 REGISTER 等满 Timer F。探测连接用完即关，不影响后续长连接。
+func (u *UA) startTCP(ctx context.Context, network string) error {
+	d := net.Dialer{Timeout: 3 * time.Second}
+	conn, err := d.DialContext(ctx, network, u.cfg.SIPServer)
+	if err != nil {
+		return fmt.Errorf("TCP 信令探测失败（%s）：%w", u.cfg.SIPServer, err)
+	}
+	_ = conn.Close()
+
+	u.log.Info("SIP over TCP：使用客户端长连接模型（不监听本地端口）",
+		"platform", u.cfg.SIPServer, "local", u.LocalAddr())
+	return nil
+}
+
+// isTCPNetwork 判断 sipgo 的网络名是否属于 TCP 家族。
+func isTCPNetwork(network string) bool {
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case "tcp", "tcp4", "tcp6":
+		return true
+	default:
+		return false
 	}
 }
 

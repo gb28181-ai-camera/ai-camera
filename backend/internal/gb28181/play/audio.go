@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/sdp"
 	"github.com/boticz/ai-camera-backend/internal/model"
 )
 
@@ -31,10 +32,20 @@ const AudioPayloadTypePCMA = 8
 // 音频送到 ZLM，startSendRtp 再按设备 200 OK 里的地址回推。
 //
 // o= 用户名按契约 §15.5b 填设备国标编码（与点播一致，避免 ACK 打不到设备）。
+//
+// 传输模式与实时点播共用同一份设备档案（Device.StreamMode）：
+//   - UDP：`m=audio <port> RTP/AVP 8`；
+//   - TCP-PASSIVE：`TCP/RTP/AVP` + `a=setup:passive` + `a=connection:new`；
+//   - TCP-ACTIVE：`a=setup:active`（是否允许由调用链决定，点播编排层会直接拒绝）。
+//
+// 对讲若不同步传输模式，会出现「视频走 TCP、音频仍走 UDP」的半可用状态，
+// 排查时极难定位，因此这里必须与 BuildPlaySDP 保持同一条分支。
 func BuildAudioSDP(dev *model.Device, ip string, port int, ssrc, sessionName string) string {
 	origin := ""
+	transport := sdp.TransportUDP
 	if dev != nil {
 		origin = strings.TrimSpace(dev.GbDeviceID)
+		transport = sdp.ParseTransport(dev.StreamMode)
 	}
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
@@ -53,10 +64,18 @@ func BuildAudioSDP(dev *model.Device, ip string, port int, ssrc, sessionName str
 	b.WriteString("s=" + sessionName + "\r\n")
 	b.WriteString("c=IN IP4 " + ip + "\r\n")
 	b.WriteString("t=0 0\r\n")
-	b.WriteString("m=audio " + strconv.Itoa(port) + " RTP/AVP " + strconv.Itoa(AudioPayloadTypePCMA) + "\r\n")
+	b.WriteString("m=audio " + strconv.Itoa(port) + " " + transport.Protocol() + " " + strconv.Itoa(AudioPayloadTypePCMA) + "\r\n")
 	b.WriteString("a=sendrecv\r\n")
 	b.WriteString("a=rtpmap:" + strconv.Itoa(AudioPayloadTypePCMA) + " PCMA/8000\r\n")
 	b.WriteString("a=ptime:20\r\n")
+	if transport.IsTCP() {
+		if transport == sdp.TransportTCPActive {
+			b.WriteString("a=setup:active\r\n")
+		} else {
+			b.WriteString("a=setup:passive\r\n")
+			b.WriteString("a=connection:new\r\n")
+		}
+	}
 	b.WriteString("y=" + ssrc + "\r\n")
 	return b.String()
 }

@@ -5,7 +5,7 @@ import "time"
 // ════════════════════════════════════════════════════════════════
 // 国标视频（GB/T 28181）与 JT/T 1078 —— 数据层模型
 //
-// 来源：docs/开发文档/数据库设计/sql/ddl/09-国标视频.sql（20 张表 + ac_device 扩展 13 列）
+// 来源：docs/开发文档/数据库设计/sql/ddl/09-国标视频.sql（20 张表 + ac_device 扩展 14 列，含 gb_version）
 // 设计依据：docs/敏捷开发/v0.2.0 设备接入与国标视频/00-设计与工作量评估.md
 //   §4 设备接入与白名单、§5 数据库设计、§10.1 字段契约与数据权限
 // 参考实现：wvp-GB28181-pro v2.7.4 的 wvp_* 表（语义对齐，表名改为 ac_ 前缀）
@@ -55,11 +55,23 @@ const (
 	GbStatusOff = "OFF"
 )
 
+// 国标协议版本（ac_device.gb_version）。
+//
+// 默认 2016：老设备占绝大多数，未知时按老版本处理，避免下发 2022 独有命令。
+// 判定逻辑在 internal/gb28181/protocol/version 包，不在模型层。
+const (
+	GbVersion2016 = "2016"
+	GbVersion2022 = "2022"
+)
+
 // 国标订阅类型（ac_gb_subscribe.type）。
 const (
 	GbSubscribeCatalog        = "catalog"
 	GbSubscribeAlarm          = "alarm"
 	GbSubscribeMobilePosition = "mobile_position"
+	// GbSubscribePTZPosition 是 GB/T 28181-2022 的 PTZ 精准位置变化订阅。
+	// 与 catalog/alarm/mobile_position 并列；命名与 ac_gb_subscribe.type 一致。
+	GbSubscribePTZPosition = "ptz_position"
 )
 
 // 语音会话类型（ac_voice_session.type）。
@@ -420,13 +432,13 @@ type GbMobilePosition struct {
 func (GbMobilePosition) TableName() string { return "ac_gb_mobile_position" }
 
 // GbSubscribe 国标订阅记录。表 ac_gb_subscribe。
-// 目录/报警/位置订阅（RFC 3265），到期需续订。无 active 列。
+// 目录/报警/位置/PTZ 位置订阅（RFC 3265），到期需续订。无 active 列。
 type GbSubscribe struct {
 	BaseModel
 	DeviceID   *int64 `gorm:"column:device_id;comment:归属设备" json:"device_id"`
 	GbDeviceID string `gorm:"column:gb_device_id;size:20;index;comment:设备国标编码" json:"gb_device_id"`
 
-	Type        string     `gorm:"column:type;size:20;not null;comment:订阅类型 catalog/alarm/mobile_position" json:"type"`
+	Type        string     `gorm:"column:type;size:20;not null;comment:订阅类型 catalog/alarm/mobile_position/ptz_position" json:"type"`
 	CallID      string     `gorm:"column:call_id;size:255;comment:订阅会话 Call-ID" json:"call_id"`
 	Expires     int64      `gorm:"column:expires;comment:订阅有效期(秒)" json:"expires"`
 	SubscribeDT *time.Time `gorm:"column:subscribe_dt;comment:订阅时间" json:"subscribe_dt"`

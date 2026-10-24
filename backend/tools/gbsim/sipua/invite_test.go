@@ -498,9 +498,136 @@ func TestInviteMissingYFallsBackSSRC(t *testing.T) {
 	}
 }
 
-// TestInviteRejectsTCPMode 本批次只做 UDP，TCP 模式的 INVITE 必须明确回 488，
-// 而不是当 UDP 处理（后者会「INVITE 成功但一直没画面」，最难排）。
-func TestInviteRejectsTCPMode(t *testing.T) {
+// sendInviteRaw 发送一条自定义 SDP 的 INVITE，返回首个最终响应（2xx/4xx）。
+//
+// 与 invite() 的区别：它不预设 200，专门用于断言拒绝路径（488）。
+func (p *rawPlatform) sendInviteRaw(t *testing.T, deviceAddr, channelID, sdpBody string) *rawResponse {
+	t.Helper()
+	host, portStr, _ := net.SplitHostPort(p.addr)
+	msg := strings.Join([]string{
+		"INVITE sip:" + channelID + "@" + deviceAddr + " SIP/2.0",
+		"Via: SIP/2.0/UDP " + host + ":" + portStr + ";rport;branch=" + p.nextBranch(),
+		"Max-Forwards: 70",
+		"From: <sip:34020000002000000001@" + testDomain + ">;tag=" + p.fromTag,
+		"To: <sip:" + channelID + "@" + deviceAddr + ">",
+		"Call-ID: " + p.callID,
+		"CSeq: " + strconv.Itoa(p.cseq) + " INVITE",
+		"Contact: <sip:34020000002000000001@" + p.addr + ">",
+		"Content-Type: application/sdp",
+		"Content-Length: " + strconv.Itoa(len(sdpBody)),
+		"",
+		sdpBody,
+	}, "\r\n")
+	p.send(deviceAddr, msg)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatal("等待 INVITE 最终响应超时")
+		}
+		res, err := p.recv(remaining)
+		if err != nil {
+			t.Fatalf("读取 INVITE 响应失败：%v", err)
+		}
+		if res.status >= 200 {
+			return res
+		}
+	}
+}
+
+// tcpPlaySDP 是平台在 TCP 模式下发的 SDP：proto + a=setup 由调用方指定。
+func tcpPlaySDP(ip string, port int, ssrc, setup string) string {
+	lines := []string{
+		"v=0",
+		"o=34020000001320000001 0 0 IN IP4 " + ip,
+		"s=Play",
+		"c=IN IP4 " + ip,
+		"t=0 0",
+		"m=video " + strconv.Itoa(port) + " TCP/RTP/AVP 96",
+		"a=recvonly",
+		"a=rtpmap:96 PS/90000",
+	}
+	if setup != "" {
+		lines = append(lines, "a=setup:"+setup)
+	}
+	lines = append(lines, "y="+ssrc, "")
+	return strings.Join(lines, "\r\n")
+}
+
+// TestInviteTCPPassiveAccepted 验证 a=setup:passive 的 INVITE 会被接受：
+//   - 工厂拿到的 Transport 必须是 tcp-passive（main 据此主动 dial + `$` 分帧）；
+//   - 200 OK 的设备侧 SDP 必须是 TCP/RTP/AVP + a=setup:active（对称角色）。
+func TestInviteTCPPassiveAccepted(t *testing.T) {
+	platform := startRawPlatform(t)
+	devPort := reserveUDPPort(t)
+	devAddr := "127.0.0.1:" + strconv.Itoa(devPort)
+
+	ua := newTestUA(t, platform.addr, devPort)
+	defer ua.Close()
+
+	var mu sync.Mutex
+	var got InviteInfo
+	media := newFakeMedia()
+	ua.SetMediaFactory(func(info InviteInfo) (MediaSession, int, error) {
+		mu.Lock()
+		got = info
+		mu.Unlock()
+		return media, 30005, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := ua.Start(ctx); err != nil {
+		t.Fatalf("启动 UA 失败：%v", err)
+	}
+
+	const channelID = "34020000001310000001"
+	res := platform.invite(t, devAddr, channelID,
+		tcpPlaySDP("127.0.0.1", 34567, "0200000001", "passive"))
+
+	for _, want := range []string{
+		"m=video 30005 TCP/RTP/AVP 96",
+		"a=recvonly",
+		"a=rtpmap:96 PS/90000",
+		"a=setup:active", // 设备是主动连出方
+		"y=0200000001",
+		"o=" + testDeviceID,
+	} {
+		if !strings.Contains(res.body, want) {
+			t.Errorf("TCP-PASSIVE 的 200 OK 缺少 %q：\n%s", want, res.body)
+		}
+	}
+	// 设备侧不是被动监听方，不应带 connection:new。
+	if strings.Contains(res.body, "a=connection:new") {
+		t.Errorf("设备侧 SDP 不应带 a=connection:new：\n%s", res.body)
+	}
+
+	mu.Lock()
+	info := got
+	mu.Unlock()
+	if info.Transport != TransportTCPPassive {
+		t.Errorf("工厂应收到 Transport=%q，实际 %q", TransportTCPPassive, info.Transport)
+	}
+	if info.Protocol != "TCP/RTP/AVP" {
+		t.Errorf("Protocol 应为 TCP/RTP/AVP，实际 %q", info.Protocol)
+	}
+	if info.Setup != "passive" {
+		t.Errorf("Setup 应为 passive，实际 %q", info.Setup)
+	}
+
+	// ACK 之后仍应正常起流（TCP 不影响会话状态机）。
+	platform.ack(devAddr, channelID, toTagOf(t, res))
+	select {
+	case <-media.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("TCP-PASSIVE 会话在 ACK 后未启动推流")
+	}
+}
+
+// TestInviteRejectsTCPActive 平台要求主动连设备（setup:active）时，单端口模式无法满足，
+// 必须明确回 488 —— 不能当 UDP 处理，否则是「INVITE 成功但一直没画面」。
+func TestInviteRejectsTCPActive(t *testing.T) {
 	platform := startRawPlatform(t)
 	devPort := reserveUDPPort(t)
 	devAddr := "127.0.0.1:" + strconv.Itoa(devPort)
@@ -508,7 +635,7 @@ func TestInviteRejectsTCPMode(t *testing.T) {
 	ua := newTestUA(t, platform.addr, devPort)
 	defer ua.Close()
 	ua.SetMediaFactory(func(info InviteInfo) (MediaSession, int, error) {
-		t.Error("TCP 模式的 INVITE 不应调用媒体工厂")
+		t.Error("TCP-ACTIVE 的 INVITE 不应调用媒体工厂")
 		return newFakeMedia(), 30004, nil
 	})
 
@@ -518,30 +645,41 @@ func TestInviteRejectsTCPMode(t *testing.T) {
 		t.Fatalf("启动 UA 失败：%v", err)
 	}
 
-	tcpSDP := "v=0\r\no=34020000001320000001 0 0 IN IP4 127.0.0.1\r\ns=Play\r\n" +
-		"c=IN IP4 127.0.0.1\r\nt=0 0\r\n" +
-		"m=video 34567 TCP/RTP/AVP 96\r\na=recvonly\r\na=setup:passive\r\n" +
-		"y=0200000001\r\n"
-
-	host, portStr, _ := net.SplitHostPort(platform.addr)
-	msg := strings.Join([]string{
-		"INVITE sip:34020000001310000001@" + devAddr + " SIP/2.0",
-		"Via: SIP/2.0/UDP " + host + ":" + portStr + ";rport;branch=" + platform.nextBranch(),
-		"Max-Forwards: 70",
-		"From: <sip:34020000002000000001@" + testDomain + ">;tag=" + platform.fromTag,
-		"To: <sip:34020000001310000001@" + devAddr + ">",
-		"Call-ID: " + platform.callID,
-		"CSeq: 100 INVITE",
-		"Content-Type: application/sdp",
-		"Content-Length: " + strconv.Itoa(len(tcpSDP)),
-		"",
-		tcpSDP,
-	}, "\r\n")
-	platform.send(devAddr, msg)
-
-	res := platform.mustRecvStatus(t, 488, 3*time.Second)
+	res := platform.sendInviteRaw(t, devAddr, "34020000001310000001",
+		tcpPlaySDP("127.0.0.1", 34567, "0200000001", "active"))
+	if res.status != 488 {
+		t.Fatalf("TCP-ACTIVE 应回 488，实际 %d %s", res.status, res.reason)
+	}
 	if res.reason == "" {
 		t.Error("488 应带原因短语")
+	}
+}
+
+// TestInviteRejectsWhenMediaModeTCPActive --mode tcp-active 时即使平台发 UDP INVITE
+// 也一律回 488：该模式与平台单端口收流互斥，模拟器不该假装能推。
+func TestInviteRejectsWhenMediaModeTCPActive(t *testing.T) {
+	platform := startRawPlatform(t)
+	devPort := reserveUDPPort(t)
+	devAddr := "127.0.0.1:" + strconv.Itoa(devPort)
+
+	ua := newTestUA(t, platform.addr, devPort)
+	defer ua.Close()
+	ua.cfg.MediaMode = TransportTCPActive
+	ua.SetMediaFactory(func(info InviteInfo) (MediaSession, int, error) {
+		t.Error("tcp-active 模式下不应调用媒体工厂")
+		return newFakeMedia(), 30006, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := ua.Start(ctx); err != nil {
+		t.Fatalf("启动 UA 失败：%v", err)
+	}
+
+	res := platform.sendInviteRaw(t, devAddr, "34020000001310000001",
+		platformPlaySDP("127.0.0.1", 34567, "0200000001"))
+	if res.status != 488 {
+		t.Fatalf("--mode tcp-active 应回 488，实际 %d %s", res.status, res.reason)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/boticz/ai-camera-backend/config"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/charset"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/sdp"
 )
 
 // Config 是 SIP 信令服务的运行参数。
@@ -26,7 +27,12 @@ type Config struct {
 	DefaultCharset  string // 设备未配置 charset 时的缺省值
 	MediaPublicIP   string // SDP 通告的收流 IP
 	RTPProxyPort    int    // ZLM 单端口收流端口
-	Logger          *slog.Logger
+	// VideoCodecs / AudioCodecs 是 SDP 通告的编码列表，顺序即优先级。
+	// 来自 gb28181.media.video_codecs / audio_codecs；留空时在 applyDefaults 中
+	// 填入 GB28181-2022 的默认列表。
+	VideoCodecs []string
+	AudioCodecs []string
+	Logger      *slog.Logger
 }
 
 // TransportUDP/TCP/Both 是 transport 配置的三个合法取值。
@@ -56,6 +62,8 @@ func FromAppConfig(c *config.Config, logger *slog.Logger) (Config, error) {
 		DefaultCharset:  charset.Normalize(g.Charset),
 		MediaPublicIP:   strings.TrimSpace(g.Media.PublicIP),
 		RTPProxyPort:    g.Media.RTPProxyPort,
+		VideoCodecs:     trimAll(g.Media.VideoCodecs),
+		AudioCodecs:     trimAll(g.Media.AudioCodecs),
 		Logger:          logger,
 	}
 	if err := cfg.applyDefaults(); err != nil {
@@ -118,10 +126,29 @@ func (c *Config) applyDefaults() error {
 	if c.RTPProxyPort == 0 {
 		c.RTPProxyPort = 10000
 	}
+	// 编码协商：配置留空时用 GB28181-2022 默认列表（PS/H264/H265 + PCMA/AAC…）。
+	// 放在这里而不是 BuildPlaySDP，是为了让启动日志与「实际下发」永远一致。
+	if len(c.VideoCodecs) == 0 {
+		c.VideoCodecs = sdp.DefaultVideoCodecs()
+	}
+	if len(c.AudioCodecs) == 0 {
+		c.AudioCodecs = sdp.DefaultAudioCodecs()
+	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()
 	}
 	return nil
+}
+
+// trimAll 去掉配置项的空白并丢弃空串，避免生成非法的 rtpmap 行。
+func trimAll(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if v := strings.TrimSpace(s); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // resolveAdvertiseIP 选出设备可达的本机地址。

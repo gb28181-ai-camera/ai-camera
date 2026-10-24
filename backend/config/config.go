@@ -27,11 +27,12 @@ type Config struct {
 // 分为 SIP 信令与媒体通告两段：前者决定本平台在 SIP 域里的身份与监听地址，
 // 后者只影响下发给设备的 SDP（ZLM 的收流地址与端口）。
 type GB28181Config struct {
-	Enabled  bool               `mapstructure:"enabled"`
-	Embedded bool               `mapstructure:"embedded"` // true 时由 cmd/server 内嵌启动
-	Charset  string             `mapstructure:"charset"`  // 设备未配置 charset 时的缺省值
-	SIP      GB28181SIPConfig   `mapstructure:"sip"`
-	Media    GB28181MediaConfig `mapstructure:"media"`
+	Enabled  bool                 `mapstructure:"enabled"`
+	Embedded bool                 `mapstructure:"embedded"` // true 时由 cmd/server 内嵌启动
+	Charset  string               `mapstructure:"charset"`  // 设备未配置 charset 时的缺省值
+	SIP      GB28181SIPConfig     `mapstructure:"sip"`
+	Media    GB28181MediaConfig   `mapstructure:"media"`
+	Cascade  GB28181CascadeConfig `mapstructure:"cascade"`
 }
 
 // GB28181SIPConfig SIP 信令层配置。
@@ -59,6 +60,23 @@ type GB28181SIPConfig struct {
 type GB28181MediaConfig struct {
 	PublicIP     string `mapstructure:"public_ip"`      // SDP c=/o= 通告给设备的 IP
 	RTPProxyPort int    `mapstructure:"rtp_proxy_port"` // ZLM 单端口模式的共享收流端口
+	// VideoCodecs / AudioCodecs 是 SDP 中通告的编码列表（GB28181-2022 §）。
+	// 顺序即 SDP m= 行中的优先级。留空使用内置默认值。
+	// 默认视频：PS/90000, H264/90000, H265/90000
+	// 默认音频：PCMA/8000, MPEG4-GENERIC/44100, AAC/44100
+	VideoCodecs []string `mapstructure:"video_codecs"`
+	AudioCodecs []string `mapstructure:"audio_codecs"`
+}
+
+// GB28181CascadeConfig 国标级联（作为下级平台向上级注册）的本地信令配置。
+//
+// 级联使用**独立端口**：5060 已被设备接入占用，且级联的上/下级身份需要
+// 独立的 From/Contact 与事务状态，混在同一 listener 上会让排障无从下手。
+type GB28181CascadeConfig struct {
+	Enabled     bool   `mapstructure:"enabled"`
+	ListenIP    string `mapstructure:"listen_ip"`
+	Port        int    `mapstructure:"port"`
+	AdvertiseIP string `mapstructure:"advertise_ip"`
 }
 
 // ServerConfig HTTP 服务配置。
@@ -213,6 +231,13 @@ var envBindings = map[string]string{
 	"gb28181.sip.nonce_secret":     "GB28181_SIP_NONCE_SECRET",
 	"gb28181.media.public_ip":      "GB28181_MEDIA_PUBLIC_IP",
 	"gb28181.media.rtp_proxy_port": "GB28181_MEDIA_RTP_PROXY_PORT",
+	// 编码列表只走 YAML：viper 的 env 覆盖对 []string 的逗号拆分不可靠，
+	// 与其留一个「看起来能配、实际解析成单个元素」的坑，不如明确只支持配置文件。
+	// 级联的标量配置走环境变量没有问题。
+	"gb28181.cascade.enabled":      "GB28181_CASCADE_ENABLED",
+	"gb28181.cascade.listen_ip":    "GB28181_CASCADE_LISTEN_IP",
+	"gb28181.cascade.port":         "GB28181_CASCADE_PORT",
+	"gb28181.cascade.advertise_ip": "GB28181_CASCADE_ADVERTISE_IP",
 }
 
 // LoadConfig 使用 viper 读取 yaml 配置文件并反序列化为 Config。

@@ -85,6 +85,13 @@ gb28181:
   media:
     public_ip: 127.0.0.1
     rtp_proxy_port: 10000
+    video_codecs: [PS/90000, H264/90000, H265/90000]
+    audio_codecs: [PCMA/8000, MPEG4-GENERIC/44100, AAC/44100]
+  cascade:
+    enabled: false
+    listen_ip: 0.0.0.0
+    port: 5061
+    advertise_ip: ""
 
 log:
   level: info

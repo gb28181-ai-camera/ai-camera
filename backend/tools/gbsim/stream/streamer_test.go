@@ -7,9 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/boticz/ai-camera-backend/tools/gbsim/ps"
 )
 
 // sampleNALs 是一段最小可用的 H.264 访问单元序列（SPS+PPS+IDR，再一帧非 IDR）。
@@ -251,4 +254,160 @@ func mustAtoi(t *testing.T, s string) int {
 		t.Fatalf("端口不是数字：%q", s)
 	}
 	return n
+}
+
+// —— TCP-PASSIVE（RFC 4571 分帧）用例 ——
+
+const tcpSamplePath = "../testdata/sample.h264"
+
+// loadTCPTestNALs 读取内置样本并切好 NAL。
+//
+// 这里用真实样本而不是上面的 sampleNALs()：TCP 用例关注的是「连上 + 分帧」，
+// 用一个能跑完整推流循环的样本更接近真机。
+func loadTCPTestNALs(t *testing.T) [][]byte {
+	t.Helper()
+	data, err := os.ReadFile(tcpSamplePath)
+	if err != nil {
+		t.Fatalf("读取样本失败：%v", err)
+	}
+	nals := ps.SplitAnnexB(data)
+	if len(nals) == 0 {
+		t.Fatal("样本切不出 NAL")
+	}
+	return nals
+}
+
+func tcpTestLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// TestTCPPassiveDialsAndFrames 是媒体 TCP-PASSIVE 的端到端守门用例：
+//
+//	设备侧 Streamer.New 主动 dial「平台 SDP 的 c=:m=」，
+//	Start 后发出的每个 RTP 包都带 RFC 4571 的 `$ <channel> <len16>` 头。
+//
+// 少了分帧头时 ZLM 会把 RTP 头当帧头，表现为「TCP 连上了但流建不起来、
+// 且没有报错」——这正是本用例要钉死的点。
+func TestTCPPassiveDialsAndFrames(t *testing.T) {
+	// 假装是 ZLM 的 10000/tcp 收流端口。
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("平台 TCP 监听失败：%v", err)
+	}
+	defer ln.Close()
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port := mustAtoi(t, portStr)
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, aerr := ln.Accept()
+		if aerr != nil {
+			return
+		}
+		accepted <- conn
+	}()
+
+	const ssrc = uint32(200000001) // 十进制 0200000001
+	st, err := New(Config{
+		NALs:       loadTCPTestNALs(t),
+		SSRC:       ssrc,
+		TargetIP:   host,
+		TargetPort: port,
+		LocalIP:    "127.0.0.1",
+		FPS:        25,
+		Loop:       false,
+		Transport:  TransportTCPPassive,
+		Logger:     tcpTestLogger(),
+	})
+	if err != nil {
+		t.Fatalf("构造 TCP 推流会话失败（应主动 dial 平台）：%v", err)
+	}
+	defer st.Close()
+
+	if got := st.Transport(); got != TransportTCPPassive {
+		t.Fatalf("Transport = %q，期望 %q", got, TransportTCPPassive)
+	}
+	if st.LocalRTPPort() <= 0 {
+		t.Fatalf("TCP 会话的本地源端口应可用，实际 %d", st.LocalRTPPort())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := st.Start(ctx); err != nil {
+		t.Fatalf("启动推流失败：%v", err)
+	}
+
+	var conn net.Conn
+	select {
+	case conn = <-accepted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("3 秒内没有收到设备侧的 TCP 连接（说明没有主动 dial）")
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	// 读第一个 RFC 4571 帧。
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		t.Fatalf("读取帧头失败：%v", err)
+	}
+	if header[0] != '$' {
+		t.Fatalf("帧首字节应为 '$'（RFC 4571），实际 0x%02X", header[0])
+	}
+	if header[1] != 0 {
+		t.Fatalf("RTP 通道号应为 0，实际 %d", header[1])
+	}
+	length := int(binary.BigEndian.Uint16(header[2:4]))
+	if length <= 12 {
+		t.Fatalf("RTP 帧长度异常：%d", length)
+	}
+	packet := make([]byte, length)
+	if _, err := io.ReadFull(conn, packet); err != nil {
+		t.Fatalf("读取 RTP 负载失败：%v", err)
+	}
+	if packet[0]>>6 != 2 {
+		t.Fatalf("RTP 版本应为 2，实际 %d", packet[0]>>6)
+	}
+	if got := binary.BigEndian.Uint32(packet[8:12]); got != ssrc {
+		t.Fatalf("RTP 头里的 SSRC 应为 %d，实际 %d", ssrc, got)
+	}
+
+	// 再读一帧，确认分帧是「每包都带」而不是只有首包。
+	if _, err := io.ReadFull(conn, header); err != nil {
+		t.Fatalf("读取第二个帧头失败（分帧可能只加在首包）：%v", err)
+	}
+	if header[0] != '$' {
+		t.Fatalf("第二帧首字节应为 '$'，实际 0x%02X", header[0])
+	}
+	if l := int(binary.BigEndian.Uint16(header[2:4])); l <= 12 {
+		t.Fatalf("第二帧长度异常：%d", l)
+	}
+
+	st.Stop()
+}
+
+// TestUDPTransportIsDefault 确保空 Transport 仍走 UDP，避免回归。
+func TestUDPTransportIsDefault(t *testing.T) {
+	sink, addr := startSink(t)
+	defer sink.Close()
+	host, portStr, _ := net.SplitHostPort(addr)
+
+	st, err := New(Config{
+		NALs:       sampleNALs(),
+		SSRC:       200000002,
+		TargetIP:   host,
+		TargetPort: mustAtoi(t, portStr),
+		Logger:     tcpTestLogger(),
+	})
+	if err != nil {
+		t.Fatalf("构造 UDP 推流会话失败：%v", err)
+	}
+	defer st.Close()
+	if got := st.Transport(); got != TransportUDP {
+		t.Fatalf("空 Transport 应为 udp，实际 %q", got)
+	}
+	if st.LocalRTPPort() <= 0 {
+		t.Fatalf("UDP 本地端口应已绑定，实际 %d", st.LocalRTPPort())
+	}
 }

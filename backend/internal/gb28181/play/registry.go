@@ -34,6 +34,12 @@ var (
 	ErrStreamNotFound = errors.New("播放会话不存在或已结束")
 	// ErrDeviceOffline 设备不在线，不能发起点播。
 	ErrDeviceOffline = errors.New("设备离线，无法发起实时点播")
+	// ErrTCPActiveUnsupported 设备要求 TCP-ACTIVE 收流。
+	//
+	// 单端口模式（设计 §2.2/§7.2）不创建流级 RTP server，ZLM 没有可拨号的
+	// 本地端口，因此 TCP-ACTIVE 与单端口收流**互斥**，不是「以后再做」。
+	// 点播层必须显式拒绝：静默按 UDP 发 INVITE 会变成「成功但永远黑屏」。
+	ErrTCPActiveUnsupported = errors.New("设备配置为 TCP-ACTIVE 媒体传输，与当前单端口收流模式互斥，暂不支持；请将设备媒体传输方式改为 UDP 或 TCP-PASSIVE")
 )
 
 // Stream 是一路进行中的实时播放会话。

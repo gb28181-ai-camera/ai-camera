@@ -134,6 +134,12 @@ type Control struct {
 	AlarmCmd  string `xml:"AlarmCmd,omitempty"`  // ResetAlarm
 	IFameCmd  string `xml:"IFameCmd,omitempty"`  // Send / Stop
 	DragZoom  string `xml:"DragZoom,omitempty"`  // 拖拽放大
+
+	// PTZPrecise 是 GB/T 28181-2022 的精准控制子元素（A.2.3.1.11）。
+	//
+	// 与 PTZCmd 并列而不是替换：2016 设备只认 PTZCmd，2022 设备两者都认。
+	// 是否使用本字段由 version.Supports(V2022, FeaturePTZPreciseCtrl) 判定。
+	PTZPrecise *PTZPreciseCtrl `xml:"PTZPreciseCtrl,omitempty"`
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -228,22 +234,27 @@ type DeviceList struct {
 
 // CatalogItem 一条通道。字段顺序对齐 GB/T 28181-2016 附录 A.2.6.1。
 type CatalogItem struct {
-	DeviceID     string  `xml:"DeviceID"`
-	Name         string  `xml:"Name"`
-	Manufacturer string  `xml:"Manufacturer,omitempty"`
-	Model        string  `xml:"Model,omitempty"`
-	Owner        string  `xml:"Owner,omitempty"`
-	CivilCode    string  `xml:"CivilCode,omitempty"`
-	Address      string  `xml:"Address,omitempty"`
-	Parental     int     `xml:"Parental"`
-	ParentID     string  `xml:"ParentID,omitempty"`
-	RegisterWay  int     `xml:"RegisterWay"`
-	Secrecy      int     `xml:"Secrecy"`
-	Status       string  `xml:"Status,omitempty"` // ON / OFF
-	Longitude    float64 `xml:"Longitude,omitempty"`
-	Latitude     float64 `xml:"Latitude,omitempty"`
-	ChannelType  int     `xml:"Info>ChannelType,omitempty"`
-	PTZType      int     `xml:"Info>PTZType,omitempty"`
+	DeviceID     string `xml:"DeviceID"`
+	Name         string `xml:"Name"`
+	Manufacturer string `xml:"Manufacturer,omitempty"`
+	Model        string `xml:"Model,omitempty"`
+	Owner        string `xml:"Owner,omitempty"`
+	CivilCode    string `xml:"CivilCode,omitempty"`
+	Address      string `xml:"Address,omitempty"`
+	Parental     int    `xml:"Parental"`
+	ParentID     string `xml:"ParentID,omitempty"`
+	RegisterWay  int    `xml:"RegisterWay"`
+	Secrecy      int    `xml:"Secrecy"`
+	Status       string `xml:"Status,omitempty"` // ON / OFF
+	// Event 是目录变更事件（ADD/UPDATE/DEL/ON/OFF/VLOST，2016 已定义、2022 沿用）。
+	//
+	// 与 Status 的区别：Status 是「当前状态」，Event 是「这次发生了什么变化」。
+	// 两者可能并存（例如 Event=ADD 且 Status=ON）。语义映射见 catalog_event.go。
+	Event       string  `xml:"Event,omitempty"`
+	Longitude   float64 `xml:"Longitude,omitempty"`
+	Latitude    float64 `xml:"Latitude,omitempty"`
+	ChannelType int     `xml:"Info>ChannelType,omitempty"`
+	PTZType     int     `xml:"Info>PTZType,omitempty"`
 }
 
 // DeviceInfoResponse 设备信息响应。

@@ -3,9 +3,20 @@ package sipua
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/boticz/ai-camera-backend/tools/gbsim/sdp"
 	"github.com/emiago/sipgo/sip"
+)
+
+// 媒体传输模式。与 stream 包的常量取值一致，但只在本包用于 SDP 解析结果。
+//
+// 注意 tcp-active 只用于「明确拒绝」：平台单端口模式不创建流级 RTP server，
+// ZLM 无法主动拨号设备，所以这条路径在当前架构下不可实现。
+const (
+	TransportUDP        = "udp"
+	TransportTCPPassive = "tcp-passive"
+	TransportTCPActive  = "tcp-active"
 )
 
 // InviteInfo 是一次实时点播 INVITE 解析出的关键信息。
@@ -21,6 +32,9 @@ type InviteInfo struct {
 	PlatformPort int    // 平台 SDP 的 m= 端口 —— 单端口模式下是 ZLM 的收流端口
 	Protocol     string // m= 的传输协议：RTP/AVP 或 TCP/RTP/AVP
 	Setup        string // 平台 SDP 的 a=setup（UDP 模式下为空）
+	// Transport 归一化后的传输模式：udp / tcp-passive。
+	// TCP-ACTIVE（平台要主动连设备）在 handleInvite 里已回 488，不会出现在这里。
+	Transport string
 
 	PlatformSSRC string // 平台 SDP 的 y=，平台自己分配的 SSRC
 	// DeviceSSRC 是设备实际用于推流的 SSRC。
@@ -81,6 +95,16 @@ func (u *UA) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
+	// 模拟器被要求以 tcp-active 启动时，任何点播都无解：平台单端口模式不创建
+	// 流级 RTP server，没法主动连设备。这里必须明确回 488，而不是静默按
+	// SDP 里写的 UDP/TCP 去推 —— 后者会让测试看起来「跑通了」，实际没验证目标路径。
+	if strings.EqualFold(strings.TrimSpace(u.cfg.MediaMode), TransportTCPActive) {
+		u.log.Warn("模拟器以 --mode tcp-active 启动：平台单端口收流模式不支持该模式，回 488",
+			"call_id", callID)
+		u.rejectInvite(req, tx, callID, "TCP-ACTIVE 与平台单端口收流互斥，不支持")
+		return
+	}
+
 	body := string(req.Body())
 	parsed, err := sdp.Parse(body)
 	if err != nil {
@@ -96,13 +120,29 @@ func (u *UA) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	// 本批次只做 UDP。TCP-PASSIVE / TCP-ACTIVE 需要 `$` 分帧或主动连出，留给下一批。
+	// 传输模式由平台 SDP 决定（平台是协商发起方）：
+	//   - RTP/AVP                         → UDP；
+	//   - TCP/RTP/AVP + a=setup:passive   → TCP-PASSIVE：设备主动 dial 平台；
+	//   - TCP/RTP/AVP + a=setup:active    → TCP-ACTIVE：平台要主动连设备，不支持；
+	//   - 缺 a=setup 的 TCP（部分设备/平台如此）按 passive 处理，与 WVP 一致。
 	// 明确回绝而不是当 UDP 处理 —— 后者会「INVITE 成功但一直没画面」，最难排。
+	setup := strings.ToLower(strings.TrimSpace(parsed.Setup()))
+	transport := TransportUDP
 	if !video.IsUDP() {
-		u.log.Warn("收到 TCP 模式的 INVITE，本批次尚未实现，回 488",
-			"call_id", callID, "protocol", video.Protocol, "setup", parsed.Setup())
-		u.rejectInvite(req, tx, callID, "本批次仅支持 UDP 收流")
-		return
+		switch setup {
+		case "", "passive":
+			transport = TransportTCPPassive
+		case "active", "actpass":
+			u.log.Warn("收到 TCP-ACTIVE 的 INVITE（平台要求主动连设备），单端口模式不支持，回 488",
+				"call_id", callID, "protocol", video.Protocol, "setup", setup)
+			u.rejectInvite(req, tx, callID, "TCP-ACTIVE 与平台单端口收流互斥，不支持")
+			return
+		default:
+			u.log.Warn("收到无法识别的 a=setup，回 488",
+				"call_id", callID, "protocol", video.Protocol, "setup", setup)
+			u.rejectInvite(req, tx, callID, "无法识别的 a=setup")
+			return
+		}
 	}
 
 	u.mu.RLock()
@@ -138,7 +178,8 @@ func (u *UA) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 		PlatformIP:   parsed.VideoConnectionIP(),
 		PlatformPort: video.Port,
 		Protocol:     video.Protocol,
-		Setup:        parsed.Setup(),
+		Setup:        setup,
+		Transport:    transport,
 		PlatformSSRC: platformSSRC,
 		DeviceSSRC:   deviceSSRC,
 	}
@@ -161,6 +202,10 @@ func (u *UA) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 		LocalPort:   localPort,
 		SSRC:        deviceSSRC,
 		SessionName: parsed.Name,
+		// TCP-PASSIVE 会话里设备是主动连出方：m= 用 TCP/RTP/AVP，
+		// 并在 a=setup 里回 active（与平台的 passive 对称）。
+		TCP:   info.Transport == TransportTCPPassive,
+		Setup: "active",
 	})
 
 	res := sip.NewSDPResponseFromRequest(req, []byte(info.SDP))
@@ -195,6 +240,7 @@ func (u *UA) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 
 	u.log.Info("已应答点播 INVITE，等待 ACK",
 		"call_id", callID, "channel_id", channelID,
+		"transport", info.Transport, "setup", info.Setup,
 		"platform", fmt.Sprintf("%s:%d", info.PlatformIP, info.PlatformPort),
 		"platform_ssrc", info.PlatformSSRC, "device_ssrc", info.DeviceSSRC,
 		"local_rtp_port", localPort)
@@ -232,6 +278,7 @@ func (u *UA) handleAck(req *sip.Request, _ sip.ServerTransaction) {
 	}
 	u.log.Info("收到 ACK，开始推流",
 		"call_id", callID, "channel_id", sess.info.ChannelID,
+		"transport", sess.info.Transport,
 		"platform", fmt.Sprintf("%s:%d", sess.info.PlatformIP, sess.info.PlatformPort),
 		"ssrc", sess.info.DeviceSSRC)
 }
@@ -271,7 +318,11 @@ func (u *UA) stopAllSessions() {
 }
 
 // rejectInvite 回一个失败响应并记日志，避免平台一直等到超时。
+//
+// reason 只写日志：响应短语保持 RFC 3261 的英文 "Not Acceptable Here"，
+// 避免中文字节进入 SIP 状态行（部分解析器按 ASCII 处理，会直接判为畸形报文）。
 func (u *UA) rejectInvite(req *sip.Request, tx sip.ServerTransaction, callID, reason string) {
+	u.log.Warn("拒绝点播 INVITE", "call_id", callID, "reason", reason)
 	res := sip.NewResponseFromRequest(req, sip.StatusNotAcceptableHere, "Not Acceptable Here", nil)
 	if err := tx.Respond(res); err != nil {
 		u.log.Error("回复 INVITE 488 失败", "error", err, "call_id", callID)

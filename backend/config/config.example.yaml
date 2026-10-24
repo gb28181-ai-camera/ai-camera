@@ -90,6 +90,23 @@ gb28181:
   media:
     public_ip: 127.0.0.1      # SDP c=/o= 中通告给设备的 IP（单端口模式下即 ZLM 地址）
     rtp_proxy_port: 10000     # ZLM 单端口模式的共享收流端口
+    # GB28181-2022 编码协商。顺序即 SDP m= 行中的优先级；留空用内置默认值。
+    # 2022 新增 H.265 / G.722.1 / AAC，但设备与浏览器是否支持取决于两端，
+    # 平台只负责按能力通告，不做转码（转码在 ZLM）。
+    video_codecs:
+      - PS/90000
+      - H264/90000
+      - H265/90000
+    audio_codecs:
+      - PCMA/8000
+      - MPEG4-GENERIC/44100
+      - AAC/44100
+  cascade:
+    # 作为下级平台向上级注册。使用独立端口，避免与设备接入的 5060 混用。
+    enabled: false
+    listen_ip: 0.0.0.0
+    port: 5061
+    advertise_ip: ""          # 留空则用 listen_ip
 
 log:
   level: info

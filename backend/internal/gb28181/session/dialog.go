@@ -30,7 +30,11 @@ type Dialog struct {
 	App         string // ZLM app，恒为 rtp
 	Stream      string // ZLM 流名：%08X(ssrc) 大写
 	SessionName string // SDP s=：Play / Playback / Download
-	DeviceSDP   string // 设备 200 OK 里的 SDP 原文
+	// Transport 本次协商的媒体传输（udp / tcp-passive / tcp-active）。
+	// 排障时用它区分「INVITE 成功但设备往错的方向推」：UDP 与 TCP 的
+	// 收流路径完全不同，日志里不带这一项只能靠翻 SDP 正文猜。
+	Transport string
+	DeviceSDP string // 设备 200 OK 里的 SDP 原文
 
 	sess *sipgo.DialogClientSession
 
@@ -41,7 +45,7 @@ type Dialog struct {
 }
 
 // New 包装 sipgo 的客户端对话框。
-func New(callID, fromTag, toTag, deviceID, channelID, remoteAddr, ssrc, stream, sessionName string, sdp string, sess *sipgo.DialogClientSession) *Dialog {
+func New(callID, fromTag, toTag, deviceID, channelID, remoteAddr, ssrc, stream, sessionName, transport, sdp string, sess *sipgo.DialogClientSession) *Dialog {
 	return &Dialog{
 		CallID:      callID,
 		FromTag:     fromTag,
@@ -53,6 +57,7 @@ func New(callID, fromTag, toTag, deviceID, channelID, remoteAddr, ssrc, stream, 
 		App:         "rtp",
 		Stream:      stream,
 		SessionName: sessionName,
+		Transport:   transport,
 		DeviceSDP:   sdp,
 		sess:        sess,
 		createDT:    time.Now(),

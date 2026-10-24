@@ -11,8 +11,14 @@
 //	✅ 入向 MESSAGE 的 MANSCDP 解析与目录 / 设备信息 / 设备状态响应（含 GB2312）
 //	✅ PS 封装器（Annex-B NAL → PES → PS）与 RTP 分包发送
 //
-// 尚未覆盖（后续批次）：TCP-PASSIVE / TCP-ACTIVE、INVITE 应答与真实推流、
-// 云台与回放应答、AI 风险上报、`--spoof-message` 等异常注入、交互模式。
+// 本批新增：
+//
+//	✅ SIP over TCP（客户端长连接模型，不监听本地端口）
+//	✅ 媒体 TCP-PASSIVE（主动连出 + RFC 4571 `$` 分帧）
+//	✅ TCP-ACTIVE 的明确拒绝路径（平台单端口模式互斥）
+//
+// 尚未覆盖（后续批次）：云台与回放应答、AI 风险上报、
+// `--spoof-message` 等异常注入、交互模式。
 package main
 
 import (
@@ -74,7 +80,7 @@ func parseFlags(args []string, out io.Writer) (*Config, error) {
 	fs.StringVar(&cfg.SIPDomain, "sip-domain", "", "SIP 域 / Digest realm（必填，如 3402000000）")
 	fs.StringVar(&cfg.Password, "password", "", "设备 SIP 密码（对应 ac_device.sip_password）")
 	fs.IntVar(&cfg.Channels, "channels", 1, "模拟的通道数量，≥1")
-	fs.StringVar(&cfg.Mode, "mode", defaultMode, "媒体传输模式：udp / tcp-passive / tcp-active（本批次仅 udp）")
+	fs.StringVar(&cfg.Mode, "mode", defaultMode, "媒体传输模式：udp / tcp-passive / tcp-active（tcp-active 与平台单端口收流互斥，仅用于验证拒绝路径）")
 	fs.StringVar(&cfg.StreamFile, "stream-file", "", "H.264 Annex-B 样本文件路径；给了就加载并校验")
 	fs.BoolVar(&cfg.Loop, "loop", true, "样本放完后从头再推（点播是持续流，默认开）")
 	fs.IntVar(&cfg.FPS, "fps", defaultFPS, "推流帧率；0 表示不限速（仅压测用，正常别关）")
@@ -83,7 +89,7 @@ func parseFlags(args []string, out io.Writer) (*Config, error) {
 	fs.StringVar(&cfg.Charset, "charset", defaultCharset, "XML 正文编码：GB2312 / UTF-8（对应 ac_device.charset）")
 	fs.StringVar(&cfg.LocalIP, "local-ip", "", "本地信令 IP；留空则按到 --sip-server 的路由自动探测")
 	fs.IntVar(&cfg.LocalPort, "local-port", defaultLocalPort, "本地信令端口（平台会把下行指令发到这里）")
-	fs.StringVar(&cfg.Transport, "transport", defaultTransport, "信令传输（本批次仅 udp；tcp 需长连接模型，未实现）")
+	fs.StringVar(&cfg.Transport, "transport", defaultTransport, "信令传输：udp / tcp（tcp 只由 client 长连接 dial 出去，不监听本地端口）")
 	fs.IntVar(&cfg.Expires, "expires", defaultExpires, "注册有效期（秒）")
 	fs.DurationVar(&cfg.KeepaliveInterval, "keepalive", defaultKeepalive, "Keepalive 心跳发送周期")
 	fs.DurationVar(&riskEvery, "risk-interval", defaultRiskInterval, "AI 风险上报周期（⚠️ 本批次尚未实现，仅接受参数）")
@@ -154,8 +160,14 @@ func run(cfg *Config) error {
 	} else {
 		logger.Warn("未提供 --stream-file，收到点播 INVITE 会回 488（没有可推的媒体源）")
 	}
-	if !strings.EqualFold(cfg.Mode, ModeUDP) {
-		logger.Warn("--mode 非 udp：本批次只实现 UDP 收流，TCP 模式的 INVITE 会被回 488",
+	switch strings.ToLower(cfg.Mode) {
+	case ModeTCPActive:
+		// 参数可解析，但当前平台架构下走不通：单端口模式不创建流级 RTP server，
+		// ZLM 无法主动拨号设备。明确告警，收到点播时也会回 488。
+		logger.Warn("--mode tcp-active：与平台单端口收流模式互斥，所有点播 INVITE 都会被回 488",
+			"mode", cfg.Mode)
+	case ModeTCPPassive:
+		logger.Info("--mode tcp-passive：收到 a=setup:passive 的 INVITE 时主动连出，并按 RFC 4571 分帧",
 			"mode", cfg.Mode)
 	}
 
@@ -172,6 +184,7 @@ func run(cfg *Config) error {
 		Transport:    cfg.Transport,
 		Expires:      cfg.Expires,
 		SSRCOverride: cfg.SSRCOverride,
+		MediaMode:    cfg.Mode,
 		Logger:       logger,
 	})
 	if err != nil {
@@ -319,7 +332,10 @@ func newMediaFactory(cfg *Config, nals [][]byte, logger *slog.Logger) sipua.Medi
 			FPS:        cfg.FPS,
 			Loop:       cfg.Loop,
 			Duration:   cfg.Duration,
-			Logger:     logger,
+			// 传输模式以 INVITE 的 SDP 为准，不用 --mode：
+			// 平台才是协商发起方，flag 只是设备的「配置声明」。
+			Transport: info.Transport,
+			Logger:    logger,
 		})
 		if err != nil {
 			return nil, 0, err

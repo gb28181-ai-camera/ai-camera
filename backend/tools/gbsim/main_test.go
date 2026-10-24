@@ -401,14 +401,13 @@ func TestParseFlagsValidation(t *testing.T) {
 		"sip-server 无端口": {
 			"--device-id", "34020000001320000001", "--sip-server", "127.0.0.1", "--sip-domain", "3402000000",
 		},
-		"缺 sip-domain":         {"--device-id", "34020000001320000001", "--sip-server", "127.0.0.1:5060"},
-		"channels 为 0":         with("--channels", "0"),
-		"mode 非法":              with("--mode", "sctp"),
-		"transport 非法":         with("--transport", "sctp"),
-		"transport tcp 本批次未支持": with("--transport", "tcp"),
-		"charset 非法":           with("--charset", "BIG5"),
-		"expires 非正":           with("--expires", "0"),
-		"local-port 越界":        with("--local-port", "70000"),
+		"缺 sip-domain":  {"--device-id", "34020000001320000001", "--sip-server", "127.0.0.1:5060"},
+		"channels 为 0":  with("--channels", "0"),
+		"mode 非法":       with("--mode", "sctp"),
+		"transport 非法":  with("--transport", "sctp"),
+		"charset 非法":    with("--charset", "BIG5"),
+		"expires 非正":    with("--expires", "0"),
+		"local-port 越界": with("--local-port", "70000"),
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -421,6 +420,23 @@ func TestParseFlagsValidation(t *testing.T) {
 				t.Error("参数错误时应打印用法")
 			}
 		})
+	}
+}
+
+// TestParseFlagsTransportTCP 确认 --transport tcp 不再是参数错误（长连接模型已实现）。
+func TestParseFlagsTransportTCP(t *testing.T) {
+	var out bytes.Buffer
+	cfg, err := parseFlags([]string{
+		"--device-id", "34020000001320000001",
+		"--sip-server", "127.0.0.1:5060",
+		"--sip-domain", "3402000000",
+		"--transport", "tcp",
+	}, &out)
+	if err != nil {
+		t.Fatalf("--transport tcp 应可解析：%v\n%s", err, out.String())
+	}
+	if cfg.Transport != "tcp" {
+		t.Fatalf("Transport = %q，期望 tcp", cfg.Transport)
 	}
 }
 

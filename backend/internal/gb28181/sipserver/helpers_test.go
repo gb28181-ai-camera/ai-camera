@@ -35,6 +35,30 @@ func TestFromAppConfigDefaults(t *testing.T) {
 	if cfg.DefaultCharset != charset.GB2312 {
 		t.Fatalf("默认字符集 = %q", cfg.DefaultCharset)
 	}
+	// 编码列表留空时必须填入 GB28181-2022 的默认值，否则 SDP 只剩 PS 一条通告。
+	if len(cfg.VideoCodecs) != 3 || cfg.VideoCodecs[0] != "PS/90000" || cfg.VideoCodecs[2] != "H265/90000" {
+		t.Fatalf("默认视频编码列表错误：%v", cfg.VideoCodecs)
+	}
+	if len(cfg.AudioCodecs) != 3 || cfg.AudioCodecs[0] != "PCMA/8000" || cfg.AudioCodecs[2] != "AAC/44100" {
+		t.Fatalf("默认音频编码列表错误：%v", cfg.AudioCodecs)
+	}
+}
+
+// TestFromAppConfigCodecs 配置里的编码列表要原样（去空白后）进入 sipserver。
+func TestFromAppConfigCodecs(t *testing.T) {
+	app := &config.Config{}
+	app.GB28181.Media.VideoCodecs = []string{" PS/90000 ", "", "H265/90000"}
+	app.GB28181.Media.AudioCodecs = []string{"AAC/44100"}
+	cfg, err := FromAppConfig(app, nil)
+	if err != nil {
+		t.Fatalf("FromAppConfig 失败：%v", err)
+	}
+	if strings.Join(cfg.VideoCodecs, "|") != "PS/90000|H265/90000" {
+		t.Fatalf("视频编码列表未按配置生效：%v", cfg.VideoCodecs)
+	}
+	if strings.Join(cfg.AudioCodecs, "|") != "AAC/44100" {
+		t.Fatalf("音频编码列表未按配置生效：%v", cfg.AudioCodecs)
+	}
 }
 
 func TestFromAppConfigValidation(t *testing.T) {
@@ -195,6 +219,70 @@ func TestBuildPlaySDP(t *testing.T) {
 	out = s.BuildPlaySDP(dev, "0200000002", "Play")
 	if !strings.Contains(out, "c=IN IP4 192.168.1.50\r\n") {
 		t.Fatalf("设备级 sdp_ip 未生效：\n%s", out)
+	}
+}
+
+// TestBuildPlaySDPStreamModes 锁定「按设备 stream_mode 分支」的三种形态。
+//
+// 这是本期补的真实缺口：改之前 stream_mode 字段形同虚设，SDP 恒发 UDP，
+// 配了 TCP-PASSIVE 的设备只会收到 UDP 通告 → 黑屏且无报错。
+func TestBuildPlaySDPStreamModes(t *testing.T) {
+	s := &Service{cfg: Config{
+		ServerID:      "34020000002000000001",
+		MediaPublicIP: "10.0.0.5",
+		RTPProxyPort:  10000,
+		VideoCodecs:   []string{"PS/90000", "H264/90000"},
+		AudioCodecs:   []string{"PCMA/8000"},
+	}}
+
+	cases := []struct {
+		mode    string
+		proto   string
+		setup   string
+		noSetup bool
+	}{
+		{mode: "", proto: "RTP/AVP", noSetup: true},
+		{mode: "UDP", proto: "RTP/AVP", noSetup: true},
+		{mode: "TCP-PASSIVE", proto: "TCP/RTP/AVP", setup: "passive"},
+		{mode: "tcp-passive", proto: "TCP/RTP/AVP", setup: "passive"},
+		{mode: "TCP-ACTIVE", proto: "TCP/RTP/AVP", setup: "active"},
+	}
+	for _, c := range cases {
+		dev := &model.Device{GbDeviceID: "34020000001320000001", StreamMode: c.mode}
+		out := s.BuildPlaySDP(dev, "0200000001", "Play")
+		wantM := "m=video 10000 " + c.proto + " 96 97 98\r\n"
+		if !strings.Contains(out, wantM) {
+			t.Errorf("stream_mode=%q 的 m= 行错误，期望 %q，实际：\n%s", c.mode, strings.TrimSpace(wantM), out)
+		}
+		if c.noSetup {
+			if strings.Contains(out, "a=setup:") {
+				t.Errorf("stream_mode=%q 不应带 a=setup：\n%s", c.mode, out)
+			}
+			continue
+		}
+		if !strings.Contains(out, "a=setup:"+c.setup+"\r\n") {
+			t.Errorf("stream_mode=%q 缺少 a=setup:%s：\n%s", c.mode, c.setup, out)
+		}
+	}
+}
+
+// TestStreamModeOf 锁定大小写与空值的归一化。
+func TestStreamModeOf(t *testing.T) {
+	cases := map[string]string{
+		"":            "udp",
+		"UDP":         "udp",
+		"TCP-PASSIVE": "tcp-passive",
+		"tcp_active":  "tcp-active",
+		"unknown":     "udp",
+	}
+	for in, want := range cases {
+		got := string(StreamModeOf(&model.Device{StreamMode: in}))
+		if got != want {
+			t.Errorf("StreamModeOf(%q) = %q，期望 %q", in, got, want)
+		}
+	}
+	if got := string(StreamModeOf(nil)); got != "udp" {
+		t.Errorf("nil 设备应回落到 udp，实际 %q", got)
 	}
 }
 

@@ -77,17 +77,20 @@ func marshalControl(c *Control) ([]byte, []byte, error) {
 		AlarmCmd  string   `xml:"AlarmCmd,omitempty"`
 		IFameCmd  string   `xml:"IFameCmd,omitempty"`
 		DragZoom  string   `xml:"DragZoom,omitempty"`
+		// 2022 精准控制子元素。放在最后与标准 XSD 的 sequence 顺序一致。
+		PTZPrecise *PTZPreciseCtrl `xml:"PTZPreciseCtrl,omitempty"`
 	}
 	wire := controlWire{
-		CmdType:   c.CmdType,
-		SN:        c.SN,
-		DeviceID:  c.DeviceID,
-		RecordCmd: c.RecordCmd,
-		TeleBoot:  c.TeleBoot,
-		GuardCmd:  c.GuardCmd,
-		AlarmCmd:  c.AlarmCmd,
-		IFameCmd:  c.IFameCmd,
-		DragZoom:  c.DragZoom,
+		CmdType:    c.CmdType,
+		SN:         c.SN,
+		DeviceID:   c.DeviceID,
+		RecordCmd:  c.RecordCmd,
+		TeleBoot:   c.TeleBoot,
+		GuardCmd:   c.GuardCmd,
+		AlarmCmd:   c.AlarmCmd,
+		IFameCmd:   c.IFameCmd,
+		DragZoom:   c.DragZoom,
+		PTZPrecise: c.PTZPrecise,
 	}
 	if wire.CmdType == "" {
 		wire.CmdType = CmdControl

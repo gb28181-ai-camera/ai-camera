@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/boticz/ai-camera-backend/internal/gb28181/charset"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/metrics"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/manscdp"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/emiago/sipgo/sip"
@@ -53,6 +54,7 @@ func (s *Service) dbCtx() (context.Context, context.CancelFunc) {
 // handleRegister 处理 REGISTER：白名单 → Digest → 写注册状态 → 200 + Expires。
 func (s *Service) handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 	start := time.Now()
+	metrics.IncSipMessage("in")
 	dev, ok := s.authorize(req, tx)
 	if !ok {
 		return
@@ -62,6 +64,7 @@ func (s *Service) handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 	ctx, cancel := s.dbCtx()
 	defer cancel()
 	if err := s.devices.OnRegister(ctx, dev, req.Source(), transportOf(req), expires); err != nil {
+		metrics.IncSipRegister("failed")
 		s.respond(req, tx, sip.StatusInternalServerError, "Server Internal Error")
 		s.logInbound(req, dev.GbDeviceID, s.DeviceCharset(dev), "", 500, "failed", "更新注册状态失败："+err.Error(), &start)
 		return
@@ -82,6 +85,7 @@ func (s *Service) handleRegister(req *sip.Request, tx sip.ServerTransaction) {
 	}
 	s.log.Info("设备"+action, "gb_device_id", dev.GbDeviceID,
 		"remote", req.Source(), "transport", transportOf(req), "expires", expires)
+	metrics.IncSipRegister("success")
 	s.logInbound(req, dev.GbDeviceID, s.DeviceCharset(dev), "", 200, "success", action, &start)
 
 	// 首次激活（尚未同步过目录）时主动拉一次 Catalog，避免管理员还要手动点「同步通道」。
@@ -112,6 +116,7 @@ func (s *Service) syncCatalogAfterRegister(dev *model.Device) {
 
 // handleMessage 处理带 MANSCDP 正文的 MESSAGE。
 func (s *Service) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
+	metrics.IncSipMessage("in")
 	s.processInboundBody(req, tx)
 }
 
@@ -119,6 +124,7 @@ func (s *Service) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 //
 // 目录/报警/位置的订阅推送与 MESSAGE 的正文格式相同，因此复用同一套解析。
 func (s *Service) handleNotify(req *sip.Request, tx sip.ServerTransaction) {
+	metrics.IncSipMessage("in")
 	s.processInboundBody(req, tx)
 }
 
@@ -165,6 +171,15 @@ func (s *Service) processInboundBody(req *sip.Request, tx sip.ServerTransaction)
 	s.respond(req, tx, sip.StatusOK, "OK")
 	s.logInbound(req, dev.GbDeviceID, cs, env.CmdType, 200, "success", "", &start)
 
+	// 2022 能力探测：收到 2022 独有命令即把设备版本升到 2022。
+	// 放在回 200 之后：版本落库失败不应影响信令事务。
+	dbCtx, cancel := s.dbCtx()
+	versionErr := s.devices.OnCommandSeen(dbCtx, dev, env.CmdType)
+	cancel()
+	if versionErr != nil {
+		s.log.Warn("设备协议版本升级失败", "gb_device_id", dev.GbDeviceID, "error", versionErr)
+	}
+
 	s.dispatch(dev, env, body, req.Source(), transportOf(req))
 }
 
@@ -204,6 +219,17 @@ func (s *Service) dispatch(dev *model.Device, env *manscdp.Envelope, body []byte
 			}
 			if err := s.devices.OnMobilePosition(ctx, dev, msg); err != nil {
 				s.log.Warn("写入移动位置失败", "error", err, "gb_device_id", dev.GbDeviceID)
+			}
+		case manscdp.CmdCatalog:
+			// 目录订阅的增量推送（Notify/Catalog）。事件语义见 manscdp.CatalogEvent*。
+			// 不能复用 Response 的等齐逻辑：Notify 只带变化项，永远等不到 SumNum。
+			_, notify, err := manscdp.DecodeCatalogNotify(body, cs)
+			if err != nil {
+				s.log.Warn("解析目录通知失败", "error", err, "gb_device_id", dev.GbDeviceID)
+				return
+			}
+			if err := s.devices.OnCatalogNotify(ctx, dev, notify); err != nil {
+				s.log.Warn("处理目录通知失败", "error", err, "gb_device_id", dev.GbDeviceID)
 			}
 		case manscdp.CmdMediaStatus:
 			s.log.Info("收到媒体状态通知", "gb_device_id", dev.GbDeviceID)
@@ -258,6 +284,13 @@ func (s *Service) dispatch(dev *model.Device, env *manscdp.Envelope, body []byte
 			} else {
 				s.log.Info("收到录像查询响应（暂无消费方）", "gb_device_id", dev.GbDeviceID, "sum", resp.SumNum)
 			}
+		case manscdp.CmdPTZPosition, manscdp.CmdCruiseTrackList, manscdp.CmdCruiseTrack,
+			manscdp.CmdHomePosition, manscdp.CmdSDCardStatus:
+			// 2022 查询应答：交给按 (设备, SN) 等待的调用方。
+			if !s.DeliverQueryResponse(dev, env.SN, body) {
+				s.log.Debug("收到 2022 查询应答（无等待方）",
+					"cmd_type", env.CmdType, "sn", env.SN, "gb_device_id", dev.GbDeviceID)
+			}
 		case manscdp.CmdPresetQuery, manscdp.CmdConfigDownload:
 			s.log.Debug("收到查询响应", "cmd_type", env.CmdType, "gb_device_id", dev.GbDeviceID,
 				"bytes", len(body))
@@ -276,6 +309,7 @@ func (s *Service) dispatch(dev *model.Device, env *manscdp.Envelope, body []byte
 // 本期只有「平台 → 设备」的点播方向；级联入向（上级平台点播本平台）属于三期，
 // 明确回 488 而不是静默丢弃。
 func (s *Service) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
+	metrics.IncSipMessage("in")
 	start := time.Now()
 	s.respond(req, tx, sip.StatusNotAcceptableHere, "Not Acceptable Here")
 	s.logInbound(req, deviceIDOf(req), s.cfg.DefaultCharset, "", 488, "rejected",
@@ -284,11 +318,13 @@ func (s *Service) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 
 // handleAck 处理 ACK。ACK 不期望响应，只做日志；用于发现「ACK 打不到设备」一类问题。
 func (s *Service) handleAck(req *sip.Request, _ sip.ServerTransaction) {
+	metrics.IncSipMessage("in")
 	s.log.Debug("收到 ACK", "call_id", callIDOf(req), "source", req.Source())
 }
 
 // handleBye 处理设备主动结束会话（掉电、用户挂断）。
 func (s *Service) handleBye(req *sip.Request, tx sip.ServerTransaction) {
+	metrics.IncSipMessage("in")
 	start := time.Now()
 	callID := callIDOf(req)
 	if d, ok := s.sessions.Get(callID); ok {
@@ -305,6 +341,7 @@ func (s *Service) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 
 // handleInfo 处理入向 INFO（回放控制一般是平台发给设备，入向少见）。
 func (s *Service) handleInfo(req *sip.Request, tx sip.ServerTransaction) {
+	metrics.IncSipMessage("in")
 	start := time.Now()
 	s.respond(req, tx, sip.StatusOK, "OK")
 	s.logInbound(req, deviceIDOf(req), s.cfg.DefaultCharset, "", 200, "success", "", &start)
@@ -312,11 +349,13 @@ func (s *Service) handleInfo(req *sip.Request, tx sip.ServerTransaction) {
 
 // handleOptions 应答平台/设备探活。
 func (s *Service) handleOptions(req *sip.Request, tx sip.ServerTransaction) {
+	metrics.IncSipMessage("in")
 	s.respond(req, tx, sip.StatusOK, "OK")
 }
 
 // handleSubscribeInbound 处理设备对平台的 SUBSCRIBE（级联场景）。
 func (s *Service) handleSubscribeInbound(req *sip.Request, tx sip.ServerTransaction) {
+	metrics.IncSipMessage("in")
 	start := time.Now()
 	s.respond(req, tx, sip.StatusMethodNotAllowed, "Method Not Allowed")
 	s.logInbound(req, deviceIDOf(req), s.cfg.DefaultCharset, "", 405, "rejected",
@@ -325,6 +364,7 @@ func (s *Service) handleSubscribeInbound(req *sip.Request, tx sip.ServerTransact
 
 // handleNoRoute 兜底：记录未处理的方法并回 501，避免静默丢包。
 func (s *Service) handleNoRoute(req *sip.Request, tx sip.ServerTransaction) {
+	metrics.IncSipMessage("in")
 	s.log.Warn("收到未处理的 SIP 方法", "method", req.Method.String(), "call_id", callIDOf(req))
 	s.respond(req, tx, sip.StatusNotImplemented, "Not Implemented")
 }
@@ -352,6 +392,7 @@ func (s *Service) authorize(req *sip.Request, tx sip.ServerTransaction) (*model.
 	gbID := deviceIDOf(req)
 	dev, err := s.auth.Lookup(ctx, gbID)
 	if err != nil {
+		metrics.IncSipRegister("rejected")
 		s.respond(req, tx, sip.StatusForbidden, "Forbidden")
 		s.logInbound(req, gbID, s.cfg.DefaultCharset, "", 403, "rejected", "白名单拒绝："+err.Error(), nil)
 		s.log.Warn("SIP 设备被拒绝（未建档）", "gb_device_id", gbID, "remote", req.Source(),
@@ -374,6 +415,7 @@ func (s *Service) authorize(req *sip.Request, tx sip.ServerTransaction) (*model.
 	}
 
 	if err := s.auth.Verify(req, dev); err != nil {
+		metrics.IncSipRegister("rejected")
 		s.respond(req, tx, sip.StatusForbidden, "Forbidden")
 		s.logInbound(req, gbID, s.DeviceCharset(dev), "", 403, "rejected", "Digest 校验失败："+err.Error(), nil)
 		s.log.Warn("SIP 设备鉴权失败", "gb_device_id", gbID, "remote", req.Source(),

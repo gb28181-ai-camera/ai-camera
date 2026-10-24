@@ -39,7 +39,7 @@ type Device struct {
 	// 物联网卡
 	IotCardID *int64 `gorm:"column:iot_card_id;comment:物联网卡ID" json:"iot_card_id"`
 
-	// ── 国标接入（GB28181，v0.2.0 新增 13 列）──────────────────────
+	// ── 国标接入（GB28181，v0.2.0 新增 13 列 + 2022 扩展 gb_version）──────
 	//
 	// ⚠️ gb_device_id 与 device_code 是**两个不同的 ID 命名空间**：
 	//   device_code 为业务编号（如 CAM_001），供 /web/devices/:id/heartbeat 使用；
@@ -49,6 +49,7 @@ type Device struct {
 	// 无法用 GORM tag 表达，由 DDL 脚本创建；AutoMigrate 只负责列本身。
 	// 依据：docs/开发文档/数据库设计/sql/ddl/09-国标视频.sql 第 0 节。
 	GbDeviceID     string     `gorm:"column:gb_device_id;size:20;comment:国标20位编码,SIP From头携带" json:"gb_device_id"`
+	GbVersion      string     `gorm:"column:gb_version;size:10;default:2016;comment:GB/T 28181协议版本 2016/2022" json:"gb_version"`
 	SipPassword    string     `gorm:"column:sip_password;size:100;comment:设备SIP Digest密码(敏感,接口返回时脱敏)" json:"sip_password"`
 	SipRealm       string     `gorm:"column:sip_realm;size:50;comment:SIP鉴权域,默认取gb28181.sip_domain" json:"sip_realm"`
 	SipTransport   string     `gorm:"column:sip_transport;size:10;default:UDP;comment:SIP传输 UDP/TCP" json:"sip_transport"`

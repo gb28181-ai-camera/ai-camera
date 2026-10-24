@@ -5,7 +5,12 @@
 // 目标地址与 SSRC **全部来自平台 INVITE 的 SDP**（`c=` / `m=` / `y=`），
 // 不是配置里的硬编码值 —— 这是 §7.1 时序图里「设备往 c= 的地址 + m= 的端口发 RTP」那一步。
 //
-// 本批次只做 UDP。TCP-PASSIVE / TCP-ACTIVE 需要额外的 `$` 分帧与主动连出，留给下一批。
+// 两种媒体传输：
+//   - udp：直接 net.DialUDP，RTP 包各自成报文；
+//   - tcp-passive：设备**主动 dial** 平台 SDP 的 c=:m=（平台是 setup:passive），
+//     再用 RFC 4571 的 `$` 分帧发送（见 rtp.FramedConn）。
+//
+// TCP-ACTIVE（平台主动连设备）由 sipua 层直接回 488，不会走到这里。
 package stream
 
 import (
@@ -14,6 +19,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +30,18 @@ import (
 
 // DefaultFPS 是推流帧率默认值，与样本码流一致（PTS 步进 = 90000/25 = 3600）。
 const DefaultFPS = 25
+
+// 媒体传输模式（与 sipua.InviteInfo.Transport 取值一致）。
+const (
+	TransportUDP        = "udp"
+	TransportTCPPassive = "tcp-passive"
+)
+
+// tcpDialTimeout 限制 TCP 建连时间。
+//
+// 设备在 INVITE 处理协程里同步建连，若目标被防火墙黑洞，不设超时会一直
+// 挂到操作系统的 SYN 重试结束（Windows 上可达 20 秒），期间平台只能干等。
+const tcpDialTimeout = 5 * time.Second
 
 // Config 是一次推流会话的入参。
 type Config struct {
@@ -35,7 +54,10 @@ type Config struct {
 	Loop       bool          // 样本放完后是否从头再来
 	Duration   time.Duration // >0 时推满该时长自动停止
 	MTU        int           // RTP 负载上限，0 用 rtp 包默认值
-	Logger     *slog.Logger
+	// Transport 媒体传输模式：udp（默认）/ tcp-passive。
+	// 取值来自 INVITE 的 SDP，而不是 --mode：平台才是协商的发起方。
+	Transport string
+	Logger    *slog.Logger
 }
 
 // Streamer 是一个可启停的推流会话。
@@ -46,7 +68,7 @@ type Config struct {
 type Streamer struct {
 	cfg    Config
 	log    *slog.Logger
-	conn   *net.UDPConn
+	conn   net.Conn // UDP 连接或 TCP（RFC 4571 分帧）连接
 	sender *rtp.Sender
 	units  [][][]byte // 按访问单元（一帧）分组后的 NAL
 
@@ -58,10 +80,11 @@ type Streamer struct {
 	closeOnce sync.Once
 }
 
-// New 建立推流会话：绑定本地 UDP 端口、连向平台收流地址、按帧切分样本。
+// New 建立推流会话：绑定/连接本地端口、连向平台收流地址、按帧切分样本。
 //
-// 构造时即绑定端口，是为了让上层能在 200 OK 的 SDP 里写出**真实的**设备侧 m= 端口
-// （见 LocalRTPPort）。若延到 ACK 之后才绑定，SDP 里就只能瞎填一个端口。
+// 构造时即建立连接（UDP 绑定或 TCP dial），是为了让上层能在 200 OK 的 SDP 里
+// 写出**真实的**设备侧 m= 端口（见 LocalRTPPort）。若延到 ACK 之后才连，
+// SDP 里就只能瞎填一个端口；TCP-PASSIVE 还会错过「平台已就绪、设备却还没连」的窗口。
 func New(cfg Config) (*Streamer, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -78,22 +101,41 @@ func New(cfg Config) (*Streamer, error) {
 		return nil, errors.New("样本码流切不出任何访问单元")
 	}
 
-	var laddr *net.UDPAddr
-	if cfg.LocalIP != "" {
-		ip := net.ParseIP(cfg.LocalIP)
-		if ip == nil {
-			return nil, fmt.Errorf("本地 IP 非法：%q", cfg.LocalIP)
-		}
-		laddr = &net.UDPAddr{IP: ip}
-	}
-	raddr := &net.UDPAddr{IP: net.ParseIP(cfg.TargetIP), Port: cfg.TargetPort}
-	if raddr.IP == nil {
+	targetIP := net.ParseIP(cfg.TargetIP)
+	if targetIP == nil {
 		return nil, fmt.Errorf("平台收流地址不是合法 IP：%q（SDP 的 c= 必须是 IP，不能是域名）", cfg.TargetIP)
 	}
+	localIP := net.IP(nil)
+	if cfg.LocalIP != "" {
+		localIP = net.ParseIP(cfg.LocalIP)
+		if localIP == nil {
+			return nil, fmt.Errorf("本地 IP 非法：%q", cfg.LocalIP)
+		}
+	}
 
-	conn, err := net.DialUDP("udp4", laddr, raddr)
-	if err != nil {
-		return nil, fmt.Errorf("建立推流 UDP 连接失败（%s → %s）：%w", laddr, raddr, err)
+	var conn net.Conn
+	if isTCPTransport(cfg.Transport) {
+		// —— TCP-PASSIVE：设备是主动方，dial 平台 SDP 里的 c=:m= ——
+		// 注意必须用同一个连接发全部 RTP：ZLM 的 tcp 收流按连接关联流，
+		// 另开连接会被当成另一路（或直接丢弃）。
+		dialer := net.Dialer{Timeout: tcpDialTimeout}
+		if localIP != nil {
+			dialer.LocalAddr = &net.TCPAddr{IP: localIP}
+		}
+		raw, derr := dialer.Dial("tcp4", net.JoinHostPort(cfg.TargetIP, strconv.Itoa(cfg.TargetPort)))
+		if derr != nil {
+			return nil, fmt.Errorf("建立推流 TCP 连接失败（%s → %s:%d）：%w",
+				cfg.LocalIP, cfg.TargetIP, cfg.TargetPort, derr)
+		}
+		conn = rtp.NewFramedConn(raw, 0)
+	} else {
+		laddr := &net.UDPAddr{IP: localIP}
+		raddr := &net.UDPAddr{IP: targetIP, Port: cfg.TargetPort}
+		raw, derr := net.DialUDP("udp4", laddr, raddr)
+		if derr != nil {
+			return nil, fmt.Errorf("建立推流 UDP 连接失败（%s → %s）：%w", laddr, raddr, derr)
+		}
+		conn = raw
 	}
 
 	var opts []rtp.Option
@@ -109,12 +151,37 @@ func New(cfg Config) (*Streamer, error) {
 	}, nil
 }
 
-// LocalRTPPort 返回本地绑定的 UDP 端口，供上层写进设备侧 SDP 的 m= 行。
-func (s *Streamer) LocalRTPPort() int {
-	if a, ok := s.conn.LocalAddr().(*net.UDPAddr); ok {
-		return a.Port
+// isTCPTransport 判断是否 TCP-PASSIVE（大小写/下划线兼容）。
+func isTCPTransport(t string) bool {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case TransportTCPPassive, "tcp", "tcp_passive":
+		return true
+	default:
+		return false
 	}
-	return 0
+}
+
+// LocalRTPPort 返回本地绑定的端口，供上层写进设备侧 SDP 的 m= 行。
+//
+// UDP 是构造时绑定的端口；TCP-PASSIVE 是 dial 后的临时源端口（设备侧 SDP
+// 仍然要写它：部分平台会用 200 OK 的 m= 端口做回推或校验）。
+func (s *Streamer) LocalRTPPort() int {
+	switch a := s.conn.LocalAddr().(type) {
+	case *net.UDPAddr:
+		return a.Port
+	case *net.TCPAddr:
+		return a.Port
+	default:
+		return 0
+	}
+}
+
+// Transport 返回本次推流使用的传输模式（日志/断言用）。
+func (s *Streamer) Transport() string {
+	if isTCPTransport(s.cfg.Transport) {
+		return TransportTCPPassive
+	}
+	return TransportUDP
 }
 
 // SSRC 返回本会话实际使用的 SSRC。
@@ -159,7 +226,7 @@ func (s *Streamer) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop 停止推流并释放 UDP 连接。可重复调用。
+// Stop 停止推流并释放底层连接。可重复调用。
 //
 // 每个 Streamer 只服务一次 INVITE 会话、不复用，因此 Stop 直接关掉连接 ——
 // 否则每个 BYE 都留下一个占着端口的 socket，多轮点播后端口会被耗尽。
@@ -219,7 +286,7 @@ func (s *Streamer) run(ctx context.Context) error {
 
 	var pts uint64
 	s.log.Info("开始推流", "ssrc", fmt.Sprintf("%08X", s.sender.SSRC()),
-		"target", s.target(), "fps", fps, "loop", s.cfg.Loop,
+		"target", s.target(), "transport", s.Transport(), "fps", fps, "loop", s.cfg.Loop,
 		"frames", len(s.units), "local_port", s.LocalRTPPort())
 
 	for {

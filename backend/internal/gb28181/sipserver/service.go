@@ -31,6 +31,7 @@ import (
 	"github.com/boticz/ai-camera-backend/internal/gb28181/charset"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/control"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/device"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/metrics"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/manscdp"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/sdp"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/session"
@@ -98,6 +99,11 @@ type Service struct {
 
 	recordMu     sync.RWMutex
 	onRecordInfo func(*model.Device, *manscdp.RecordInfoResponse)
+
+	// queryWaiters 按 (设备编码, SN) 等待 2022 查询的业务应答。
+	// 国标是「MESSAGE 立即回 200，业务结果再发一条 MESSAGE」，所以查询方
+	// 只能按 SN 关联；用 sync.Map 避免与信令处理共用一把锁。
+	queryWaiters sync.Map
 }
 
 // New 构造服务（不监听端口，由 Start 负责）。
@@ -195,7 +201,9 @@ func (s *Service) Start(ctx context.Context) error {
 		"listen", addr, "transport", s.cfg.Transport,
 		"domain", s.cfg.Domain, "server_id", s.cfg.ServerID,
 		"advertise_ip", s.cfg.AdvertiseIP, "media_ip", s.cfg.MediaPublicIP,
-		"rtp_proxy_port", s.cfg.RTPProxyPort)
+		"rtp_proxy_port", s.cfg.RTPProxyPort,
+		"video_codecs", strings.Join(s.cfg.VideoCodecs, ","),
+		"audio_codecs", strings.Join(s.cfg.AudioCodecs, ","))
 	return nil
 }
 
@@ -341,19 +349,49 @@ func (s *Service) AllocateSSRC() (ssrcStr, stream string, err error) {
 // ReleaseSSRC 归还 SSRC（停止播放时调用）。
 func (s *Service) ReleaseSSRC(ssrcStr string) { s.ssrc.Release(ssrcStr) }
 
+// StreamModeOf 返回设备配置的媒体传输模式，未配置时回落到 UDP。
+//
+// 取值来自 ac_device.stream_mode（UDP / TCP-PASSIVE / TCP-ACTIVE），
+// 归一化逻辑集中在 sdp.ParseTransport，避免「大写常量」和「小写配置」两套写法漂移。
+func StreamModeOf(dev *model.Device) sdp.Transport {
+	if dev == nil {
+		return sdp.TransportUDP
+	}
+	return sdp.ParseTransport(dev.StreamMode)
+}
+
 // BuildPlaySDP 构造点播 INVITE 的 SDP。
 //
 // 设备级 sdp_ip 优先于全局 media.public_ip（NAT / 多网卡场景，设计 §7.2）。
 // o= 的用户名按契约 §15.5b 填设备国标编码。
+//
+// 传输模式按 Device.StreamMode 分支：UDP（默认）/ TCP-PASSIVE / TCP-ACTIVE。
+// 实时点播、回放、下载都复用本方法，因此三者的传输协商天然一致。
+// 注意 TCP-ACTIVE 的**拒绝**不在这里做（签名没有 error），而是由播放编排层
+// 与 SendInvite 提前拦住；本方法只负责如实生成 SDP，供排障时比对。
 func (s *Service) BuildPlaySDP(dev *model.Device, ssrcStr, sessionName string) string {
 	ip := s.cfg.MediaPublicIP
 	deviceID := ""
+	transport := sdp.TransportUDP
 	if dev != nil {
 		if strings.TrimSpace(dev.SDPIP) != "" {
 			ip = strings.TrimSpace(dev.SDPIP)
 		}
 		deviceID = dev.GbDeviceID
+		transport = StreamModeOf(dev)
 	}
+
+	// 真机排障的关键证据：最终协商的 transport 与编码列表。
+	// 这两个值一旦与设备配置不符，表现就是「INVITE 成功但黑屏」，日志是唯一线索。
+	s.logger().Info("构造 INVITE SDP",
+		"gb_device_id", deviceID,
+		"session", sessionName,
+		"transport", string(transport),
+		"media_ip", ip,
+		"rtp_proxy_port", s.cfg.RTPProxyPort,
+		"video_codecs", strings.Join(s.cfg.VideoCodecs, ","),
+		"audio_codecs", strings.Join(s.cfg.AudioCodecs, ","))
+
 	return sdp.BuildPlay(sdp.PlayParams{
 		OriginUser:  deviceID,
 		ServerID:    s.cfg.ServerID,
@@ -361,7 +399,19 @@ func (s *Service) BuildPlaySDP(dev *model.Device, ssrcStr, sessionName string) s
 		Port:        s.cfg.RTPProxyPort,
 		SSRC:        ssrcStr,
 		SessionName: sessionName,
+		Transport:   transport,
+		VideoCodecs: s.cfg.VideoCodecs,
+		AudioCodecs: s.cfg.AudioCodecs,
 	})
+}
+
+// logger 返回服务日志器，未注入时回落到全局 logger。
+// 某些单测直接构造 Service{cfg: ...} 而不走 New/Start，这里必须兜住 nil。
+func (s *Service) logger() *slog.Logger {
+	if s != nil && s.log != nil {
+		return s.log
+	}
+	return slog.Default()
 }
 
 // DeviceCharset 返回设备的 XML 字符集。
@@ -560,8 +610,12 @@ func subscriptionEvent(subType string) (event, accept string, err error) {
 	case model.GbSubscribeMobilePosition:
 		// GB28181 的移动位置订阅复用 RFC 3856 的 presence 事件。
 		return "presence", "Application/MANSCDP+xml", nil
+	case model.GbSubscribePTZPosition:
+		// GB28181-2022 新增：PTZ 精准位置变化订阅。
+		// ★ Event 包名按标准摘录暂定 "PTZPosition"，真机抓包后如不同需在此单点修正。
+		return "PTZPosition", "Application/MANSCDP+xml", nil
 	default:
-		return "", "", fmt.Errorf("不支持的订阅类型 %q（catalog / alarm / mobile_position）", subType)
+		return "", "", fmt.Errorf("不支持的订阅类型 %q（catalog / alarm / mobile_position / ptz_position）", subType)
 	}
 }
 
@@ -573,6 +627,12 @@ func (s *Service) SendInvite(ctx context.Context, target CallTarget, sdpBody []b
 	dev := target.Device
 	if dev == nil {
 		return nil, fmt.Errorf("INVITE 目标设备为 nil")
+	}
+	// TCP-ACTIVE 与单端口收流互斥：单端口模式不创建流级 RTP server，
+	// ZLM 没有可拨号的本地端口。这里统一拦截，覆盖实时点播 / 回放 / 对讲
+	// 三条调用链；静默降级成 UDP 会变成「INVITE 成功但永远黑屏」，最难排查。
+	if StreamModeOf(dev) == sdp.TransportTCPActive {
+		return nil, fmt.Errorf("设备 %s 配置为 TCP-ACTIVE 媒体传输，与当前单端口收流模式互斥，暂不支持；请将设备媒体传输方式改为 UDP 或 TCP-PASSIVE", dev.GbDeviceID)
 	}
 	ep, ok := s.devices.Endpoint(dev.GbDeviceID)
 	if !ok {
@@ -685,6 +745,7 @@ func (s *Service) SendInvite(ctx context.Context, target CallTarget, sdpBody []b
 		ssrcStr,
 		stream,
 		sessionName,
+		string(StreamModeOf(dev)),
 		string(res.Body()),
 		dlgSess,
 	)
@@ -717,6 +778,7 @@ func (s *Service) send(ctx context.Context, dev *model.Device, req *sip.Request,
 	}
 
 	start := time.Now()
+	metrics.IncSipMessage("out")
 	resp, err := client.Do(ctx, req)
 	entry := model.GbSipLog{
 		GbDeviceID: dev.GbDeviceID,

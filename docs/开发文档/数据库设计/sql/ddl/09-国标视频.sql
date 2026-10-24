@@ -36,6 +36,10 @@
 -- ----------------------------------------------------------------
 
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS gb_device_id      VARCHAR(20);
+-- GB/T 28181 协议版本：2016/2022。默认 2016 —— 未知设备按老版本处理，
+-- 避免平台下发 PTZPosition / CruiseTrack* 等 2022 独有命令导致设备丢弃报文。
+-- 收到 2022 独有命令时可自动升级（判定见 internal/gb28181/protocol/version）。
+ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS gb_version        VARCHAR(10)  DEFAULT '2016';
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS sip_password      VARCHAR(100);
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS sip_realm         VARCHAR(50);
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS sip_transport     VARCHAR(10)  DEFAULT 'UDP';
@@ -56,6 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_ac_device_register_status ON ac_device (register_
 CREATE INDEX IF NOT EXISTS idx_ac_device_sip_expires     ON ac_device (sip_expires);
 
 COMMENT ON COLUMN ac_device.gb_device_id     IS '国标 20 位编码，SIP From 头携带；唯一（部分索引，NULL 不参与）';
+COMMENT ON COLUMN ac_device.gb_version       IS 'GB/T 28181 协议版本：2016/2022，默认 2016';
 COMMENT ON COLUMN ac_device.sip_password     IS '设备 SIP Digest 密码（敏感，接口返回时脱敏）';
 COMMENT ON COLUMN ac_device.sip_realm        IS 'SIP 鉴权域，默认取 gb28181.sip_domain';
 COMMENT ON COLUMN ac_device.sip_transport    IS 'SIP 传输：UDP/TCP';
@@ -899,7 +904,7 @@ COMMENT ON COLUMN ac_gb_platform_region.region_id   IS '区域 ID（ac_region）
 
 
 -- ================================================================
--- DDL 结束（18 张新表 + ac_device 扩展 13 列）
+-- DDL 结束（18 张新表 + ac_device 扩展 14 列，含 2022 协议版本 gb_version）
 --
 -- 配套变更（不在本文件，但必须同步执行）：
 --   1. docs/开发文档/数据库设计/sql/init/01-初始数据.sql
