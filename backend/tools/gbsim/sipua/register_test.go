@@ -381,3 +381,39 @@ func TestBuildRegisterRequestLayout(t *testing.T) {
 		t.Fatalf("注销的 Expires 应为 0：%v", exp)
 	}
 }
+
+// TestBuildRegisterCarriesIotCodes IOT 绑定头只在设备编码与产品编码同时存在时发送。
+func TestBuildRegisterCarriesIotCodes(t *testing.T) {
+	mk := func(deviceCode, productCode string) *sip.Request {
+		ua, err := New(Config{
+			DeviceID:    testDeviceID,
+			DeviceCode:  deviceCode,
+			ProductCode: productCode,
+			SIPServer:   "127.0.0.1:5060",
+			SIPDomain:   testDomain,
+			Password:    testPassword,
+			LocalIP:     "127.0.0.1",
+			LocalPort:   5099,
+			Transport:   "udp",
+			Expires:     3600,
+			Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		})
+		if err != nil {
+			t.Fatalf("构造 UA 失败：%v", err)
+		}
+		return ua.buildRegister(3600)
+	}
+
+	both := mk("CAM_001", "PROD_001")
+	if h := both.GetHeader("X-Device-Code"); h == nil || h.Value() != "CAM_001" {
+		t.Fatalf("X-Device-Code 未发送: %v", h)
+	}
+	if h := both.GetHeader("X-Product-Code"); h == nil || h.Value() != "PROD_001" {
+		t.Fatalf("X-Product-Code 未发送: %v", h)
+	}
+
+	onlyOne := mk("CAM_001", "")
+	if h := onlyOne.GetHeader("X-Device-Code"); h != nil {
+		t.Fatalf("只给设备编码时不应发送绑定头: %v", h)
+	}
+}

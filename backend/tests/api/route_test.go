@@ -204,6 +204,7 @@ var contractIotRoutes = []string{
 	"PUT /web/iot/products/:id",
 	"DELETE /web/iot/products/:id",
 	"POST /web/iot/products/:id/share-qr",
+	"GET /web/iot/products/:id/credentials",
 	"GET /web/iot/products/:id/service-groups",
 	"PUT /web/iot/products/:id/service-groups",
 
@@ -214,6 +215,7 @@ var contractIotRoutes = []string{
 	"PUT /web/iot/service-groups/:id",
 	"DELETE /web/iot/service-groups/:id",
 	"POST /web/iot/service-groups/:id/reset-credentials",
+	"GET /web/iot/service-groups/:id/credentials",
 	"PUT /web/iot/service-groups/:id/items",
 
 	// ── 设备与账号 ──
@@ -225,6 +227,24 @@ var contractIotRoutes = []string{
 	"POST /web/iot/devices/:id/activate",
 	"POST /web/iot/devices/:id/reset-secret",
 	"PUT /web/iot/devices/:id/product",
+	"POST /web/iot/devices/:id/qr",
+	"POST /web/iot/devices/:id/share-token",
+	"DELETE /web/iot/devices/:id/share-token",
+}
+
+// contractAppIotRoutes 契约 §10.16「移动端 IOT / RTC」的端点。
+//
+// 这些端点挂在 /app 的 aAuth 组，同样经过 JWT + Casbin，因此必须登记在
+// ac_menu_api 中（seed 里挂在移动端「设备」菜单 105 下），否则一律 403。
+var contractAppIotRoutes = []string{
+	"POST /app/iot/devices/claim",
+	"POST /app/iot/devices/bind",
+	"POST /app/iot/devices/bind-qr",
+	"GET /app/iot/devices",
+	"GET /app/iot/devices/:id",
+	"GET /app/iot/devices/:id/services",
+	"POST /app/iot/devices/:id/share-token",
+	"GET /app/rtc/ice-servers",
 }
 
 // contractRoutes 契约 §3 列出的全部端点，格式 "METHOD /path"。
@@ -566,8 +586,8 @@ func TestRouteTable_MatchesContract(t *testing.T) {
 		}
 	})
 
-	want := make(map[string]bool, len(contractRoutes)+len(contractGbRoutes)+len(contractIotRoutes))
-	for _, key := range append(append(append([]string{}, contractRoutes...), contractGbRoutes...), contractIotRoutes...) {
+	want := make(map[string]bool, len(contractRoutes)+len(contractGbRoutes)+len(contractIotRoutes)+len(contractAppIotRoutes))
+	for _, key := range append(append(append(append([]string{}, contractRoutes...), contractGbRoutes...), contractIotRoutes...), contractAppIotRoutes...) {
 		if want[key] {
 			t.Errorf("契约期望表内重复条目: %s", key)
 			continue

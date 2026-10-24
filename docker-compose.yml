@@ -126,12 +126,23 @@ services:
       GB28181_SIP_NONCE_SECRET: ${SIP_NONCE_SECRET:-}
       GB28181_MEDIA_PUBLIC_IP: ${SIP_ADVERTISE_IP:-127.0.0.1}
       GB28181_MEDIA_RTP_PROXY_PORT: "${ZLM_RTP_PORT:-10000}"
+      # ── MQTT（IOT）──
+      # 内部 fork 的 mochi-mqtt 用 gRPC 回调后端做鉴权（rpc.address=backend:50051）
+      MQTT_GRPC_ENABLED: ${MQTT_GRPC_ENABLED:-false}
+      MQTT_GRPC_LISTEN: ":50051"
+      # WebRTC 信令 worker：订阅 MQTT 并把 SDP offer 转给 ZLM
+      MQTT_SIGNAL_ENABLED: ${MQTT_SIGNAL_ENABLED:-false}
+      MQTT_BROKER_URL: ${MQTT_BROKER_URL:-tcp://mqtt:1883}
+      MQTT_RPC_TOKEN: ${MQTT_RPC_TOKEN:-}
     ports:
       - "${BACKEND_PORT:-8081}:8080"
       # SIP 端口随 backend 一起暴露（内嵌模式）。若改用独立 sipsvc，
       # 必须把这两行移到 sipsvc 服务并设置 GB28181_EMBEDDED=false。
       - "${SIP_PORT:-5060}:5060/udp"
       - "${SIP_PORT:-5060}:5060/tcp"
+    expose:
+      # MQTT gRPC 鉴权：只给 compose 内网的 broker 用，不映射到宿主机
+      - "50051"
     volumes:
       - ./backend/config/config.compose.yaml:/app/config/config.yaml:ro
       - uploads:/app/uploads

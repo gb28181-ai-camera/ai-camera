@@ -76,6 +76,8 @@ func parseFlags(args []string, out io.Writer) (*Config, error) {
 	)
 	fs.StringVar(&cfg.DeviceID, "device-id", "", "20 位国标设备编码（必填，SIP From 与目录 DeviceID 都用它）")
 	fs.StringVar(&cfg.DeviceName, "device-name", "模拟相机", "设备名称（中文名按 --charset 编码）")
+	fs.StringVar(&cfg.DeviceCode, "device-code", "", "IOT 业务设备编码；与 --product-code 同时提供时随 REGISTER 发送 X-Device-Code/X-Product-Code")
+	fs.StringVar(&cfg.ProductCode, "product-code", "", "IOT 产品编码；用于平台首次绑定")
 	fs.StringVar(&cfg.SIPServer, "sip-server", "", "平台 SIP 地址 host:port（必填，如 127.0.0.1:5060）")
 	fs.StringVar(&cfg.SIPDomain, "sip-domain", "", "SIP 域 / Digest realm（必填，如 3402000000）")
 	fs.StringVar(&cfg.Password, "password", "", "设备 SIP 密码（对应 ac_device.sip_password）")
@@ -177,6 +179,8 @@ func run(cfg *Config) error {
 
 	ua, err := sipua.New(sipua.Config{
 		DeviceID:     cfg.DeviceID,
+		DeviceCode:   cfg.DeviceCode,
+		ProductCode:  cfg.ProductCode,
 		SIPServer:    cfg.SIPServer,
 		SIPDomain:    cfg.SIPDomain,
 		Password:     cfg.Password,

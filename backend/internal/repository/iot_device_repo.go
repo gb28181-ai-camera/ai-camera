@@ -9,6 +9,7 @@ import (
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ════════════════════════════════════════════════════════════════
@@ -100,6 +101,20 @@ func (r *IotDeviceRepo) SetSecret(ctx context.Context, id int64, secret string) 
 		Update("device_secret", secret).Error
 }
 
+// SetGbDeviceBinding 写入设备的国标编码并置为已激活。
+//
+// SIP 侧绑定只在这一处落库：国标编码是唯一标识，必须与设备当前归属产品
+// 一并确认后再写，避免出现「编码写进去了、产品却不匹配」的半绑定状态。
+func (r *IotDeviceRepo) SetGbDeviceBinding(ctx context.Context, id int64, gbDeviceID, registerStatus string) error {
+	return bootstrap.DB().WithContext(ctx).
+		Model(&model.Device{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"gb_device_id":    gbDeviceID,
+			"register_status": registerStatus,
+		}).Error
+}
+
 // SetActivatedAt 记录设备主账号首次激活时间。
 func (r *IotDeviceRepo) SetActivatedAt(ctx context.Context, id int64, t time.Time) error {
 	return bootstrap.DB().WithContext(ctx).
@@ -156,6 +171,129 @@ func (r *IotDeviceRepo) ExistsAccountUsername(ctx context.Context, username stri
 		return false, err
 	}
 	return cnt > 0, nil
+}
+
+// GetAccountByPlatformUser 查询某平台用户在指定设备上的账号。
+//
+// 不按角色过滤：App 绑定后同一用户在同一设备上只应有一个账号，
+// 但历史上可能存在 owner/shared 并存的数据，取最早一条即可。
+func (r *IotDeviceRepo) GetAccountByPlatformUser(ctx context.Context, deviceID, userID int64) (*model.IotDeviceAccount, error) {
+	var m model.IotDeviceAccount
+	if err := bootstrap.DB().WithContext(ctx).
+		Where("device_id = ? AND platform_user_id = ?", deviceID, userID).
+		Order("id ASC").
+		First(&m).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// ExistsShareToken 判断分享令牌是否已被占用（生成时需要重试）。
+func (r *IotDeviceRepo) ExistsShareToken(ctx context.Context, token string) (bool, error) {
+	var cnt int64
+	err := bootstrap.DB().WithContext(ctx).
+		Model(&model.IotDeviceAccount{}).
+		Where("share_token = ?", token).
+		Count(&cnt).Error
+	if err != nil {
+		return false, err
+	}
+	return cnt > 0, nil
+}
+
+// ClaimByShareToken 把未认领的分享账号原子地绑定到平台用户，并清空令牌。
+//
+// 为什么令牌必须一次性：分享二维码可能被转发/截图传播，若令牌可重复使用，
+// 任何拿到图片的人都能永久把设备加入自己的账号。认领成功后立即清空 token，
+// 使二维码在第一次扫码后即失效，把「分享」限制为一次可控的授权动作。
+//
+// 并发安全：事务内 SELECT ... FOR UPDATE 锁住账号行；两个并发认领请求会串行化，
+// 后者在锁释放后读到的 platform_user_id 已非 NULL，条件不再成立而返回 NotFound。
+func (r *IotDeviceRepo) ClaimByShareToken(ctx context.Context, token string, userID int64) (*model.IotDeviceAccount, error) {
+	var claimed *model.IotDeviceAccount
+	err := bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var acc model.IotDeviceAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("share_token = ? AND platform_user_id IS NULL", token).
+			First(&acc).Error; err != nil {
+			return err
+		}
+		// 设备已被删除时令牌一并失效，避免把分享账号挂到墓碑设备上。
+		var dev model.Device
+		if err := tx.Where("id = ?", acc.DeviceID).First(&dev).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.IotDeviceAccount{}).
+			Where("id = ?", acc.ID).
+			Updates(map[string]interface{}{"platform_user_id": userID, "share_token": nil}).Error; err != nil {
+			return err
+		}
+		acc.PlatformUserID = &userID
+		acc.ShareToken = nil
+		claimed = &acc
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+// RevokeUnusedShareTokens 清空设备上所有「尚未被认领」的分享令牌。
+//
+// 只清空 token、不删除账号：这些占位账号的密码哈希从未对外展示，
+// 保留行可以避免与唯一索引/审计记录产生额外耦合；token 为空后二维码立即失效。
+func (r *IotDeviceRepo) RevokeUnusedShareTokens(ctx context.Context, deviceID int64) (int64, error) {
+	res := bootstrap.DB().WithContext(ctx).
+		Model(&model.IotDeviceAccount{}).
+		Where("device_id = ? AND platform_user_id IS NULL AND share_token IS NOT NULL", deviceID).
+		Update("share_token", nil)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
+
+// ListAccountsByPlatformUser 查询平台用户在所有设备上的账号。
+//
+// App 设备列表需要展示「我在该设备上是什么角色」，用一次查询建 map，
+// 避免对每台设备做一次 N+1 查询。
+func (r *IotDeviceRepo) ListAccountsByPlatformUser(ctx context.Context, userID int64) ([]model.IotDeviceAccount, error) {
+	var items []model.IotDeviceAccount
+	if err := bootstrap.DB().WithContext(ctx).
+		Where("platform_user_id = ?", userID).
+		Order("id ASC").
+		Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// ListDevicesByPlatformUser 查询平台用户已绑定的设备（未删除）。
+//
+// 先取 device_id 再查设备：ac_device 带软删除与 Preload("Product")，
+// 用子查询可以继续复用 GORM 的软删除语义，也不会因为 JOIN 产生重复行。
+func (r *IotDeviceRepo) ListDevicesByPlatformUser(ctx context.Context, userID int64) ([]model.Device, error) {
+	var ids []int64
+	if err := bootstrap.DB().WithContext(ctx).
+		Model(&model.IotDeviceAccount{}).
+		Where("platform_user_id = ?", userID).
+		Distinct().
+		Pluck("device_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return []model.Device{}, nil
+	}
+	var items []model.Device
+	if err := bootstrap.DB().WithContext(ctx).
+		Preload("Product").
+		Where("id IN ?", ids).
+		Order("id DESC").
+		Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // CreateAccount 新增设备账号。

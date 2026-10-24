@@ -184,6 +184,13 @@ func (u *UA) buildRegister(expires int) *sip.Request {
 	cparams := sip.NewParams()
 	contact.Params = cparams.Add("expires", strconv.Itoa(expires))
 	req.ReplaceHeader(contact)
+
+	// IOT 首次绑定：国标编码可能尚未建档，平台需要业务设备编码与产品编码
+	// 才能把这次注册关联到已存在的设备档案。两个头必须同时存在，缺一不发。
+	if u.cfg.DeviceCode != "" && u.cfg.ProductCode != "" {
+		req.AppendHeader(sip.NewHeader("X-Device-Code", u.cfg.DeviceCode))
+		req.AppendHeader(sip.NewHeader("X-Product-Code", u.cfg.ProductCode))
+	}
 	return req
 }
 

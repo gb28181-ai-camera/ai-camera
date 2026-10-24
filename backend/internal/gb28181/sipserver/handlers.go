@@ -392,12 +392,33 @@ func (s *Service) authorize(req *sip.Request, tx sip.ServerTransaction) (*model.
 	gbID := deviceIDOf(req)
 	dev, err := s.auth.Lookup(ctx, gbID)
 	if err != nil {
-		metrics.IncSipRegister("rejected")
-		s.respond(req, tx, sip.StatusForbidden, "Forbidden")
-		s.logInbound(req, gbID, s.cfg.DefaultCharset, "", 403, "rejected", "白名单拒绝："+err.Error(), nil)
-		s.log.Warn("SIP 设备被拒绝（未建档）", "gb_device_id", gbID, "remote", req.Source(),
-			"method", req.Method.String())
-		return nil, false
+		// 首次绑定：国标编码尚未建档，但设备在 REGISTER 上带了业务设备编码与产品编码。
+		// 只在 REGISTER 上尝试；MESSAGE/NOTIFY 不参与绑定，避免伪造报文改绑。
+		if req.Method == sip.REGISTER {
+			if bound, bindErr := s.tryBindBySIP(ctx, req, gbID); bindErr == nil && bound != nil {
+				dev = bound
+				err = nil
+				s.log.Info("SIP 设备首次绑定成功",
+					"gb_device_id", gbID, "device_code", headerValue(req, "X-Device-Code"),
+					"product_code", headerValue(req, "X-Product-Code"))
+			} else if bindErr != nil {
+				// 明确区分「没带绑定信息」与「带了但校验失败」：
+				// 后者要写进日志，现场才知道为什么 403。
+				s.logInbound(req, gbID, s.cfg.DefaultCharset, "", 403, "rejected",
+					"SIP 绑定失败："+bindErr.Error(), nil)
+				s.log.Warn("SIP 设备绑定失败", "gb_device_id", gbID,
+					"device_code", headerValue(req, "X-Device-Code"),
+					"product_code", headerValue(req, "X-Product-Code"), "error", bindErr)
+			}
+		}
+		if err != nil {
+			metrics.IncSipRegister("rejected")
+			s.respond(req, tx, sip.StatusForbidden, "Forbidden")
+			s.logInbound(req, gbID, s.cfg.DefaultCharset, "", 403, "rejected", "白名单拒绝："+err.Error(), nil)
+			s.log.Warn("SIP 设备被拒绝（未建档）", "gb_device_id", gbID, "remote", req.Source(),
+				"method", req.Method.String())
+			return nil, false
+		}
 	}
 
 	if req.Method != sip.REGISTER || !s.auth.NeedAuth(dev) {
@@ -559,4 +580,37 @@ func sameAddr(a, b string) bool {
 		return false
 	}
 	return strings.EqualFold(strings.Trim(ah, "[]"), strings.Trim(bh, "[]")) && ap == bp
+}
+
+// headerValue 读取自定义 SIP 头的值（不存在返回空串）。
+//
+// 设备编码/产品编码不是 GB28181 标准头，平台约定为：
+//
+//	X-Device-Code: <业务设备编码>
+//	X-Product-Code: <产品编码>
+func headerValue(req *sip.Request, name string) string {
+	if req == nil {
+		return ""
+	}
+	if h := req.GetHeader(name); h != nil {
+		return strings.TrimSpace(h.Value())
+	}
+	return ""
+}
+
+// tryBindBySIP 在国标编码未建档时，尝试用设备编码 + 产品编码完成首次绑定。
+//
+// 返回 (nil, nil) 表示「没有携带绑定信息」或「未注入 binder」——调用方继续按
+// 未建档拒绝；返回 error 表示携带了绑定信息但校验失败，需要留痕。
+func (s *Service) tryBindBySIP(ctx context.Context, req *sip.Request, gbID string) (*model.Device, error) {
+	binder := s.currentBinder()
+	if binder == nil {
+		return nil, nil
+	}
+	deviceCode := headerValue(req, "X-Device-Code")
+	productCode := headerValue(req, "X-Product-Code")
+	if deviceCode == "" || productCode == "" {
+		return nil, nil
+	}
+	return binder.BindBySIP(ctx, productCode, deviceCode, gbID)
 }

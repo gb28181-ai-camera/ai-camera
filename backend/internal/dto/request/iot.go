@@ -15,8 +15,9 @@ type PageIotProductReq struct {
 
 // CreateIotProductReq 新增产品。
 type CreateIotProductReq struct {
-	Name          string `json:"name" binding:"required" example:"4G 球机"`
-	Code          string `json:"code" binding:"required" example:"CAM_4G_01"`
+	Name string `json:"name" binding:"required" example:"4G 球机"`
+	Code string `json:"code" binding:"required" example:"CAM_4G_01"`
+	// 配网方式由产品配置：qrcode（无需配网）/ bluetooth / ap。
 	Category      string `json:"category" example:"摄像头"`
 	Description   string `json:"description"`
 	AutoNetwork   *bool  `json:"auto_network" example:"true"`
@@ -31,8 +32,9 @@ type CreateIotProductReq struct {
 // AutoNetwork / AllowShare / Active 用指针，以便区分「未传」与「显式 false」；
 // 文本字段为空表示不修改（与项目内其它 Update 请求保持一致）。
 type UpdateIotProductReq struct {
-	Name          string `json:"name"`
-	Code          string `json:"code"`
+	Name string `json:"name"`
+	Code string `json:"code"`
+	// 配网方式为空表示不修改。
 	Category      string `json:"category"`
 	Description   string `json:"description"`
 	AutoNetwork   *bool  `json:"auto_network"`
@@ -155,4 +157,30 @@ type IotActivateReq struct {
 	OwnerName  string `json:"owner_name" example:"张三"`
 	OwnerPhone string `json:"owner_phone" example:"13800000000"`
 	Nickname   string `json:"nickname" example:"主人账号"`
+}
+
+// ── App 端 IOT ───────────────────────────────────────────────
+
+// ClaimIotDeviceReq App 扫码认领设备。token 来自二维码内容。
+type ClaimIotDeviceReq struct {
+	Token string `json:"token" binding:"required" example:"share_abcd1234"`
+}
+
+// BindIotDeviceReq App 蓝牙配网后绑定设备。
+//
+// device_secret 是设备出厂/重置时下发的接入密钥，服务端用常量时间比较校验；
+// 校验通过且设备尚无主账号时，本次绑定会创建主账号（owner）。
+type BindIotDeviceReq struct {
+	DeviceCode   string `json:"device_code" binding:"required" example:"CAM_4G_001"`
+	DeviceSecret string `json:"device_secret" binding:"required" example:"0123456789abcdef"`
+	Nickname     string `json:"nickname" example:"客厅摄像头"`
+}
+
+// BindIotDeviceQRReq App 扫码绑定设备。
+//
+// 二维码内容只含 product_code + device_code，不含密钥：扫码即视为持有设备，
+// 因此本接口不做 secret 校验（安全边界见接口契约说明）。
+type BindIotDeviceQRReq struct {
+	ProductCode string `json:"product_code" binding:"required" example:"CAM_4G_01"`
+	DeviceCode  string `json:"device_code" binding:"required" example:"CAM_4G_001"`
 }

@@ -138,6 +138,19 @@ func (r *IotProductRepo) ReplaceServiceGroups(ctx context.Context, productID int
 	})
 }
 
+// CountDevices 统计绑定到某产品的设备数量。
+//
+// 用于产品类型/配置更新时的兼容策略：已有设备的历史产品只警告不阻止，
+// 避免「类型校验把老数据锁死、连改名都保存不了」。
+func (r *IotProductRepo) CountDevices(ctx context.Context, productID int64) (int64, error) {
+	var cnt int64
+	err := bootstrap.DB().WithContext(ctx).
+		Model(&model.Device{}).
+		Where("product_id = ?", productID).
+		Count(&cnt).Error
+	return cnt, err
+}
+
 // CountByGroup 统计绑定了某服务组的产品数量（删除服务组前的引用检查）。
 func (r *IotProductRepo) CountByGroup(ctx context.Context, groupID int64) (int64, error) {
 	var cnt int64

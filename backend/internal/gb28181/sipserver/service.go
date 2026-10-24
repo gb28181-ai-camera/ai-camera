@@ -143,6 +143,34 @@ type Service struct {
 	// 国标是「MESSAGE 立即回 200，业务结果再发一条 MESSAGE」，所以查询方
 	// 只能按 SN 关联；用 sync.Map 避免与信令处理共用一把锁。
 	queryWaiters sync.Map
+
+	// deviceBinder 用于「国标编码未建档，但 REGISTER 带了设备编码+产品编码」
+	// 时的首次绑定。抽成接口避免 sipserver 反向依赖 IOT 业务层。
+	binderMu     sync.RWMutex
+	deviceBinder DeviceBinder
+}
+
+// DeviceBinder 在 SIP 白名单未命中时，尝试用设备编码 + 产品编码完成首次绑定。
+//
+// 返回的 Device 必须是已写入 gb_device_id 的最新记录；实现方负责：
+//   - 设备与产品必须匹配；
+//   - 已绑定不同国标编码时返回错误（不允许静默改绑）；
+//   - 绑定成功把 register_status 置为 activated。
+type DeviceBinder interface {
+	BindBySIP(ctx context.Context, productCode, deviceCode, gbDeviceID string) (*model.Device, error)
+}
+
+// SetDeviceBinder 注入绑定实现（启动时调用）。
+func (s *Service) SetDeviceBinder(b DeviceBinder) {
+	s.binderMu.Lock()
+	s.deviceBinder = b
+	s.binderMu.Unlock()
+}
+
+func (s *Service) currentBinder() DeviceBinder {
+	s.binderMu.RLock()
+	defer s.binderMu.RUnlock()
+	return s.deviceBinder
 }
 
 // New 构造服务（不监听端口，由 Start 负责）。

@@ -36,8 +36,14 @@ type Config struct {
 	// —— 设备身份 ——
 	DeviceID   string // 20 位国标设备编码，SIP From 头与目录 DeviceID 都用它
 	DeviceName string // 设备名称（中文名受 Charset 影响）
-	Channels   int    // 模拟的通道数量，≥1
-	Charset    string // 通道名/设备名的 XML 编码：GB2312 或 UTF-8（§2.6 结论六）
+	// DeviceCode / ProductCode 是 IOT 的业务设备编码与产品编码。
+	//
+	// 非空时随 REGISTER 发送 X-Device-Code / X-Product-Code 头，
+	// 用于「国标编码尚未建档但设备档案已存在」时的首次绑定。
+	DeviceCode  string
+	ProductCode string
+	Channels    int    // 模拟的通道数量，≥1
+	Charset     string // 通道名/设备名的 XML 编码：GB2312 或 UTF-8（§2.6 结论六）
 
 	// —— SIP 接入 ——
 	SIPServer string // 平台 SIP 地址，host:port

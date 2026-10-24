@@ -14,8 +14,13 @@ import (
 
 	"github.com/boticz/ai-camera-backend/internal/api/router"
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/play"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/sipserver"
+	whep "github.com/boticz/ai-camera-backend/internal/gb28181/webrtc"
+	"github.com/boticz/ai-camera-backend/internal/mqttrpc"
 	gbsvc "github.com/boticz/ai-camera-backend/internal/service/gb28181"
+	"github.com/boticz/ai-camera-backend/internal/service/iot"
+	mqttsignal "github.com/boticz/ai-camera-backend/internal/signal/mqtt"
 )
 
 // @title           AI Camera 智能监控平台 API
@@ -61,11 +66,60 @@ func main() {
 		if err != nil {
 			log.Fatalf("GB28181 信令服务初始化失败: %v", err)
 		}
+		// 首次绑定：REGISTER 带 X-Device-Code/X-Product-Code 且国标编码未建档时，
+		// 由 IOT 设备档案完成绑定。注入接口而不是让 sipserver 直接依赖 IOT 包。
+		sipSvc.SetDeviceBinder(iot.NewDeviceService())
 		if err := sipSvc.Start(context.Background()); err != nil {
 			log.Fatalf("GB28181 信令服务启动失败: %v", err)
 		}
 		log.Printf("GB28181 信令已内嵌启动: %s:%d/%s (domain=%s, server=%s)",
 			sipCfg.ListenIP, sipCfg.Port, sipCfg.Transport, sipCfg.Domain, sipCfg.ServerID)
+	}
+
+	// MQTT 信令 → ZLM WHEP 桥（默认关闭）。
+	//
+	// 只在 MQTT_SIGNAL_ENABLED=true 时启动：信令 worker 会以内部账号
+	// __platform__ 常连 broker，不需要信令的部署不应无端多一条长连接。
+	// 初次连接失败不阻塞 HTTP 服务，paho 会在后台自动重连。
+	var (
+		signalClient *mqttsignal.Client
+		signalBridge *mqttsignal.Bridge
+	)
+	if sigCfg, err := mqttsignal.ConfigFromEnv(); err != nil {
+		log.Fatalf("MQTT 信令配置非法: %v", err)
+	} else if sigCfg.Enabled {
+		signalClient, err = mqttsignal.NewClient(sigCfg, func(topic string, payload []byte) {
+			// 消息在 Start 之后才可能到达；此处再判空是防止配置错误导致 nil panic。
+			if signalBridge != nil {
+				signalBridge.Handle(topic, payload)
+			}
+		})
+		if err != nil {
+			log.Fatalf("MQTT 信令客户端初始化失败: %v", err)
+		}
+		signalBridge = mqttsignal.NewBridge(signalClient, whep.NewDefaultClient(), play.DefaultRegistry())
+		if err := signalClient.Start(appCtx); err != nil {
+			log.Printf("MQTT 信令启动异常（HTTP 服务继续运行）: %v", err)
+		}
+		log.Printf("MQTT 信令 worker 已启用: broker=%s client_id=%s", sigCfg.BrokerURL, sigCfg.ClientID)
+	}
+
+	// MQTT gRPC 鉴权服务：供内部 fork 的 mochi-mqtt 调用。
+	//
+	// 与上面的 HTTP 信令 worker 是两件独立的事：
+	//   - gRPC：broker → 后端，做 CONNECT 鉴权；
+	//   - 信令 worker：后端 → broker，做 WebRTC SDP 中转。
+	// 两者可以单独启用。
+	var mqttGRPC *mqttrpc.Server
+	if os.Getenv("MQTT_GRPC_ENABLED") == "true" {
+		grpcListen := os.Getenv("MQTT_GRPC_LISTEN")
+		if grpcListen == "" {
+			grpcListen = ":50051"
+		}
+		mqttGRPC = mqttrpc.New(nil)
+		if err := mqttGRPC.Start(grpcListen); err != nil {
+			log.Fatalf("MQTT gRPC 鉴权服务启动失败: %v", err)
+		}
 	}
 
 	srv := &http.Server{
@@ -93,6 +147,18 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// 信令先停：Bridge 拒绝新 offer 并等待在途协商，Client 仍保持连接，
+	// 保证最后几条 answer 能发出去；之后再断开 broker 连接。
+	if signalBridge != nil {
+		signalBridge.Close(ctx)
+	}
+	if signalClient != nil {
+		signalClient.Close()
+	}
+	if mqttGRPC != nil {
+		mqttGRPC.Stop()
+	}
 	if sipSvc != nil {
 		sipSvc.Stop()
 	}

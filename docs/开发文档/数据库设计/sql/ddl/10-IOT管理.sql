@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS ac_iot_product (
     share_qr_content  TEXT
 );
 
+-- 已有库补列：CREATE TABLE IF NOT EXISTS 不会修改既有表结构。
+-- 默认值 security 会把历史产品按安防相机解释（此前只有安防相机一款产品）。
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ac_iot_product_code       ON ac_iot_product (code);
 CREATE INDEX        IF NOT EXISTS idx_ac_iot_product_deleted_at ON ac_iot_product (deleted_at);
 
@@ -217,13 +220,19 @@ CREATE TABLE IF NOT EXISTS ac_iot_device_account (
     phone             VARCHAR(50),
     status            VARCHAR(20)   NOT NULL DEFAULT 'active',
     share_token       VARCHAR(100),
-    activated_at      TIMESTAMPTZ
+    activated_at      TIMESTAMPTZ,
+    platform_user_id  BIGINT
 );
+
+-- v0.3.1：老库补列（CREATE TABLE IF NOT EXISTS 不会为已存在的表加列）。
+-- 分享令牌尚未认领时 platform_user_id 为 NULL；App 设备列表按此列过滤。
+ALTER TABLE ac_iot_device_account ADD COLUMN IF NOT EXISTS platform_user_id BIGINT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ac_iot_device_account_username    ON ac_iot_device_account (username);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ac_iot_device_account_share_token ON ac_iot_device_account (share_token);
 CREATE INDEX        IF NOT EXISTS idx_ac_iot_device_account_device      ON ac_iot_device_account (device_id);
 CREATE INDEX        IF NOT EXISTS idx_ac_iot_device_account_deleted_at  ON ac_iot_device_account (deleted_at);
+CREATE INDEX        IF NOT EXISTS idx_ac_iot_device_account_platform_user ON ac_iot_device_account (platform_user_id);
 
 COMMENT ON TABLE  ac_iot_device_account               IS 'IOT设备账号';
 COMMENT ON COLUMN ac_iot_device_account.id            IS '主键';
@@ -239,8 +248,9 @@ COMMENT ON COLUMN ac_iot_device_account.role          IS '角色 owner(主账号
 COMMENT ON COLUMN ac_iot_device_account.nickname      IS '昵称';
 COMMENT ON COLUMN ac_iot_device_account.phone         IS '手机号';
 COMMENT ON COLUMN ac_iot_device_account.status        IS '状态 active/disabled';
-COMMENT ON COLUMN ac_iot_device_account.share_token   IS '分享令牌(可空,唯一)';
-COMMENT ON COLUMN ac_iot_device_account.activated_at  IS '激活时间';
+COMMENT ON COLUMN ac_iot_device_account.share_token      IS '分享令牌(可空,唯一,认领后清空)';
+COMMENT ON COLUMN ac_iot_device_account.activated_at     IS '激活时间';
+COMMENT ON COLUMN ac_iot_device_account.platform_user_id IS '绑定的平台用户ID(ac_user.id,可空)';
 
 
 -- ----------------------------------------------------------------

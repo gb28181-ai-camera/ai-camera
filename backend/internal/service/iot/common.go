@@ -33,6 +33,16 @@ var (
 	ErrAlreadyActivated       = errors.New("设备已激活，请勿重复激活")
 	ErrOwnerDeleteForbidden   = errors.New("主账号不允许删除")
 
+	// 设备二维码 / SIP 绑定相关。
+	//
+	// 二维码不含密钥，扫码即视为持有设备；SIP 侧则在 REGISTER 白名单未命中时
+	// 用「产品编码 + 设备编码 + 国标编码」做一次显式绑定。两者的共同前提是
+	// 产品与设备必须匹配，否则会把设备错挂到另一个产品下。
+	ErrDeviceProductMismatch = errors.New("设备不属于该产品")
+	ErrGbDeviceIDConflict    = errors.New("设备已绑定其他国标编码，禁止改绑")
+	ErrGbDeviceIDRequired    = errors.New("国标编码不能为空")
+	ErrBindQRInvalid         = errors.New("设备二维码无效：设备不存在或产品不匹配")
+
 	// 设备端鉴权失败统一 401。刻意不区分「设备不存在」与「密钥错误」，
 	// 避免攻击者用不同的错误文案枚举设备编号。
 	ErrDeviceCredentialMissing = errors.New("缺少设备接入凭据")

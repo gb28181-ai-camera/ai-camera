@@ -25,6 +25,7 @@ import (
 	// 内嵌模式（cmd/server）会经 handler 链接该包；独立信令进程必须显式引入，
 	// 否则 sipserver 里的续订定时器取不到回调，订阅到期后不会续订。
 	_ "github.com/boticz/ai-camera-backend/internal/service/gb28181"
+	"github.com/boticz/ai-camera-backend/internal/service/iot"
 )
 
 func main() {
@@ -66,6 +67,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// 首次绑定：REGISTER 带业务设备编码+产品编码时由 IOT 档案完成绑定。
+	svc.SetDeviceBinder(iot.NewDeviceService())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

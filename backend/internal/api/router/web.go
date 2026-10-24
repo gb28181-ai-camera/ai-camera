@@ -456,6 +456,7 @@ func registerWebRoutes(r *gin.Engine) {
 			wiot.PUT("/products/:id", iotProductH.Update)
 			wiot.DELETE("/products/:id", iotProductH.Delete)
 			wiot.POST("/products/:id/share-qr", iotProductH.GenerateShareQR)
+			wiot.GET("/products/:id/credentials", iotProductH.Credentials)
 			wiot.GET("/products/:id/service-groups", iotProductH.GetServiceGroups)
 			wiot.PUT("/products/:id/service-groups", iotProductH.BindServiceGroups)
 
@@ -466,6 +467,7 @@ func registerWebRoutes(r *gin.Engine) {
 			wiot.PUT("/service-groups/:id", iotServiceGroupH.Update)
 			wiot.DELETE("/service-groups/:id", iotServiceGroupH.Delete)
 			wiot.POST("/service-groups/:id/reset-credentials", iotServiceGroupH.ResetCredentials)
+			wiot.GET("/service-groups/:id/credentials", iotServiceGroupH.Credentials)
 			wiot.PUT("/service-groups/:id/items", iotServiceGroupH.ReplaceItems)
 
 			// 设备与账号
@@ -477,6 +479,11 @@ func registerWebRoutes(r *gin.Engine) {
 			wiot.POST("/devices/:id/activate", iotDeviceH.Activate)
 			wiot.POST("/devices/:id/reset-secret", iotDeviceH.ResetSecret)
 			wiot.PUT("/devices/:id/product", iotDeviceH.SetProduct)
+			// 设备二维码：内容只有产品编码 + 设备编码，不含密钥。
+			wiot.POST("/devices/:id/qr", iotDeviceH.QR)
+			// 分享令牌：生成一次、App 认领后失效；DELETE 只撤销未认领的令牌。
+			wiot.POST("/devices/:id/share-token", iotDeviceH.CreateShareToken)
+			wiot.DELETE("/devices/:id/share-token", iotDeviceH.RevokeShareToken)
 		}
 	}
 }

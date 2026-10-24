@@ -92,10 +92,18 @@ func (s *DeviceService) Get(ctx context.Context, id int64) (*response.IotDeviceD
 		}
 	}
 
+	productCode := ""
+	if d.Product != nil {
+		productCode = d.Product.Code
+	}
+
 	return &response.IotDeviceDetail{
 		Device:        maskDevice(*d),
 		Accounts:      accounts,
 		ServiceGroups: groups,
+		// 详情直接带二维码内容：前端列表/详情都可以就地渲染，
+		// 不必为了一个纯本地可推导的字符串多打一次接口。
+		QRContent: deviceQRContent(productCode, d.DeviceCode),
 	}, nil
 }
 
@@ -335,6 +343,63 @@ func (s *DeviceService) ResetSecret(ctx context.Context, deviceID int64, ip stri
 		IP:       ip,
 	})
 	return &response.IotDeviceSecret{DeviceCode: d.DeviceCode, DeviceSecret: secret}, nil
+}
+
+// BindBySIP 供信令层在 REGISTER 白名单未命中时做一次显式绑定。
+//
+// 背景：SIP 设备首次注册时平台还没有它的国标编码，只有设备出厂编码
+// （device_code）与产品编码。信令层按这两个值找到设备后调用本方法落库，
+// 之后该设备就能进入正常的国标注册流程。
+//
+// 规则：
+//   - 设备不存在 → ErrDeviceNotFound；
+//   - 产品为空/编码不一致 → ErrDeviceProductMismatch（绝不跨产品挂设备）；
+//   - gb_device_id 为空 → 写入并置 activated；
+//   - 已有且相同 → 幂等返回（设备重启/重复 REGISTER 很常见）；
+//   - 已有且不同 → ErrGbDeviceIDConflict，**不静默改绑**：
+//     改绑意味着另一个国标编码的历史数据会被错认，必须人工介入。
+func (s *DeviceService) BindBySIP(ctx context.Context, productCode, deviceCode, gbDeviceID string) (*model.Device, error) {
+	productCode = strings.TrimSpace(productCode)
+	deviceCode = strings.TrimSpace(deviceCode)
+	gbDeviceID = strings.TrimSpace(gbDeviceID)
+	if gbDeviceID == "" {
+		return nil, ErrGbDeviceIDRequired
+	}
+
+	d, err := s.devices.GetByCode(ctx, deviceCode)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrDeviceNotFound
+		}
+		return nil, err
+	}
+
+	if d.ProductID == nil {
+		return nil, ErrDeviceProductMismatch
+	}
+	p, err := s.products.GetByID(ctx, *d.ProductID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrDeviceProductMismatch
+		}
+		return nil, err
+	}
+	if p.Code != productCode {
+		return nil, ErrDeviceProductMismatch
+	}
+
+	switch {
+	case d.GbDeviceID == "":
+		if err := s.devices.SetGbDeviceBinding(ctx, d.ID, gbDeviceID, model.GbRegisterStatusActivated); err != nil {
+			return nil, err
+		}
+	case d.GbDeviceID == gbDeviceID:
+		// 幂等：重复 REGISTER 不重复写库。
+	default:
+		return nil, fmt.Errorf("%w（当前 %s，请求 %s）", ErrGbDeviceIDConflict, d.GbDeviceID, gbDeviceID)
+	}
+
+	return s.devices.GetByID(ctx, d.ID)
 }
 
 // SetProduct 设置设备所属产品。productID 为 nil 表示解绑。

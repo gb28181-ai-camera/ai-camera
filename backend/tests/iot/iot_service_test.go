@@ -56,7 +56,9 @@ func mustDevice(t *testing.T, ctx context.Context, code string) *model.Device {
 	return d
 }
 
-// mustProduct 创建产品。
+// mustProduct 创建测试产品。
+//
+// 服务组与配网方式都是产品自身配置，测试用蓝牙 + 允许分享作为默认。
 func mustProduct(t *testing.T, ctx context.Context, code string) *model.IotProduct {
 	t.Helper()
 	p, err := svciot.NewProductService().Create(ctx, &request.CreateIotProductReq{
@@ -126,20 +128,32 @@ func TestProductCRUD(t *testing.T) {
 			t.Errorf("非法配网方式应报错")
 		}
 
-		// 更新（增量语义）
-		if err := svc.Update(ctx, p.ID, &request.UpdateIotProductReq{
+		// 更新（增量语义）。不再改配网方式：security 只允许 qrcode，
+		// 改成 ap 会被配置校验拒绝（见下方非法更新用例）。
+		warning, err := svc.Update(ctx, p.ID, &request.UpdateIotProductReq{
 			Name: "4G球机-改", Category: "枪机", AutoNetwork: boolPtr(false),
-			NetConfigMode: model.IotNetConfigAP, AllowShare: boolPtr(false), Sequence: 8,
-		}); err != nil {
+			AllowShare: boolPtr(false), Sequence: 8,
+		})
+		if err != nil {
 			t.Fatalf("更新产品失败: %v", err)
+		}
+		if warning != "" {
+			t.Errorf("无设备绑定时不应有 warning: %q", warning)
 		}
 		got, err := svc.Get(ctx, p.ID)
 		if err != nil {
 			t.Fatalf("查询产品失败: %v", err)
 		}
 		if got.Name != "4G球机-改" || got.Category != "枪机" || got.AutoNetwork ||
-			got.NetConfigMode != model.IotNetConfigAP || got.AllowShare || got.Sequence != 8 {
+			got.NetConfigMode != model.IotNetConfigQRCode || got.AllowShare || got.Sequence != 8 {
 			t.Fatalf("更新未生效: %+v", got)
+		}
+
+		// 非法更新：配网方式必须是 bluetooth/ap/qrcode 之一
+		if _, err := svc.Update(ctx, p.ID, &request.UpdateIotProductReq{
+			NetConfigMode: "carrier-pigeon",
+		}); err == nil {
+			t.Errorf("非法配网方式应被拒绝")
 		}
 
 		// 分页关键字
@@ -327,9 +341,10 @@ func TestProductServiceBinding(t *testing.T) {
 		productSvc := svciot.NewProductService()
 		groupSvc := svciot.NewServiceGroupService()
 
+		// mustProduct 是 elderly 类型，只能绑 webrtc / aichat。
 		p := mustProduct(t, ctx, uniq("PROD_BIND"))
-		g1 := mustGroup(t, ctx, uniq("GRP_B1"), model.IotServiceGroupGb28181)
-		g2 := mustGroup(t, ctx, uniq("GRP_B2"), model.IotServiceGroupWebRTC)
+		g1 := mustGroup(t, ctx, uniq("GRP_B1"), model.IotServiceGroupWebRTC)
+		g2 := mustGroup(t, ctx, uniq("GRP_B2"), model.IotServiceGroupAIChat)
 
 		bound, err := productSvc.BindServiceGroups(ctx, p.ID, []int64{g1.ID, g2.ID, g1.ID})
 		if err != nil {
@@ -623,21 +638,22 @@ func TestDeviceOTA(t *testing.T) {
 		deviceSvc := svciot.NewDeviceService()
 		endpoint := svciot.NewDeviceEndpointService()
 
+		// 产品是 elderly 类型：只能绑 webrtc / aichat（gb28181 会被白名单拒绝）。
 		p := mustProduct(t, ctx, uniq("PROD_OTA"))
-		g1 := mustGroup(t, ctx, uniq("GRP_OTA1"), model.IotServiceGroupGb28181)
-		g2 := mustGroup(t, ctx, uniq("GRP_OTA2"), model.IotServiceGroupWebRTC)
-		inactive := mustGroup(t, ctx, uniq("GRP_OTA3"), model.IotServiceGroupAIChat)
+		g1 := mustGroup(t, ctx, uniq("GRP_OTA1"), model.IotServiceGroupWebRTC)
+		g2 := mustGroup(t, ctx, uniq("GRP_OTA2"), model.IotServiceGroupAIChat)
+		inactive := mustGroup(t, ctx, uniq("GRP_OTA3"), model.IotServiceGroupWebRTC)
 		if err := groupSvc.Update(ctx, inactive.ID, &request.UpdateIotServiceGroupReq{Active: boolPtr(false)}); err != nil {
 			t.Fatalf("停用服务组失败: %v", err)
 		}
 
 		if _, err := groupSvc.ReplaceItems(ctx, g1.ID, &request.ReplaceIotServiceItemsReq{
-			Items: []request.IotServiceItemReq{{Protocol: "SIP", Host: "sip.local"}, {Protocol: "RTSP", Host: "rtsp.local"}},
+			Items: []request.IotServiceItemReq{{Protocol: "WebRTC", Host: "webrtc.local"}, {Protocol: "MQTT", Host: "mqtt.local"}},
 		}); err != nil {
 			t.Fatalf("配置 g1 服务项失败: %v", err)
 		}
 		if _, err := groupSvc.ReplaceItems(ctx, g2.ID, &request.ReplaceIotServiceItemsReq{
-			Items: []request.IotServiceItemReq{{Protocol: "WebRTC", Host: "webrtc.local"}, {Protocol: "MQTT", Host: "mqtt.local"}},
+			Items: []request.IotServiceItemReq{{Protocol: "WebSocket", Host: "ai.local", Path: "/ws"}},
 		}); err != nil {
 			t.Fatalf("配置 g2 服务项失败: %v", err)
 		}
@@ -681,7 +697,7 @@ func TestDeviceOTA(t *testing.T) {
 				if g.Username != raw1.Username {
 					t.Errorf("OTA 组用户名不一致")
 				}
-				if len(g.Items) != 2 || g.Items[0].Protocol != "SIP" {
+				if len(g.Items) != 2 || g.Items[0].Protocol != "WebRTC" {
 					t.Errorf("OTA 服务项异常: %+v", g.Items)
 				}
 			}

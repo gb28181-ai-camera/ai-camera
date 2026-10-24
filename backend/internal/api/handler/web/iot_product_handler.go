@@ -2,9 +2,7 @@ package handler
 
 import (
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
-
-	// 仅用于 Swagger 注解中的类型解析。
-	_ "github.com/boticz/ai-camera-backend/internal/dto/response"
+	"github.com/boticz/ai-camera-backend/internal/dto/response"
 
 	iotsvc "github.com/boticz/ai-camera-backend/internal/service/iot"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
@@ -17,12 +15,16 @@ import (
 
 // IotProductHandler IOT 产品处理器。
 type IotProductHandler struct {
-	svc *iotsvc.ProductService
+	svc  *iotsvc.ProductService
+	cred *iotsvc.CredentialsService
 }
 
 // NewIotProductHandler 构造产品处理器。
 func NewIotProductHandler() *IotProductHandler {
-	return &IotProductHandler{svc: iotsvc.NewProductService()}
+	return &IotProductHandler{
+		svc:  iotsvc.NewProductService(),
+		cred: iotsvc.NewCredentialsService(),
+	}
 }
 
 // Page 产品分页列表
@@ -83,7 +85,8 @@ func (h *IotProductHandler) Get(c *gin.Context) {
 // Create 新增产品
 //
 // @Summary      新增IOT产品
-// @Description  产品编码全局唯一；net_config_mode 取 bluetooth/ap/qrcode
+// @Description  产品编码全局唯一；配网方式（qrcode/bluetooth/ap）、是否允许分享、
+// @Description  服务组绑定都由产品自身配置决定，平台不按设备类型做联动约束。
 // @Tags         IOT
 // @Accept       json
 // @Produce      json
@@ -109,13 +112,13 @@ func (h *IotProductHandler) Create(c *gin.Context) {
 // Update 更新产品
 //
 // @Summary      更新IOT产品
-// @Description  增量覆盖：文本非空才覆盖，指针字段非 nil 才覆盖
+// @Description  增量覆盖：文本非空才覆盖，指针字段非 nil 才覆盖。产品已有设备绑定时配置冲突只返回 warning 不阻止
 // @Tags         IOT
 // @Accept       json
 // @Produce      json
 // @Param        id    path      int                          true  "产品ID"
 // @Param        body  body      request.UpdateIotProductReq  true  "产品"
-// @Success      200  {object}  response.BaseResponse
+// @Success      200  {object}  response.RIotProductUpdated
 // @Failure      400  {object}  response.BaseResponse
 // @Failure      404  {object}  response.BaseResponse
 // @Router       /web/iot/products/{id} [put]
@@ -130,11 +133,12 @@ func (h *IotProductHandler) Update(c *gin.Context) {
 		utils.BadRequest(c, "参数错误: "+err.Error())
 		return
 	}
-	if err := h.svc.Update(c.Request.Context(), id, &req); err != nil {
+	warning, err := h.svc.Update(c.Request.Context(), id, &req)
+	if err != nil {
 		respondIotErr(c, err, iotsvc.ErrProductNotFound)
 		return
 	}
-	utils.Success(c, nil)
+	utils.Success(c, response.IotProductUpdateResult{Warning: warning})
 }
 
 // Delete 删除产品
@@ -244,4 +248,30 @@ func (h *IotProductHandler) BindServiceGroups(c *gin.Context) {
 		return
 	}
 	utils.Success(c, items)
+}
+
+// Credentials 产品明文鉴权信息（复制用）
+//
+// @Summary      产品明文鉴权信息
+// @Description  返回产品及其全部服务组的明文用户名/密码、服务项与 MQTT 连接地址；仅本接口返回明文
+// @Tags         IOT
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "产品ID"
+// @Success      200  {object}  response.RIotCredentials
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/iot/products/{id}/credentials [get]
+// @ID           getIotProductCredentials
+func (h *IotProductHandler) Credentials(c *gin.Context) {
+	id, ok := iotProductPathID(c)
+	if !ok {
+		return
+	}
+	resp, err := h.cred.ProductCredentials(c.Request.Context(), id)
+	if err != nil {
+		respondIotErr(c, err, iotsvc.ErrProductNotFound)
+		return
+	}
+	utils.Success(c, resp)
 }

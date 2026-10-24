@@ -43,6 +43,8 @@ func registerAppRoutes(r *gin.Engine) {
 	appH := handler.NewAppHandler()
 	// 国标视频（GB/T 28181）：薄封装 handler，业务逻辑复用 /web/gb 的 service 层。
 	appGbH := handler.NewAppGbHandler()
+	// IOT 设备认领/绑定与 ICE 凭据：所有读写都以 JWT 的 user_id 为边界。
+	appIotH := handler.NewAppIotHandler()
 
 	// ── 公开接口 ──
 	a := r.Group("/app")
@@ -117,5 +119,23 @@ func registerAppRoutes(r *gin.Engine) {
 			// 国标报警
 			gb.GET("/alarms", appGbH.PageAlarms)
 		}
+
+		// ── IOT 设备（App 端）────────────────────────────────
+		// 认领（分享二维码）与绑定（蓝牙配网）都是把设备关联到当前用户；
+		// 列表/详情/服务组均以 platform_user_id = JWT user_id 为边界。
+		iot := aAuth.Group("/iot")
+		{
+			iot.POST("/devices/claim", appIotH.Claim)
+			iot.POST("/devices/bind", appIotH.Bind)
+			iot.POST("/devices/bind-qr", appIotH.BindByQR)
+			iot.GET("/devices", appIotH.List)
+			iot.GET("/devices/:id", appIotH.Get)
+			iot.GET("/devices/:id/services", appIotH.Services)
+			// 设备分享码：仅该设备的 owner 可生成，shared 账号返回 403。
+			iot.POST("/devices/:id/share-token", appIotH.CreateShareToken)
+		}
+
+		// ── RTC ICE 服务器（TURN/STUN 短期凭据）───────────────
+		aAuth.GET("/rtc/ice-servers", appIotH.IceServers)
 	}
 }

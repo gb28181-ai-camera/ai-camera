@@ -19,6 +19,13 @@ import "time"
 //      平台下发 secret（仅一次）→ 设备持有 → 每次 OTA 携带 X-Device-* 头。
 // ════════════════════════════════════════════════════════════════
 
+// IotGroupTypeLabels 服务组类型的中文名（错误提示用）。
+var IotGroupTypeLabels = map[string]string{
+	IotServiceGroupGb28181: "GB28181",
+	IotServiceGroupWebRTC:  "WebRTC",
+	IotServiceGroupAIChat:  "AIChat",
+}
+
 // IOT 产品配网方式。
 const (
 	IotNetConfigBluetooth = "bluetooth" // 蓝牙配网
@@ -158,6 +165,14 @@ type IotDeviceAccount struct {
 	Status       string     `gorm:"column:status;size:20;not null;default:active;comment:状态 active/disabled" json:"status"`
 	ShareToken   *string    `gorm:"column:share_token;size:100;uniqueIndex:idx_ac_iot_device_account_share_token;comment:分享令牌(可空)" json:"share_token,omitempty"`
 	ActivatedAt  *time.Time `gorm:"column:activated_at;comment:激活时间" json:"activated_at"`
+
+	// PlatformUserID 账号所绑定的平台用户（App 认领/绑定后写入）。
+	//
+	// 为什么单独建列而不是复用 username：设备账号的 username 是**给设备端服务**用的
+	// 登录名，平台用户则是 App 的 JWT 主体，两者命名空间与生命周期都不同。
+	// 分享令牌尚未被认领时该列为 NULL；App 设备列表按此列过滤，
+	// 从而保证「一个用户只能看到自己认领/绑定的设备」。
+	PlatformUserID *int64 `gorm:"column:platform_user_id;index:idx_ac_iot_device_account_platform_user;comment:绑定的平台用户ID" json:"platform_user_id,omitempty"`
 }
 
 func (IotDeviceAccount) TableName() string { return "ac_iot_device_account" }

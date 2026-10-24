@@ -60,3 +60,27 @@ cd deploy/mochi-mqtt && go test ./... -count=1
 ```
 
 覆盖：允许 / 拒绝 / RPC 故障 fail-closed / ACL 动作映射 / Provides 声明。
+
+## 与内部 fork（gRPC）的关系
+
+内部 `cloud/mochi-mqtt` 已内置 gRPC 鉴权钩子（`hooks/auth/rpc.go`）：
+
+```yaml
+# broker 配置
+rpc:
+  address: backend:50051
+```
+
+后端开启 `MQTT_GRPC_ENABLED=true` 后提供同契约服务：
+
+- 服务名 `aot.IotMqttAuthService`，方法 `MqttAuth`；
+- `code=200 && data=true` 放行；
+- 用户名/密码规则与上面的 HTTP `/rpc/mqtt/auth` 完全一致（IOT 服务组）。
+
+本目录的 HTTP 钩子与 fork 的 gRPC 钩子**二选一**：
+- 用**本目录**的 broker → 保持 `MQTT_BACKEND_RPC_URL` + `MQTT_RPC_TOKEN`；
+- 用**内部 fork** → 配 `rpc.address` 并给后端开 `MQTT_GRPC_ENABLED`。
+
+> ⚠️ fork 的 `OnACLCheck` 目前恒为 true（只鉴权、不隔离话题）。
+> 需要按服务组隔离话题时，把 ACL 也改成 RPC 调用，后端可直接复用
+> `internal/service/iot.MqttAuthService.CheckACL`。

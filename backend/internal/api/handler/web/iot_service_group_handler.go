@@ -17,12 +17,16 @@ import (
 
 // IotServiceGroupHandler 服务组处理器。
 type IotServiceGroupHandler struct {
-	svc *iotsvc.ServiceGroupService
+	svc  *iotsvc.ServiceGroupService
+	cred *iotsvc.CredentialsService
 }
 
 // NewIotServiceGroupHandler 构造服务组处理器。
 func NewIotServiceGroupHandler() *IotServiceGroupHandler {
-	return &IotServiceGroupHandler{svc: iotsvc.NewServiceGroupService()}
+	return &IotServiceGroupHandler{
+		svc:  iotsvc.NewServiceGroupService(),
+		cred: iotsvc.NewCredentialsService(),
+	}
 }
 
 // Page 服务组分页列表
@@ -219,4 +223,30 @@ func (h *IotServiceGroupHandler) ReplaceItems(c *gin.Context) {
 		return
 	}
 	utils.Success(c, gin.H{"items": items})
+}
+
+// Credentials 服务组明文鉴权信息（复制用）
+//
+// @Summary      服务组明文鉴权信息
+// @Description  返回单个服务组的明文用户名/密码、服务项与 MQTT 连接地址；仅本接口返回明文
+// @Tags         IOT
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "服务组ID"
+// @Success      200  {object}  response.RIotGroupCredentials
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/iot/service-groups/{id}/credentials [get]
+// @ID           getIotServiceGroupCredentials
+func (h *IotServiceGroupHandler) Credentials(c *gin.Context) {
+	id, ok := iotServiceGroupPathID(c)
+	if !ok {
+		return
+	}
+	resp, err := h.cred.GroupCredentials(c.Request.Context(), id)
+	if err != nil {
+		respondIotErr(c, err, iotsvc.ErrServiceGroupNotFound)
+		return
+	}
+	utils.Success(c, resp)
 }

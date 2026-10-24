@@ -42,16 +42,20 @@ var (
 
 // Config 是 UA 的构造参数。
 type Config struct {
-	DeviceID  string // 20 位国标设备编码
-	SIPServer string // 平台地址 host:port
-	SIPDomain string // SIP 域（Digest realm）
-	Password  string // SIP 密码
-	LocalIP   string // 本地信令 IP，必须已解析（见 config.ResolveLocalIP）
-	LocalPort int    // 本地信令端口
-	Transport string // udp / tcp
-	Expires   int    // 注册有效期（秒）
-	UserAgent string // User-Agent 头，仅用于日志辨识
-	Logger    *slog.Logger
+	DeviceID string // 20 位国标设备编码
+	// DeviceCode / ProductCode 是 IOT 业务编码；同时非空时随 REGISTER 发送
+	// X-Device-Code / X-Product-Code，供平台首次绑定国标编码。
+	DeviceCode  string
+	ProductCode string
+	SIPServer   string // 平台地址 host:port
+	SIPDomain   string // SIP 域（Digest realm）
+	Password    string // SIP 密码
+	LocalIP     string // 本地信令 IP，必须已解析（见 config.ResolveLocalIP）
+	LocalPort   int    // 本地信令端口
+	Transport   string // udp / tcp
+	Expires     int    // 注册有效期（秒）
+	UserAgent   string // User-Agent 头，仅用于日志辨识
+	Logger      *slog.Logger
 
 	// MediaMode 是设备侧配置的媒体传输模式（udp / tcp-passive / tcp-active）。
 	//

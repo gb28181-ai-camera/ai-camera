@@ -2,9 +2,7 @@ package handler
 
 import (
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
-
-	// 仅用于 Swagger 注解中的类型解析。
-	_ "github.com/boticz/ai-camera-backend/internal/dto/response"
+	"github.com/boticz/ai-camera-backend/internal/dto/response"
 
 	iotsvc "github.com/boticz/ai-camera-backend/internal/service/iot"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
@@ -17,12 +15,16 @@ import (
 
 // IotDeviceHandler IOT 设备处理器。
 type IotDeviceHandler struct {
-	svc *iotsvc.DeviceService
+	svc   *iotsvc.DeviceService
+	share *iotsvc.ShareService
 }
 
 // NewIotDeviceHandler 构造 IOT 设备处理器。
 func NewIotDeviceHandler() *IotDeviceHandler {
-	return &IotDeviceHandler{svc: iotsvc.NewDeviceService()}
+	return &IotDeviceHandler{
+		svc:   iotsvc.NewDeviceService(),
+		share: iotsvc.NewShareService(),
+	}
 }
 
 // Page IOT设备分页列表
@@ -261,4 +263,82 @@ func (h *IotDeviceHandler) SetProduct(c *gin.Context) {
 		return
 	}
 	utils.Success(c, nil)
+}
+
+// QR 设备二维码
+//
+// @Summary      设备二维码
+// @Description  返回设备二维码内容 {"type":"device","product_code":"...","device_code":"..."}；App 扫码后绑定
+// @Tags         IOT
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "设备ID"
+// @Success      200  {object}  response.RIotDeviceQR
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/iot/devices/{id}/qr [post]
+// @ID           getIotDeviceQR
+func (h *IotDeviceHandler) QR(c *gin.Context) {
+	id, ok := iotDevicePathID(c)
+	if !ok {
+		return
+	}
+	resp, err := h.share.DeviceQR(c.Request.Context(), id)
+	if err != nil {
+		respondIotErr(c, err, iotsvc.ErrDeviceNotFound)
+		return
+	}
+	utils.Success(c, resp)
+}
+
+// CreateShareToken 生成设备分享令牌
+//
+// @Summary      生成设备分享令牌
+// @Description  创建一条未绑定用户的 shared 账号并返回一次性 token 与二维码内容；App 认领后 token 立即失效
+// @Tags         IOT
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "设备ID"
+// @Success      200  {object}  response.RIotDeviceShareToken
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/iot/devices/{id}/share-token [post]
+// @ID           createIotDeviceShareToken
+func (h *IotDeviceHandler) CreateShareToken(c *gin.Context) {
+	id, ok := iotDevicePathID(c)
+	if !ok {
+		return
+	}
+	resp, err := h.share.CreateShareToken(c.Request.Context(), id, c.ClientIP())
+	if err != nil {
+		respondIotErr(c, err, iotsvc.ErrDeviceNotFound)
+		return
+	}
+	utils.Success(c, resp)
+}
+
+// RevokeShareToken 撤销设备未认领的分享令牌
+//
+// @Summary      撤销设备分享令牌
+// @Description  清空该设备上所有尚未被认领的分享令牌，已被认领的账号不受影响
+// @Tags         IOT
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "设备ID"
+// @Success      200  {object}  response.RIotShareTokenRevoked
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/iot/devices/{id}/share-token [delete]
+// @ID           revokeIotDeviceShareToken
+func (h *IotDeviceHandler) RevokeShareToken(c *gin.Context) {
+	id, ok := iotDevicePathID(c)
+	if !ok {
+		return
+	}
+	n, err := h.share.RevokeShareToken(c.Request.Context(), id)
+	if err != nil {
+		respondIotErr(c, err, iotsvc.ErrDeviceNotFound)
+		return
+	}
+	utils.Success(c, &response.IotShareTokenRevoked{Revoked: n})
 }
