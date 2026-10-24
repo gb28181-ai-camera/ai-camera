@@ -27,10 +27,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/boticz/ai-camera-backend/internal/bootstrap"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/auth"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/charset"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/control"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/device"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/mediaserver"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/metrics"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/manscdp"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/sdp"
@@ -49,6 +51,43 @@ const (
 	// ContentTypeMANSRTSP 是带内回放控制（INFO）的 Content-Type。
 	ContentTypeMANSRTSP = "Application/MANSRTSP"
 )
+
+// 设备在线态的周期维护参数。
+const (
+	// subscribeRenewInterval 订阅续订扫描周期。
+	// 与设备管理器的过期扫描同频（30s）：续订提前量至少 60s，两轮扫描
+	// 足以在真正过期前完成重发。
+	subscribeRenewInterval = 30 * time.Second
+	// ssrcRebuildInterval SSRC 占用表重建周期。
+	//
+	// 设计 §6.4 记录 WVP 是 5s 一次；本实现取 60s —— 单端口下 SSRC 冲突只可能
+	// 来自「ZLM 里仍有流、本进程内存已丢」，这类残留本身很稳定，60s 的重建
+	// 窗口足以在分配前收敛，同时把 getMediaList 的调用量降到 1/12。
+	ssrcRebuildInterval = 60 * time.Second
+	// maintenanceTimeout 单轮维护任务的最长耗时。
+	// 一台设备不可达时的 SIP 事务超时可能拖到数十秒，必须给维护协程设上限，
+	// 否则下一轮 tick 会被挤掉（time.Ticker 会丢 tick，但协程会一直忙）。
+	maintenanceTimeout = 20 * time.Second
+	// ssrcRebuildApp 是单端口收流模式的 ZLM app 名（设计 §2.2）。
+	ssrcRebuildApp = "rtp"
+)
+
+// 订阅续订回调。
+//
+// 为什么用回调而不是直接 import internal/service/gb28181：该包已经依赖本包
+// （playback_service / voice_service 直接调用信令），反向依赖会形成 import cycle。
+// 由业务层通过 SetSubscribeRenewer 注册，本包只负责「什么时候跑」。
+var (
+	subscribeRenewMu sync.RWMutex
+	subscribeRenewer func(ctx context.Context) (int, error)
+)
+
+// SetSubscribeRenewer 注册订阅续订入口。传 nil 可取消注册（测试用）。
+func SetSubscribeRenewer(fn func(ctx context.Context) (int, error)) {
+	subscribeRenewMu.Lock()
+	subscribeRenewer = fn
+	subscribeRenewMu.Unlock()
+}
 
 // 编译期断言：Service 必须实现业务层依赖的 SipController 接口。
 // 接口定义在 control 包（另一个模块负责），签名漂移会在编译期暴露而不是运行时 nil。
@@ -197,6 +236,11 @@ func (s *Service) Start(ctx context.Context) error {
 	s.devices.Start(s.ctx)
 	control.Set(s)
 
+	// 设备在线态维护：订阅续订（30s）+ SSRC 重建（60s）。
+	// 只有 SIP 服务真正跑起来才有意义，因此放在 Start 里而不是 New 里。
+	s.wg.Add(1)
+	go s.maintenanceLoop(s.ctx)
+
 	s.log.Info("GB28181 信令服务已启动",
 		"listen", addr, "transport", s.cfg.Transport,
 		"domain", s.cfg.Domain, "server_id", s.cfg.ServerID,
@@ -295,6 +339,113 @@ func (s *Service) Stop() {
 		}
 		s.log.Info("GB28181 信令服务已停止")
 	})
+}
+
+// ────────────────────────────────────────────────────────────────
+// 设备在线态维护（订阅续订 / SSRC 重建）
+// ────────────────────────────────────────────────────────────────
+
+// maintenanceLoop 周期执行「需要触达设备或媒体节点」的维护动作。
+//
+// 两个周期放在同一个协程里串行执行：它们都依赖外部系统（设备 SIP / ZLM REST），
+// 并发跑只会互相抢超时预算，而这两个动作本身都不要求毫秒级时效。
+func (s *Service) maintenanceLoop(ctx context.Context) {
+	defer s.wg.Done()
+
+	renewTicker := time.NewTicker(subscribeRenewInterval)
+	defer renewTicker.Stop()
+	ssrcTicker := time.NewTicker(ssrcRebuildInterval)
+	defer ssrcTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-renewTicker.C:
+			s.renewDueSubscriptions(ctx)
+		case <-ssrcTicker.C:
+			s.rebuildSSRCOnce(ctx)
+		}
+	}
+}
+
+// renewDueSubscriptions 调用业务层注册的续订入口。
+//
+// 回调由业务包在 init() 里注册，但只有本服务的维护协程（Start 启动）会调用它；
+// 独立编译的二进制若没有链接业务包，这里取到 nil 就静默跳过 ——
+// 绝不能因为「没有续订实现」把订阅状态改坏。
+func (s *Service) renewDueSubscriptions(ctx context.Context) {
+	subscribeRenewMu.RLock()
+	fn := subscribeRenewer
+	subscribeRenewMu.RUnlock()
+	if fn == nil {
+		return
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, maintenanceTimeout)
+	defer cancel()
+	n, err := fn(cctx)
+	if err != nil {
+		s.logger().Warn("订阅自动续订失败", "error", err)
+		return
+	}
+	if n > 0 {
+		s.logger().Info("订阅已自动续订", "count", n)
+	}
+}
+
+// rebuildSSRCOnce 用 ZLM getMediaList 重建 SSRC 占用位图（设计 §6.4）。
+//
+// 为什么必须周期重建：SSRC 的唯一性只由本进程内存的位图保证，进程重启后
+// 位图是空的，而 ZLM 里可能还有设备正在推的流；不重建就会把这些 SSRC 再分配
+// 一次，表现为「新点播把别人的流顶掉」。
+//
+// 安全性：Allocator.Rebuild 会**先并入本进程仍持有（active）的分配**，再合并
+// ZLM 的流列表，因此正在观看的流不会被释放（见 ssrc/allocator.go 注释）。
+func (s *Service) rebuildSSRCOnce(ctx context.Context) {
+	if s.ssrc == nil {
+		return
+	}
+	// 后台协程的 panic 会带崩整个信令进程。这里 recover 兜底：重建只是优化，
+	// 失败最坏退化为「按本进程已知分配」，不影响正在进行的点播。
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger().Warn("SSRC 重建发生 panic，已忽略", "panic", r)
+		}
+	}()
+	if bootstrap.DB() == nil {
+		// 未初始化数据库（单测、极端降级启动）：没有媒体节点可查，跳过。
+		return
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, maintenanceTimeout)
+	defer cancel()
+
+	client, ms, err := mediaserver.FromDefaultServer(cctx)
+	if err != nil {
+		s.logger().Warn("SSRC 重建跳过：未取到默认媒体节点", "error", err)
+		return
+	}
+	if client == nil || ms == nil {
+		return
+	}
+
+	list, err := client.GetMediaList(cctx, ssrcRebuildApp, "", "", "")
+	if err != nil {
+		s.logger().Warn("SSRC 重建跳过：getMediaList 失败",
+			"server_id", ms.ServerID, "error", err)
+		return
+	}
+
+	streams := make([]string, 0, len(list))
+	for _, m := range list {
+		if name := strings.TrimSpace(m.Stream); name != "" {
+			streams = append(streams, name)
+		}
+	}
+	s.ssrc.Rebuild(streams)
+	s.logger().Debug("SSRC 占用表已按 ZLM 流列表重建",
+		"server_id", ms.ServerID, "streams", len(streams))
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -562,22 +713,37 @@ func encodeOutboundBody(body, cs string) ([]byte, error) {
 
 // Subscribe 发送订阅（catalog / alarm / mobile_position）。
 func (s *Service) Subscribe(ctx context.Context, dev *model.Device, subType string, interval int) error {
-	return s.subscription(ctx, dev, subType, interval)
+	_, err := s.subscription(ctx, dev, subType, interval)
+	return err
 }
 
 // Unsubscribe 取消订阅（Expires: 0）。
 func (s *Service) Unsubscribe(ctx context.Context, dev *model.Device, subType string) error {
-	return s.subscription(ctx, dev, subType, 0)
+	_, err := s.subscription(ctx, dev, subType, 0)
+	return err
 }
 
-// subscription 实现 SUBSCRIBE 的建立与取消。
-func (s *Service) subscription(ctx context.Context, dev *model.Device, subType string, interval int) error {
+// SubscribeWithCallID 发送订阅并返回本次 SUBSCRIBE 实际使用的 Call-ID。
+//
+// 供订阅续订维护使用：ac_gb_subscribe.call_id 必须记录真实会话标识，
+// 否则库里的记录无法和 ac_gb_sip_log 对应上，排障时只能靠时间猜。
+// 它不在 control.SipController 里声明 —— 那是业务接口，这是维护细节；
+// 调用方用本地可选接口断言即可（service/gb28181/subscribe_service.go）。
+func (s *Service) SubscribeWithCallID(ctx context.Context, dev *model.Device, subType string, interval int) (string, error) {
+	return s.subscription(ctx, dev, subType, interval)
+}
+
+// subscription 实现 SUBSCRIBE 的建立与取消，返回本次请求的 Call-ID。
+//
+// 显式设置 Call-ID：sipgo 的请求构建器只在缺失时补全，提前写入即可让
+// 「发送」与「落库」用同一个 id；请求失败时同样返回它，便于把失败日志关联起来。
+func (s *Service) subscription(ctx context.Context, dev *model.Device, subType string, interval int) (string, error) {
 	if dev == nil {
-		return fmt.Errorf("设备为 nil")
+		return "", fmt.Errorf("设备为 nil")
 	}
 	event, accept, err := subscriptionEvent(subType)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if interval <= 0 {
 		interval = 0
@@ -590,14 +756,18 @@ func (s *Service) subscription(ctx context.Context, dev *model.Device, subType s
 	exp := sip.ExpiresHeader(interval)
 	req.AppendHeader(&exp)
 
+	callID := s.NewCallID()
+	callIDH := sip.CallIDHeader(callID)
+	req.AppendHeader(&callIDH)
+
 	resp, err := s.send(ctx, dev, req, "SUBSCRIBE:"+subType)
 	if err != nil {
-		return err
+		return callID, err
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("设备 %s 拒绝 SUBSCRIBE(%s)：%d %s", dev.GbDeviceID, subType, resp.StatusCode, resp.Reason)
+		return callID, fmt.Errorf("设备 %s 拒绝 SUBSCRIBE(%s)：%d %s", dev.GbDeviceID, subType, resp.StatusCode, resp.Reason)
 	}
-	return nil
+	return callID, nil
 }
 
 // subscriptionEvent 把订阅类型映射成 SIP Event/Accept 头。

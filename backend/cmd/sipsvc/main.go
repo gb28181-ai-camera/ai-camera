@@ -21,6 +21,10 @@ import (
 
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/sipserver"
+	// 空导入：订阅自动续订的实现注册在 service/gb28181 的 init() 里。
+	// 内嵌模式（cmd/server）会经 handler 链接该包；独立信令进程必须显式引入，
+	// 否则 sipserver 里的续订定时器取不到回调，订阅到期后不会续订。
+	_ "github.com/boticz/ai-camera-backend/internal/service/gb28181"
 )
 
 func main() {

@@ -115,6 +115,36 @@ func (s *GbStore) MarkExpiredOffline(ctx context.Context, now time.Time) (int64,
 	return res.RowsAffected, res.Error
 }
 
+// MarkHeartbeatTimeoutOffline 把「心跳超时」的在线设备置为 offline。
+//
+// 规则：now - last_beat_dt > timeout（严格大于，见 Manager.HeartbeatOnce）。
+// 只更新 status='online' 的行，因此重复扫描不会反复写同一台设备；
+// GORM 的软删除条件（deleted_at IS NULL）由模型自动附加，无需手写。
+//
+// last_beat_dt IS NULL 的在线设备不在这里处理：REGISTER 成功会写 last_beat_dt，
+// 正常流程不会出现 NULL；万一出现，交给 sip_expires 过期扫描兜底。
+func (s *GbStore) MarkHeartbeatTimeoutOffline(ctx context.Context, now time.Time, timeout time.Duration) (int64, error) {
+	if timeout <= 0 {
+		return 0, nil
+	}
+	if bootstrap.DB() == nil {
+		return 0, ErrNoDatabase
+	}
+	deadline := now.Add(-timeout)
+	res := bootstrap.DB().WithContext(ctx).
+		Model(&model.Device{}).
+		Where("gb_device_id IS NOT NULL AND gb_device_id <> ''").
+		Where("status = ?", model.DeviceStatusOnline).
+		Where("last_beat_dt IS NOT NULL AND last_beat_dt < ?", deadline).
+		Updates(map[string]interface{}{
+			"status":     model.DeviceStatusOffline,
+			"offline_dt": now,
+			"updated_dt": now,
+			"updated_by": "sipsvc",
+		})
+	return res.RowsAffected, res.Error
+}
+
 // normalizeRegisterWay 把目录项的 RegisterWay 数字转成 ac_gb_channel 的字符串列。
 func normalizeRegisterWay(v int) string {
 	if v <= 0 {

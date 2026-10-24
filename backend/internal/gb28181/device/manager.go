@@ -5,6 +5,11 @@
 //	REGISTER 成功 → register_status='activated'、status='online'、sip_expires=now+expires
 //	Keepalive     → 刷新 last_beat_dt/status
 //	sip_expires 到期 → status='offline'（不删除设备，也不删通道）
+//	心跳超时       → status='offline'（now-last_beat_dt > 3×心跳间隔）
+//
+// 两条离线判定（sip_expires 过期 / 心跳超时）取**先到者**：注册有效期通常 3600s，
+// 而心跳 60s 一跳，设备掉电/断网时心跳超时会先命中，离线状态因此能在三分钟内
+// 反映出来，而不是等注册有效期走完。
 //
 // 目录同步按 (deviceID, SN) 重组多条 MESSAGE（设计 §6.2 #3）：
 // 设备把 SumNum 条通道拆成若干片，每片复用同一个 SN，收齐后才落库，
@@ -34,8 +39,36 @@ type Config struct {
 	CatalogTimeout time.Duration
 	// SweepInterval 是过期扫描与半份目录清理的周期。
 	SweepInterval time.Duration
+	// HeartbeatInterval 是设备心跳间隔的缺省值（秒级时长）。
+	//
+	// GB28181 设备的 Keepalive 报文本身**不带间隔字段**（manscdp.Keepalive 只有
+	// SN/DeviceID/Status），因此无法从报文里读到真实间隔，统一按行业惯例的 60s 处理。
+	HeartbeatInterval time.Duration
+	// HeartbeatTimeoutFactor 是心跳超时倍数，缺省 3。
+	//
+	// 为什么是 3 倍而不是 1 倍：一次心跳丢失可能只是 UDP 丢包、设备 GC 抖动或
+	// 平台短暂过载，1 倍阈值会把这类瞬时异常误判为离线；2 倍在 60s 心跳下只有
+	// 60s 余量，仍偏紧。3 倍（180s）既能容忍连续丢两跳，又能让掉电设备在 3 分钟
+	// 内变为离线，是 WVP 等实现的常用取值。
+	HeartbeatTimeoutFactor int
 	// LogBuffer 是信令日志写入队列长度；满时丢弃并计数，绝不阻塞主流程。
 	LogBuffer int
+}
+
+const (
+	// DefaultHeartbeatInterval 缺省心跳间隔：60 秒。
+	DefaultHeartbeatInterval = 60 * time.Second
+	// DefaultHeartbeatTimeoutFactor 缺省心跳超时倍数：3 倍。
+	DefaultHeartbeatTimeoutFactor = 3
+)
+
+// heartbeatTimeoutStore 是 Store 的**可选能力**。
+//
+// 为什么用类型断言而不是直接扩 Store：Store 是给单测注入的窄接口，已有的
+// fake 实现只关心注册/目录/日志；把「按心跳批量置离线」塞进必需方法会迫使
+// 所有测试桩跟着改，且它只服务于一个后台扫描。生产实现（GbStore）实现了本接口。
+type heartbeatTimeoutStore interface {
+	MarkHeartbeatTimeoutOffline(ctx context.Context, now time.Time, timeout time.Duration) (int64, error)
 }
 
 // Endpoint 是设备最近一次有效报文的源地址。
@@ -88,6 +121,12 @@ func NewManager(store Store, cfg Config, logger *slog.Logger) *Manager {
 	}
 	if cfg.SweepInterval <= 0 {
 		cfg.SweepInterval = 30 * time.Second
+	}
+	if cfg.HeartbeatInterval <= 0 {
+		cfg.HeartbeatInterval = DefaultHeartbeatInterval
+	}
+	if cfg.HeartbeatTimeoutFactor <= 0 {
+		cfg.HeartbeatTimeoutFactor = DefaultHeartbeatTimeoutFactor
 	}
 	if cfg.LogBuffer <= 0 {
 		cfg.LogBuffer = 1024
@@ -553,6 +592,59 @@ func (m *Manager) ExpireOnce(ctx context.Context) (int64, error) {
 	return m.store.MarkExpiredOffline(ctx, m.now())
 }
 
+// HeartbeatTimeout 返回当前配置下的心跳超时时长（间隔 × 倍数）。
+func (m *Manager) HeartbeatTimeout() time.Duration {
+	interval := m.cfg.HeartbeatInterval
+	if interval <= 0 {
+		interval = DefaultHeartbeatInterval
+	}
+	factor := m.cfg.HeartbeatTimeoutFactor
+	if factor <= 0 {
+		factor = DefaultHeartbeatTimeoutFactor
+	}
+	return interval * time.Duration(factor)
+}
+
+// HeartbeatOnce 执行一次心跳超时扫描，返回置为离线的设备数。
+//
+// 判定条件：now - last_beat_dt > timeout（**严格大于**）。
+// 边界上（恰好等于 3×间隔）仍视为在线：扫描本身 30s 一轮，卡在边界的设备
+// 下一轮必然命中，没必要在等号上抢跑 —— 宁可晚 30s 判离线，也不要因为时钟
+// 精度/取整把一条刚发来的心跳判成超时。
+//
+// 同时清理内存 Endpoint：设备已判离线却还留着源地址，PTZ/查询等指令会继续
+// 往一个死地址发，每次都要白等一个 SIP 超时。
+func (m *Manager) HeartbeatOnce(ctx context.Context) (int64, error) {
+	timeout := m.HeartbeatTimeout()
+	now := m.now()
+
+	store, ok := m.store.(heartbeatTimeoutStore)
+	if !ok {
+		// 测试桩未实现该能力时静默跳过，不影响其他状态维护。
+		return 0, nil
+	}
+	n, err := store.MarkHeartbeatTimeoutOffline(ctx, now, timeout)
+	if err != nil {
+		return 0, err
+	}
+	m.dropStaleEndpoints(now.Add(-timeout))
+	return n, nil
+}
+
+// dropStaleEndpoints 清掉超过心跳超时窗口没有更新的源地址。
+//
+// 用内存里的 UpdatedAt 而不是 liveness 状态：任何入向报文（REGISTER/Keepalive/
+// 目录响应）都会刷新它，正好等价于「这条地址还活着」。
+func (m *Manager) dropStaleEndpoints(deadline time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, ep := range m.endpoints {
+		if ep.UpdatedAt.Before(deadline) {
+			delete(m.endpoints, id)
+		}
+	}
+}
+
 // logWorker 串行写日志：单写者既避免并发写库压力，也保证日志顺序与报文顺序一致。
 func (m *Manager) logWorker(ctx context.Context) {
 	defer m.wg.Done()
@@ -621,6 +713,12 @@ func (m *Manager) sweepLoop(ctx context.Context) {
 				m.log.Warn("注册过期扫描失败", "error", err)
 			} else if n > 0 {
 				m.log.Info("注册过期，设备置为离线", "count", n)
+			}
+			if n, err := m.HeartbeatOnce(ctx); err != nil {
+				m.log.Warn("心跳超时扫描失败", "error", err)
+			} else if n > 0 {
+				m.log.Info("心跳超时，设备置为离线",
+					"count", n, "timeout", m.HeartbeatTimeout().String())
 			}
 			m.dropStaleCatalogs()
 		}
