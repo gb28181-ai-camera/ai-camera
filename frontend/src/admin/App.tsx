@@ -99,6 +99,11 @@ const ROUTES: { path: string; page: LazyPage }[] = [
   { path: 'device/iot-card-monitor', page: lazy(() => import('./pages/device/IotCardMonitorList')) },
   { path: 'device/gis', page: lazy(() => import('./pages/device/GisMap')) },
 
+  // IOT 管理（产品 / 服务组 / 设备），path 与 ac_menu.path 一一对应
+  { path: 'iot/product', page: lazy(() => import('./pages/iot/ProductList')) },
+  { path: 'iot/service-group', page: lazy(() => import('./pages/iot/ServiceGroupList')) },
+  { path: 'iot/device', page: lazy(() => import('./pages/iot/DeviceList')) },
+
   // 设备告警
   { path: 'alarm/list', page: lazy(() => import('./pages/alarm/AlarmList')) },
 

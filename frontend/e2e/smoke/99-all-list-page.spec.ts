@@ -74,6 +74,9 @@ const ROUTES: { path: string; marker: string }[] = [
   { path: '/gb/platform/channel', marker: '级联通道' },
   { path: '/gb/org/group', marker: '业务分组' },
   { path: '/gb/org/voice-agent', marker: '语音 Agent 配置' },
+  { path: '/iot/product', marker: '产品管理' },
+  { path: '/iot/service-group', marker: '服务组' },
+  { path: '/iot/device', marker: '设备管理' },
 ]
 
 /** 主内容区（MainLayout 的 .main-content-inner） */
