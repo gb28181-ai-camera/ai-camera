@@ -9,6 +9,8 @@ export type CreateIotProductReq = Definition & {
 	category?: string;
 	code: string;
 	description?: string;
+	/** DeviceType 缺省 security；未知值直接拒绝，不做静默回退。 */
+	device_type?: string;
 	name: string;
 	net_config_mode?: string;
 	sequence?: number;

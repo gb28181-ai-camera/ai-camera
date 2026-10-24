@@ -5,8 +5,8 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  ApiOutlined, DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, SafetyOutlined,
-  UserOutlined,
+  ApiOutlined, DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, QrcodeOutlined,
+  SafetyOutlined, ShareAltOutlined, StopOutlined, UserOutlined,
 } from '@ant-design/icons'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
@@ -18,9 +18,12 @@ import type { IotProduct } from '../../api/generated/definitions/IotProduct'
 import type { IotDeviceAccount } from '../../api/generated/definitions/IotDeviceAccount'
 import type { IotDeviceActivated } from '../../api/generated/definitions/IotDeviceActivated'
 import type { IotDeviceSecret } from '../../api/generated/definitions/IotDeviceSecret'
+import type { IotDeviceQR } from '../../api/generated/definitions/IotDeviceQR'
+import type { IotDeviceShareToken } from '../../api/generated/definitions/IotDeviceShareToken'
 import type { CreateIotDeviceAccountReq } from '../../api/generated/definitions/CreateIotDeviceAccountReq'
 import type { UpdateIotDeviceAccountReq } from '../../api/generated/definitions/UpdateIotDeviceAccountReq'
 import { useAuthStore } from '../../store/authStore'
+import { DeviceQrModal, ShareQrModal } from './DeviceQrModal'
 import { SecretModal, fmtDT, notifyError } from './shared'
 
 const STATUS_OPTIONS = [
@@ -99,6 +102,17 @@ export default function DeviceList() {
 
   const [secretOpen, setSecretOpen] = useState(false)
   const [secret, setSecret] = useState<IotDeviceSecret | null>(null)
+
+  const [qrOpen, setQrOpen] = useState(false)
+  const [qrLoading, setQrLoading] = useState<number | null>(null)
+  const [qrDevice, setQrDevice] = useState<Device | null>(null)
+  const [qrData, setQrData] = useState<IotDeviceQR | null>(null)
+
+  const [shareQrOpen, setShareQrOpen] = useState(false)
+  const [shareLoading, setShareLoading] = useState<number | null>(null)
+  const [shareQrDevice, setShareQrDevice] = useState<Device | null>(null)
+  const [shareQrData, setShareQrData] = useState<IotDeviceShareToken | null>(null)
+  const [revoking, setRevoking] = useState<number | null>(null)
 
   const productOptions = products.flatMap((product) => (
     product.id == null
@@ -384,6 +398,66 @@ export default function DeviceList() {
     }
   }
 
+  // ── 设备二维码 / 分享码 ───────────────────────────────────
+
+  const handleDeviceQR = async (row: Device) => {
+    if (row.id == null) return
+    setQrLoading(row.id)
+    try {
+      const res = await IOTController.getIotDeviceQR(row.id)
+      if (res.code === 200 && res.data) {
+        setQrDevice(row)
+        setQrData(res.data)
+        setQrOpen(true)
+      } else {
+        message.error(res.message || '获取设备二维码失败')
+      }
+    } catch (err) {
+      notifyError(err, '获取设备二维码失败')
+    } finally {
+      setQrLoading(null)
+    }
+  }
+
+  const handleCreateShare = async (row: Device) => {
+    if (row.id == null) return
+    setShareLoading(row.id)
+    try {
+      const res = await IOTController.createIotDeviceShareToken(row.id)
+      if (res.code === 200 && res.data) {
+        setShareQrDevice(row)
+        setShareQrData(res.data)
+        setShareQrOpen(true)
+        // 分享码创建时会生成占位分享账号，账号列表需要刷新。
+        if (accountDevice?.id === row.id) void loadAccounts(row)
+      } else {
+        message.error(res.message || '生成分享码失败')
+      }
+    } catch (err) {
+      notifyError(err, '生成分享码失败')
+    } finally {
+      setShareLoading(null)
+    }
+  }
+
+  const handleRevokeShare = async (row: Device) => {
+    if (row.id == null) return
+    setRevoking(row.id)
+    try {
+      const res = await IOTController.revokeIotDeviceShareToken(row.id)
+      if (res.code === 200) {
+        message.success(`已撤销 ${res.data?.revoked ?? 0} 个未认领分享码`)
+        if (accountDevice?.id === row.id) void loadAccounts(row)
+      } else {
+        message.error(res.message || '撤销分享码失败')
+      }
+    } catch (err) {
+      notifyError(err, '撤销分享码失败')
+    } finally {
+      setRevoking(null)
+    }
+  }
+
   // ── 表格 ──────────────────────────────────────────────────
 
   const columns: ColumnsType<Device> = [
@@ -420,12 +494,50 @@ export default function DeviceList() {
       render: (v?: boolean) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
     },
     {
-      title: '操作', key: 'action', width: 420, fixed: 'right',
+      title: '操作', key: 'action', width: 620, fixed: 'right',
       render: (_, row) => (
-        <ActionButtons maxWidth={420}>
+        <ActionButtons maxWidth={620}>
           <Button type="link" size="small" icon={<UserOutlined />} onClick={() => openAccounts(row)}>
             账号管理
           </Button>
+          {canUpdate && (
+            <Button
+              type="link"
+              size="small"
+              icon={<QrcodeOutlined />}
+              loading={qrLoading === row.id}
+              onClick={() => void handleDeviceQR(row)}
+            >
+              设备二维码
+            </Button>
+          )}
+          {canAccountCreate && (
+            <Button
+              type="link"
+              size="small"
+              icon={<ShareAltOutlined />}
+              loading={shareLoading === row.id}
+              onClick={() => void handleCreateShare(row)}
+            >
+              分享码
+            </Button>
+          )}
+          {canAccountDelete && (
+            <Popconfirm
+              title="撤销后该设备所有未认领的分享码立即失效，已认领的分享账号不受影响。确定撤销?"
+              onConfirm={() => void handleRevokeShare(row)}
+            >
+              <Button
+                type="link"
+                size="small"
+                danger
+                icon={<StopOutlined />}
+                loading={revoking === row.id}
+              >
+                撤销分享码
+              </Button>
+            </Popconfirm>
+          )}
           {canUpdate && (
             <Button type="link" size="small" icon={<LinkOutlined />} onClick={() => openSetProduct(row)}>
               设置产品
@@ -667,6 +779,20 @@ export default function DeviceList() {
           { label: '设备密钥', value: secret?.device_secret },
         ]}
         onClose={() => setSecretOpen(false)}
+      />
+
+      <DeviceQrModal
+        open={qrOpen}
+        deviceLabel={qrDevice?.name || qrDevice?.device_code}
+        data={qrData}
+        onClose={() => setQrOpen(false)}
+      />
+
+      <ShareQrModal
+        open={shareQrOpen}
+        deviceLabel={shareQrDevice?.name || shareQrDevice?.device_code}
+        data={shareQrData}
+        onClose={() => setShareQrOpen(false)}
       />
     </PageContainer>
   )

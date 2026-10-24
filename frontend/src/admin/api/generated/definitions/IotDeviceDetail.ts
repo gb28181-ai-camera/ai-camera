@@ -8,5 +8,7 @@ import type { IotServiceGroupDetail } from './IotServiceGroupDetail';
 export type IotDeviceDetail = Definition & {
 	accounts?: IotDeviceAccount[];
 	device?: Device;
+	/** QRContent 设备二维码内容，前端可直接渲染，无需再调 /qr。 */
+	qr_content?: string;
 	service_groups?: IotServiceGroupDetail[];
 }

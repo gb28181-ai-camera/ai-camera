@@ -20,6 +20,24 @@ export function notifyError(err: unknown, fallback: string): void {
   message.error(fallback)
 }
 
+/**
+ * 复制文本到剪贴板。
+ *
+ * `navigator.clipboard` 只在安全上下文（HTTPS / localhost）可用，
+ * 内网 HTTP 部署或浏览器拒绝授权时会抛错，此时明确提示用户手动复制，
+ * 而不是静默失败。
+ */
+export async function copyText(text: string, successMsg = '已复制到剪贴板'): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success(successMsg)
+    return true
+  } catch {
+    message.error('当前环境不支持自动复制，请手动选中内容复制')
+    return false
+  }
+}
+
 /** 带复制按钮的只读值 */
 export function CopyValue({ value }: { value?: string | number | null }) {
   if (value === undefined || value === null || value === '') return <span>-</span>

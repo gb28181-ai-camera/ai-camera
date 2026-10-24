@@ -9,6 +9,8 @@ export type UpdateIotProductReq = Definition & {
 	category?: string;
 	code?: string;
 	description?: string;
+	/** DeviceType 为空表示不修改；非空时必须是 security / elderly。 */
+	device_type?: string;
 	name?: string;
 	net_config_mode?: string;
 	sequence?: number;

@@ -14,9 +14,11 @@ import { IOTController } from '../../api/generated/IOTController'
 import type { IotServiceGroup } from '../../api/generated/definitions/IotServiceGroup'
 import type { IotServiceItemReq } from '../../api/generated/definitions/IotServiceItemReq'
 import type { IotServiceGroupCredentials } from '../../api/generated/definitions/IotServiceGroupCredentials'
+import type { IotCredentials } from '../../api/generated/definitions/IotCredentials'
 import type { CreateIotServiceGroupReq } from '../../api/generated/definitions/CreateIotServiceGroupReq'
 import type { UpdateIotServiceGroupReq } from '../../api/generated/definitions/UpdateIotServiceGroupReq'
 import { useAuthStore } from '../../store/authStore'
+import { CredentialModal } from './CredentialModal'
 import { SecretModal, notifyError } from './shared'
 
 /** 服务组类型字典 */
@@ -114,6 +116,11 @@ export default function ServiceGroupList() {
   const [credOpen, setCredOpen] = useState(false)
   const [credGroup, setCredGroup] = useState<IotServiceGroup | null>(null)
   const [cred, setCred] = useState<IotServiceGroupCredentials | null>(null)
+
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailLoading, setDetailLoading] = useState<number | null>(null)
+  const [detailGroup, setDetailGroup] = useState<IotServiceGroup | null>(null)
+  const [detailData, setDetailData] = useState<IotCredentials | null>(null)
 
   const [itemsOpen, setItemsOpen] = useState(false)
   const [itemsGroup, setItemsGroup] = useState<IotServiceGroup | null>(null)
@@ -271,6 +278,30 @@ export default function ServiceGroupList() {
     }
   }
 
+  /** 拉取单个服务组的明文鉴权信息（仅 `iot:service-group:update` 可调用） */
+  const handleCopyCredentials = async (row: IotServiceGroup) => {
+    if (row.id == null) return
+    setDetailLoading(row.id)
+    try {
+      const res = await IOTController.getIotServiceGroupCredentials(row.id)
+      if (res.code === 200 && res.data) {
+        // 单组接口返回 {group, mqtt}，这里归一化为产品维度的结构，复用同一个弹窗。
+        setDetailData({
+          groups: res.data.group ? [res.data.group] : [],
+          mqtt: res.data.mqtt,
+        })
+        setDetailGroup(row)
+        setDetailOpen(true)
+      } else {
+        message.error(res.message || '获取鉴权信息失败')
+      }
+    } catch (err) {
+      notifyError(err, '获取鉴权信息失败')
+    } finally {
+      setDetailLoading(null)
+    }
+  }
+
   const openItems = async (row: IotServiceGroup) => {
     if (row.id == null) return
     setItemsGroup(row)
@@ -383,9 +414,20 @@ export default function ServiceGroupList() {
       render: (v?: boolean) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
     },
     {
-      title: '操作', key: 'action', width: 380, fixed: 'right',
+      title: '操作', key: 'action', width: 470, fixed: 'right',
       render: (_, row) => (
-        <ActionButtons maxWidth={380}>
+        <ActionButtons maxWidth={470}>
+          {canUpdate && (
+            <Button
+              type="link"
+              size="small"
+              icon={<KeyOutlined />}
+              loading={detailLoading === row.id}
+              onClick={() => void handleCopyCredentials(row)}
+            >
+              复制鉴权
+            </Button>
+          )}
           {canUpdate && (
             <Button type="link" size="small" icon={<SettingOutlined />} onClick={() => void openItems(row)}>
               编辑服务项
@@ -617,6 +659,13 @@ export default function ServiceGroupList() {
           { label: '密码', value: cred?.password },
         ]}
         onClose={() => setCredOpen(false)}
+      />
+
+      <CredentialModal
+        open={detailOpen}
+        title={detailGroup ? `鉴权信息 - ${detailGroup.name ?? ''}` : '鉴权信息'}
+        data={detailData}
+        onClose={() => setDetailOpen(false)}
       />
     </PageContainer>
   )

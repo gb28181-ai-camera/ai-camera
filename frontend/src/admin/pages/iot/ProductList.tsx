@@ -5,7 +5,7 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, QrcodeOutlined,
+  DeleteOutlined, EditOutlined, KeyOutlined, LinkOutlined, PlusOutlined, QrcodeOutlined,
 } from '@ant-design/icons'
 import { QRCodeSVG } from 'qrcode.react'
 import PageContainer from '../../components/PageContainer'
@@ -15,9 +15,11 @@ import { IOTController } from '../../api/generated/IOTController'
 import type { IotProduct } from '../../api/generated/definitions/IotProduct'
 import type { IotServiceGroup } from '../../api/generated/definitions/IotServiceGroup'
 import type { IotShareQRResp } from '../../api/generated/definitions/IotShareQRResp'
+import type { IotCredentials } from '../../api/generated/definitions/IotCredentials'
 import type { CreateIotProductReq } from '../../api/generated/definitions/CreateIotProductReq'
 import type { UpdateIotProductReq } from '../../api/generated/definitions/UpdateIotProductReq'
 import { useAuthStore } from '../../store/authStore'
+import { CredentialModal } from './CredentialModal'
 import { notifyError } from './shared'
 
 /** 产品表单值 */
@@ -60,8 +62,7 @@ const ACTIVE_OPTIONS = [
 /** 新表单默认值 */
 function buildProductInitialValues(editing: IotProduct | null): Partial<ProductFormValues> {
   if (!editing) {
-    return {
-      auto_network: false,
+    return {      auto_network: false,
       net_config_mode: 'bluetooth',
       allow_share: false,
       active: true,
@@ -71,8 +72,7 @@ function buildProductInitialValues(editing: IotProduct | null): Partial<ProductF
     name: editing.name ?? '',
     code: editing.code ?? '',
     category: editing.category ?? '',
-    description: editing.description ?? '',
-    auto_network: editing.auto_network ?? false,
+    description: editing.description ?? '',    auto_network: editing.auto_network ?? false,
     net_config_mode: editing.net_config_mode || 'bluetooth',
     allow_share: editing.allow_share ?? false,
     active: editing.active ?? true,
@@ -105,11 +105,15 @@ export default function ProductList() {
   const [editing, setEditing] = useState<IotProduct | null>(null)
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm<ProductFormValues>()
-
   const [shareOpen, setShareOpen] = useState(false)
   const [sharing, setSharing] = useState<number | null>(null)
   const [shareProduct, setShareProduct] = useState<IotProduct | null>(null)
   const [shareQR, setShareQR] = useState<IotShareQRResp | null>(null)
+
+  const [credOpen, setCredOpen] = useState(false)
+  const [credLoading, setCredLoading] = useState<number | null>(null)
+  const [credProduct, setCredProduct] = useState<IotProduct | null>(null)
+  const [credData, setCredData] = useState<IotCredentials | null>(null)
 
   const [bindOpen, setBindOpen] = useState(false)
   const [bindProduct, setBindProduct] = useState<IotProduct | null>(null)
@@ -274,6 +278,26 @@ export default function ProductList() {
     }
   }
 
+  /** 拉取产品下全部服务组的明文鉴权信息（仅 `iot:product:update` 可调用） */
+  const handleCopyCredentials = async (row: IotProduct) => {
+    if (row.id == null) return
+    setCredLoading(row.id)
+    try {
+      const res = await IOTController.getIotProductCredentials(row.id)
+      if (res.code === 200 && res.data) {
+        setCredProduct(row)
+        setCredData(res.data)
+        setCredOpen(true)
+      } else {
+        message.error(res.message || '获取鉴权信息失败')
+      }
+    } catch (err) {
+      notifyError(err, '获取鉴权信息失败')
+    } finally {
+      setCredLoading(null)
+    }
+  }
+
   const openBind = async (row: IotProduct) => {
     if (row.id == null) return
     setBindProduct(row)
@@ -340,9 +364,20 @@ export default function ProductList() {
       render: (v?: boolean) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
     },
     {
-      title: '操作', key: 'action', width: 420, fixed: 'right',
+      title: '操作', key: 'action', width: 520, fixed: 'right',
       render: (_, row) => (
-        <ActionButtons maxWidth={420}>
+        <ActionButtons maxWidth={520}>
+          {canUpdate && (
+            <Button
+              type="link"
+              size="small"
+              icon={<KeyOutlined />}
+              loading={credLoading === row.id}
+              onClick={() => void handleCopyCredentials(row)}
+            >
+              复制鉴权
+            </Button>
+          )}
           {canUpdate && (
             <Tooltip title={row.allow_share ? undefined : '该产品未开启允许分享'}>
               <span>
@@ -381,6 +416,7 @@ export default function ProductList() {
     },
   ]
 
+  // 服务组由管理员按产品实际能力选择，平台不按「设备类型」过滤。
   const transferDataSource = allGroups.flatMap((group) => (
     group.id == null
       ? []
@@ -464,11 +500,13 @@ export default function ProductList() {
             </Form.Item>
           </Space>
           <Space size={16} style={{ width: '100%' }} align="start">
-            <Form.Item name="category" label="产品分类" style={{ width: 300 }}>
-              <Input placeholder="如：摄像头" maxLength={100} />
-            </Form.Item>
             <Form.Item name="net_config_mode" label="配网方式" style={{ width: 300 }}>
               <Select options={NET_CONFIG_OPTIONS} placeholder="请选择配网方式" />
+            </Form.Item>
+          </Space>
+          <Space size={16} style={{ width: '100%' }} align="start">
+            <Form.Item name="category" label="产品分类" style={{ width: 300 }}>
+              <Input placeholder="如：摄像头" maxLength={100} />
             </Form.Item>
           </Space>
           <Form.Item name="description" label="产品描述">
@@ -555,6 +593,13 @@ export default function ProductList() {
           listStyle={{ width: 300, height: 320 }}
         />
       </Modal>
+
+      <CredentialModal
+        open={credOpen}
+        title={credProduct ? `鉴权信息 - ${credProduct.name ?? ''}` : '鉴权信息'}
+        data={credData}
+        onClose={() => setCredOpen(false)}
+      />
     </PageContainer>
   )
 }

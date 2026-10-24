@@ -8,17 +8,23 @@ import type { BindIotProductServiceGroupsReq } from './definitions/BindIotProduc
 import type { CreateIotDeviceAccountReq } from './definitions/CreateIotDeviceAccountReq';
 import type { CreateIotProductReq } from './definitions/CreateIotProductReq';
 import type { CreateIotServiceGroupReq } from './definitions/CreateIotServiceGroupReq';
+import type { RIotCredentials } from './definitions/RIotCredentials';
 import type { RIotDeviceAccount } from './definitions/RIotDeviceAccount';
 import type { RIotDeviceAccountCreated } from './definitions/RIotDeviceAccountCreated';
 import type { RIotDeviceActivated } from './definitions/RIotDeviceActivated';
 import type { RIotDeviceDetail } from './definitions/RIotDeviceDetail';
+import type { RIotDeviceQR } from './definitions/RIotDeviceQR';
 import type { RIotDeviceSecret } from './definitions/RIotDeviceSecret';
+import type { RIotDeviceShareToken } from './definitions/RIotDeviceShareToken';
+import type { RIotGroupCredentials } from './definitions/RIotGroupCredentials';
 import type { RIotProduct } from './definitions/RIotProduct';
+import type { RIotProductUpdated } from './definitions/RIotProductUpdated';
 import type { RIotServiceGroup } from './definitions/RIotServiceGroup';
 import type { RIotServiceGroupCredentials } from './definitions/RIotServiceGroupCredentials';
 import type { RIotServiceGroupList } from './definitions/RIotServiceGroupList';
 import type { RIotServiceItemList } from './definitions/RIotServiceItemList';
 import type { RIotShareQR } from './definitions/RIotShareQR';
+import type { RIotShareTokenRevoked } from './definitions/RIotShareTokenRevoked';
 import type { RPageIotDevice } from './definitions/RPageIotDevice';
 import type { RPageIotProduct } from './definitions/RPageIotProduct';
 import type { RPageIotServiceGroup } from './definitions/RPageIotServiceGroup';
@@ -104,6 +110,17 @@ export class IOTController {
       });
     }
 
+    static getIotDeviceQRPath: string = "/web/iot/devices/{id}/qr";
+    /// 设备二维码
+    static async getIotDeviceQR(id: string | number, headers?: any): Promise<RIotDeviceQR> {
+      return request(`/web/iot/devices/${id}/qr`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: null,
+        headers,
+      });
+    }
+
     static resetIotDeviceSecretPath: string = "/web/iot/devices/{id}/reset-secret";
     /// 重置设备接入密钥
     static async resetIotDeviceSecret(id: string | number, headers?: any): Promise<RIotDeviceSecret> {
@@ -111,6 +128,27 @@ export class IOTController {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "POST",
         data: null,
+        headers,
+      });
+    }
+
+    static createIotDeviceShareTokenPath: string = "/web/iot/devices/{id}/share-token";
+    /// 生成设备分享令牌
+    static async createIotDeviceShareToken(id: string | number, headers?: any): Promise<RIotDeviceShareToken> {
+      return request(`/web/iot/devices/${id}/share-token`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: null,
+        headers,
+      });
+    }
+
+    static revokeIotDeviceShareTokenPath: string = "/web/iot/devices/{id}/share-token";
+    /// 撤销设备分享令牌
+    static async revokeIotDeviceShareToken(id: string | number, headers?: any): Promise<RIotShareTokenRevoked> {
+      return request(`/web/iot/devices/${id}/share-token`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "DELETE",
         headers,
       });
     }
@@ -148,7 +186,7 @@ export class IOTController {
 
     static updateIotProductPath: string = "/web/iot/products/{id}";
     /// 更新IOT产品
-    static async updateIotProduct(id: string | number, data: UpdateIotProductReq, headers?: any): Promise<BaseResponse> {
+    static async updateIotProduct(id: string | number, data: UpdateIotProductReq, headers?: any): Promise<RIotProductUpdated> {
       return request(`/web/iot/products/${id}`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "PUT",
@@ -163,6 +201,16 @@ export class IOTController {
       return request(`/web/iot/products/${id}`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "DELETE",
+        headers,
+      });
+    }
+
+    static getIotProductCredentialsPath: string = "/web/iot/products/{id}/credentials";
+    /// 产品明文鉴权信息
+    static async getIotProductCredentials(id: string | number, headers?: any): Promise<RIotCredentials> {
+      return request(`/web/iot/products/${id}/credentials`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
         headers,
       });
     }
@@ -247,6 +295,16 @@ export class IOTController {
       return request(`/web/iot/service-groups/${id}`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "DELETE",
+        headers,
+      });
+    }
+
+    static getIotServiceGroupCredentialsPath: string = "/web/iot/service-groups/{id}/credentials";
+    /// 服务组明文鉴权信息
+    static async getIotServiceGroupCredentials(id: string | number, headers?: any): Promise<RIotGroupCredentials> {
+      return request(`/web/iot/service-groups/${id}/credentials`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
         headers,
       });
     }
