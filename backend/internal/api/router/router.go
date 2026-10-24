@@ -53,6 +53,12 @@ func SetupRouter() *gin.Engine {
 	// 注册移动端路由
 	registerAppRoutes(r)
 
+	// 注册内部服务间 RPC（MQTT broker 鉴权等）：独立鉴权，不走 JWT/Casbin
+	registerRpcRoutes(r)
+
+	// 注册设备端 IOT 路由（无 JWT，X-Device-Code / X-Device-Secret 鉴权）
+	registerIotRoutes(r)
+
 	// 注册 ZLMediaKit 回调路由（独立路由组，不挂 JWT/Casbin）
 	registerMediaRoutes(r)
 

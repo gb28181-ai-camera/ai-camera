@@ -5,9 +5,11 @@ import type { AIModel } from './AIModel';
 import type { DeletedAt } from './DeletedAt';
 import type { Firmware } from './Firmware';
 import type { IotCard } from './IotCard';
+import type { IotProduct } from './IotProduct';
 import type { Region } from './Region';
 
 export type Device = Definition & {
+	activated_at?: string;
 	active?: boolean;
 	ai_model?: AIModel;
 	battery?: number;
@@ -19,6 +21,7 @@ export type Device = Definition & {
 	dept_id?: number;
 	device_code?: string;
 	device_mode?: string;
+	device_secret?: string;
 	firmware?: Firmware;
 	/** 版本与模式 */
 	firmware_id?: number;
@@ -44,6 +47,9 @@ export type Device = Definition & {
 	name?: string;
 	offline_dt?: string;
 	online_dt?: string;
+	product?: IotProduct;
+	/** ── IOT 管理接入（v0.3.0 新增 3 列）────────────────────────── 为什么复用本表：设备已被风险/告警/巡检/升级/国标等模块引用， 新建 IOT 设备表会导致同一台物理设备出现两套主键与两套生命周期。 IOT 只是在设备上追加「属于哪个产品、接入密钥、何时激活」。 device_secret 是设备端 OTA/激活的唯一凭据（无 JWT），属敏感字段： Web 读接口必须以 **** 返回，写接口收到空值/**** 时保持原值。 */
+	product_id?: number;
 	/** 关联对象（列表展示名称用） */
 	region?: Region;
 	region_id?: number;

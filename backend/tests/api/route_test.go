@@ -185,6 +185,41 @@ var contractGbRoutes = []string{
 	"POST /media/hook/on_record_mp4",
 }
 
+// contractIotRoutes 契约 §10.14「IOT 管理」的 Web 端点，格式 "METHOD /path"。
+//
+// 设备端 §10.15 的 /iot/ota 与 /iot/activate 不在这里：它们不挂 JWT/Casbin，
+// 与 /media/hook、/metrics 一样属于「基础设施/设备接入」端点，登记在 infraRoutes。
+var contractIotRoutes = []string{
+	// ── 产品 ──
+	"GET /web/iot/products",
+	"GET /web/iot/products/:id",
+	"POST /web/iot/products",
+	"PUT /web/iot/products/:id",
+	"DELETE /web/iot/products/:id",
+	"POST /web/iot/products/:id/share-qr",
+	"GET /web/iot/products/:id/service-groups",
+	"PUT /web/iot/products/:id/service-groups",
+
+	// ── 服务组 ──
+	"GET /web/iot/service-groups",
+	"GET /web/iot/service-groups/:id",
+	"POST /web/iot/service-groups",
+	"PUT /web/iot/service-groups/:id",
+	"DELETE /web/iot/service-groups/:id",
+	"POST /web/iot/service-groups/:id/reset-credentials",
+	"PUT /web/iot/service-groups/:id/items",
+
+	// ── 设备与账号 ──
+	"GET /web/iot/devices",
+	"GET /web/iot/devices/:id",
+	"POST /web/iot/devices/:id/accounts",
+	"PUT /web/iot/devices/:id/accounts/:accountId",
+	"DELETE /web/iot/devices/:id/accounts/:accountId",
+	"POST /web/iot/devices/:id/activate",
+	"POST /web/iot/devices/:id/reset-secret",
+	"PUT /web/iot/devices/:id/product",
+}
+
 // contractRoutes 契约 §3 列出的全部端点，格式 "METHOD /path"。
 var contractRoutes = []string{
 	// ── §3.1 公开接口 ──
@@ -470,6 +505,15 @@ var infraRoutes = map[string]bool{
 	// Prometheus 抓取端点：基础设施端点，不是业务 API，不属于契约范围。
 	// 预先登记，避免接入指标时被反向比对误判为「实现了契约未列出的端点」。
 	"GET /metrics": true,
+	// 设备端 IOT 接口（契约 §10.15）：无 JWT / 无 Casbin，用
+	// X-Device-Code + X-Device-Secret 鉴权，不属于 §3 的用户接口范围。
+	"POST /iot/ota":      true,
+	"POST /iot/activate": true,
+	// 内部服务间 RPC（MQTT broker 鉴权）：共享 token 鉴权，不属于用户 API 契约。
+	"POST /rpc/mqtt/auth": true,
+	"POST /rpc/mqtt/acl":  true,
+	// TURN 凭据签发：同样属于内部 RPC，不属于用户 API 契约。
+	"POST /rpc/turn/credentials": true,
 }
 
 // contractGaps 已实现、但契约 §3 尚未列出的端点（实现先行造成的偏差）。
@@ -515,8 +559,8 @@ func TestRouteTable_MatchesContract(t *testing.T) {
 		}
 	})
 
-	want := make(map[string]bool, len(contractRoutes)+len(contractGbRoutes))
-	for _, key := range append(append([]string{}, contractRoutes...), contractGbRoutes...) {
+	want := make(map[string]bool, len(contractRoutes)+len(contractGbRoutes)+len(contractIotRoutes))
+	for _, key := range append(append(append([]string{}, contractRoutes...), contractGbRoutes...), contractIotRoutes...) {
 		if want[key] {
 			t.Errorf("契约期望表内重复条目: %s", key)
 			continue

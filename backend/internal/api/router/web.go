@@ -71,6 +71,11 @@ func registerWebRoutes(r *gin.Engine) {
 	statsH := handler.NewStatsHandler()
 	uploadH := handler.NewUploadHandler()
 
+	// IOT 管理（产品 / 服务组 / 设备账号）
+	iotProductH := handler.NewIotProductHandler()
+	iotServiceGroupH := handler.NewIotServiceGroupHandler()
+	iotDeviceH := handler.NewIotDeviceHandler()
+
 	// 国标视频（GB/T 28181）业务 CRUD 层
 	gbDeviceH := handler.NewGbDeviceHandler()
 	gbChannelH := handler.NewGbChannelHandler()
@@ -439,5 +444,39 @@ func registerWebRoutes(r *gin.Engine) {
 		registerGbLiveRoutes(wAuth)
 		// 回放 / 录像 / 报警 / 位置 / 流代理 / 级联 / 语音 Agent：拆到 gb_ops.go
 		registerGbOpsRoutes(wAuth)
+
+		// ═══ IOT 管理 ═══
+		// 前缀 /web/iot 与设备端 /iot 是两套鉴权模型，详见 router/device.go。
+		wiot := wAuth.Group("/iot")
+		{
+			// 产品
+			wiot.GET("/products", iotProductH.Page)
+			wiot.GET("/products/:id", iotProductH.Get)
+			wiot.POST("/products", iotProductH.Create)
+			wiot.PUT("/products/:id", iotProductH.Update)
+			wiot.DELETE("/products/:id", iotProductH.Delete)
+			wiot.POST("/products/:id/share-qr", iotProductH.GenerateShareQR)
+			wiot.GET("/products/:id/service-groups", iotProductH.GetServiceGroups)
+			wiot.PUT("/products/:id/service-groups", iotProductH.BindServiceGroups)
+
+			// 服务组
+			wiot.GET("/service-groups", iotServiceGroupH.Page)
+			wiot.GET("/service-groups/:id", iotServiceGroupH.Get)
+			wiot.POST("/service-groups", iotServiceGroupH.Create)
+			wiot.PUT("/service-groups/:id", iotServiceGroupH.Update)
+			wiot.DELETE("/service-groups/:id", iotServiceGroupH.Delete)
+			wiot.POST("/service-groups/:id/reset-credentials", iotServiceGroupH.ResetCredentials)
+			wiot.PUT("/service-groups/:id/items", iotServiceGroupH.ReplaceItems)
+
+			// 设备与账号
+			wiot.GET("/devices", iotDeviceH.Page)
+			wiot.GET("/devices/:id", iotDeviceH.Get)
+			wiot.POST("/devices/:id/accounts", iotDeviceH.CreateAccount)
+			wiot.PUT("/devices/:id/accounts/:accountId", iotDeviceH.UpdateAccount)
+			wiot.DELETE("/devices/:id/accounts/:accountId", iotDeviceH.DeleteAccount)
+			wiot.POST("/devices/:id/activate", iotDeviceH.Activate)
+			wiot.POST("/devices/:id/reset-secret", iotDeviceH.ResetSecret)
+			wiot.PUT("/devices/:id/product", iotDeviceH.SetProduct)
+		}
 	}
 }

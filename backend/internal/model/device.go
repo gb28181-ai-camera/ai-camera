@@ -39,6 +39,18 @@ type Device struct {
 	// 物联网卡
 	IotCardID *int64 `gorm:"column:iot_card_id;comment:物联网卡ID" json:"iot_card_id"`
 
+	// ── IOT 管理接入（v0.3.0 新增 3 列）──────────────────────────
+	//
+	// 为什么复用本表：设备已被风险/告警/巡检/升级/国标等模块引用，
+	// 新建 IOT 设备表会导致同一台物理设备出现两套主键与两套生命周期。
+	// IOT 只是在设备上追加「属于哪个产品、接入密钥、何时激活」。
+	//
+	// device_secret 是设备端 OTA/激活的唯一凭据（无 JWT），属敏感字段：
+	// Web 读接口必须以 **** 返回，写接口收到空值/**** 时保持原值。
+	ProductID    *int64     `gorm:"column:product_id;index;comment:IOT产品ID" json:"product_id"`
+	DeviceSecret string     `gorm:"column:device_secret;size:255;comment:设备接入密钥(敏感,接口返回时脱敏)" json:"device_secret"`
+	ActivatedAt  *time.Time `gorm:"column:activated_at;comment:IOT主账号激活时间" json:"activated_at"`
+
 	// ── 国标接入（GB28181，v0.2.0 新增 13 列 + 2022 扩展 gb_version）──────
 	//
 	// ⚠️ gb_device_id 与 device_code 是**两个不同的 ID 命名空间**：
@@ -81,10 +93,11 @@ type Device struct {
 	DeptID *int64 `gorm:"column:dept_id;index;comment:所属部门(数据权限)" json:"dept_id"`
 
 	// 关联对象（列表展示名称用）
-	Region   *Region   `gorm:"foreignKey:RegionID;references:ID" json:"region,omitempty"`
-	IotCard  *IotCard  `gorm:"foreignKey:IotCardID;references:ID" json:"iot_card,omitempty"`
-	Firmware *Firmware `gorm:"foreignKey:FirmwareID;references:ID" json:"firmware,omitempty"`
-	AIModel  *AIModel  `gorm:"foreignKey:ModelID;references:ID" json:"ai_model,omitempty"`
+	Region   *Region     `gorm:"foreignKey:RegionID;references:ID" json:"region,omitempty"`
+	IotCard  *IotCard    `gorm:"foreignKey:IotCardID;references:ID" json:"iot_card,omitempty"`
+	Firmware *Firmware   `gorm:"foreignKey:FirmwareID;references:ID" json:"firmware,omitempty"`
+	AIModel  *AIModel    `gorm:"foreignKey:ModelID;references:ID" json:"ai_model,omitempty"`
+	Product  *IotProduct `gorm:"foreignKey:ProductID;references:ID;-:migration" json:"product,omitempty"`
 }
 
 func (Device) TableName() string { return "ac_device" }

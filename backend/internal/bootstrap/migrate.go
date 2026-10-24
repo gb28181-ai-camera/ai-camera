@@ -69,6 +69,17 @@ func AutoMigrate() {
 		&model.ThirdPartyConfig{},
 		&model.WebhookConfig{},
 
+		// ── IOT 管理（v0.3.0）──
+		// 设备复用 ac_device（Device 已在上方注册），此处只新增 6 张 IOT 表。
+		// 顺序：产品 → 服务组 → 服务项 → 产品绑定 → 设备账号 → 设备事件，
+		// 与 DDL 10-IOT管理.sql 保持一致，便于人工对照。
+		&model.IotProduct{},
+		&model.IotServiceGroup{},
+		&model.IotServiceItem{},
+		&model.IotProductService{},
+		&model.IotDeviceAccount{},
+		&model.IotDeviceEvent{},
+
 		// ── 国标视频（GB/T 28181，v0.2.0）──
 		// 注意：ac_gb_platform_group / ac_gb_platform_region 为纯关联表（无 active / 无 dept_id），
 		// 仍在列表中以便 AutoMigrate 建表与索引。GbSipLog 不嵌 BaseModel（追加写日志表）。
