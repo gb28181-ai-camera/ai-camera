@@ -28,6 +28,7 @@ import '../pages/risk/risk_detail_page.dart';
 import '../pages/risk/risk_handle_page.dart';
 import '../pages/risk/risk_list_page.dart';
 import '../pages/todos/todo_list_page.dart';
+import '../pages/voice/VoiceChatPage.dart';
 import '../utils/AppNavigator.dart';
 
 /// 应用路由表。
@@ -194,6 +195,14 @@ class AppRouter {
           name: 'notifications',
           builder: (BuildContext context, GoRouterState state) =>
               const NotificationListPage(),
+        ),
+
+        // ── 语音聊天（v0.6.0）：半双工 PCM16 对话 ──
+        GoRoute(
+          path: '/voice',
+          name: 'voiceChat',
+          builder: (BuildContext context, GoRouterState state) =>
+              const VoiceChatPage(),
         ),
 
         // ── 国标监控（GB/T 28181）：设备/通道浏览 → 实时播放 ──

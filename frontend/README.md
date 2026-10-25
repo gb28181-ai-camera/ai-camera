@@ -3,7 +3,7 @@
 AI 智能监控平台前端。**一个 npm 工程、三个构建目标**：管理后台（Web）、官网介绍页（Web）、
 桌面端（Electron 渲染进程）。
 
-> 当前版本: **v0.5.1** | 最后更新: 2026-10-25
+> 当前版本: **v0.6.0** | 最后更新: 2026-10-25
 
 ---
 
@@ -359,6 +359,25 @@ API 客户端为 `GbDeviceController`、`GbChannelController`、`GbPlayControlle
 - 新页面的设备列表复用 IOT 设备管理组件，通过 `service_group_type=webrtc|aichat` 过滤；
 - `MainLayout` 的菜单点击已补 `onClick → navigate(key)`；
 - 菜单/按钮权限仍由后端菜单树驱动，配置入口为 `/system/menu` 与 `/system/role`。
+
+---
+
+## 智能语音聊天（v0.6.0）
+
+`/voice/agent`（智能语音聊天 → 语音 Agent）包含 5 个页签：
+
+| Tab | 能力 |
+|:--|:--|
+| 基础 | STT/LLM/TTS/VAD provider 与 Pipecat 控制面 |
+| WebSocket | WS 开关、快速应答、设备唤醒、连接测试（ticket → Go 网关 → Pipecat hello） |
+| MCP | 工具列表/启用/风险等级/需确认、调用日志 |
+| 记忆 | 长期记忆列表/搜索/删除/CSV 导出 |
+| 观测 | Pipecat 地址/WS 状态/应用配置 |
+
+- 连接测试使用 `POST /web/voice/ws-ticket` 获取一次性 ticket，再连 `ws_url`；
+  浏览器不采集音频，只验证信令链路。
+- 密钥（`internal_mcp_token`、`embedding_api_key`）只写不读，读接口 `****`。
+- 旧 `/gb/org/voice-agent` 保留为兼容 re-export，菜单已指向 `/voice/agent`。
 
 ---
 

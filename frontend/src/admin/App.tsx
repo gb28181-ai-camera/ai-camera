@@ -146,7 +146,7 @@ const ROUTES: { path: string; page: LazyPage }[] = [
   // 智能语音聊天（AIChat 服务组）
   { path: 'voice/device', page: lazy(() => import('./pages/voice/AiChatDeviceList')) },
   { path: 'voice/service', page: lazy(() => import('./pages/voice/AiChatServiceSettings')) },
-  { path: 'voice/agent', page: lazy(() => import('./pages/gb/VoiceAgentConfig')) },
+  { path: 'voice/agent', page: lazy(() => import('./pages/voice/VoiceAgentConfig')) },
 
   // 统计分析
   { path: 'stats/risk', page: lazy(() => import('./pages/stats/RiskStats')) },

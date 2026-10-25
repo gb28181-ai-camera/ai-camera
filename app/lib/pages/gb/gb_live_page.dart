@@ -843,6 +843,11 @@ class _GbLivePageState extends State<GbLivePage>
     }
   }
 
+  /// 打开语音聊天（独立页面，不影响当前对讲会话）。
+  void _openVoiceChat() {
+    context.push('/voice');
+  }
+
   /// 结束对讲（离开页面 / 切后台时调用，不提示）。
   void _stopTalkQuietly() {
     final int? id = _channelId;
@@ -996,6 +1001,15 @@ class _GbLivePageState extends State<GbLivePage>
                       color: _talkSessionId == null
                           ? Colors.white
                           : AppColors.success,
+                    ),
+                  ),
+                  IconButton(
+                    key: const Key('gb-voice-fullscreen'),
+                    onPressed: _openVoiceChat,
+                    tooltip: '语音聊天',
+                    icon: const Icon(
+                      Icons.record_voice_over_outlined,
+                      color: Colors.white,
                     ),
                   ),
                 ],
@@ -1208,6 +1222,12 @@ class _GbLivePageState extends State<GbLivePage>
             busy: _talkBusy,
             active: _talkSessionId != null,
             onTap: _toggleTalk,
+          ),
+          _ToolButton(
+            key: const Key('gb-voice-chat'),
+            icon: Icons.record_voice_over_outlined,
+            label: '语音聊天',
+            onTap: _openVoiceChat,
           ),
           _ToolButton(
             key: const Key('gb-mqtt-toggle'),

@@ -6,7 +6,7 @@ AI Camera 智能监控平台的移动端 App，供**巡检人、区域负责人�
 后端接口统一挂在 `/app` 前缀下，响应格式 `{code, message, data}`，
 鉴权使用 `Authorization: Bearer <token>`。
 
-> 当前版本: **v0.5.1** | 最后更新: 2026-10-25
+> 当前版本: **v0.6.0** | 最后更新: 2026-10-25
 
 ---
 
@@ -368,6 +368,23 @@ radio = max(414 / 短边, 1)        ← 钳制为 1，即只缩不放
    只看 answer 会得到一个「播放中」的黑屏。
 2. **无论从哪条路径失败，都要显示具体原因并回退 FLV**；两条都失败时显示两段原因与重试按钮，
    不允许黑屏无提示。
+
+---
+
+## 智能语音聊天（v0.6.0）
+
+- 入口：首页顶部「语音聊天」、国标实时播放页对讲旁（`gb-voice-chat`）。
+- 链路：`POST /app/voice/ws-ticket` → `GET /app/voice/ws?ticket=...` →
+  Go 网关 → Pipecat `/ws/voice`。
+- 音频：PCM16 / 16kHz 上行、24kHz 下行；半双工，TTS 期间暂停麦克风 + 300ms 尾巴。
+- 功能：按住说话/点击开始、STT/LLM/TTS 字幕、MCP 工具提示、打断、断线重连。
+- 依赖：`record`（麦克风）、`flutter_sound`（PCM 边收边播）、`web_socket_channel`。
+- `flutter_sound` 为 MPL-2.0，需在合规清单登记。
+
+### 已知限制
+
+- 真机 AEC/回声、首包延迟、iOS/Android 音频焦点未验证。
+- App 端只实现 PCM16；ESP32 的 Opus 由设备端与 Pipecat 协商。
 
 ---
 

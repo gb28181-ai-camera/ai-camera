@@ -4,8 +4,14 @@ import type { Definition } from './Definition';
 
 export type UpdateVoiceAgentReq = Definition & {
 	barge_in?: boolean;
+	device_wake_word?: string;
+	embedding_api_key?: string;
+	embedding_endpoint?: string;
+	embedding_model?: string;
 	/** ExtraParams provider param_schema 中没有固定键的扩展参数（如 TTS 的 model、 Azure 的 region）。键为原始参数名（前端不带前缀），服务端统一加 `param_` 前缀落库，避免与上面的固定键冲突；nil 表示不修改。 */
 	extra_params?: Record<string, any>;
+	fast_ack_text?: string;
+	internal_mcp_token?: string;
 	llm_api_key?: string;
 	llm_endpoint?: string;
 	llm_max_tokens?: number;
@@ -14,6 +20,11 @@ export type UpdateVoiceAgentReq = Definition & {
 	llm_system_prompt?: string;
 	llm_temperature?: number;
 	max_session_sec?: number;
+	mcp_enabled?: boolean;
+	mcp_server_url?: string;
+	memory_enabled?: boolean;
+	memory_top_k?: number;
+	memory_ttl_days?: number;
 	pipecat_endpoint?: string;
 	pipecat_token?: string;
 	session_idle_timeout?: number;
@@ -29,4 +40,7 @@ export type UpdateVoiceAgentReq = Definition & {
 	tts_voice?: string;
 	vad_params?: string;
 	vad_provider?: string;
+	/** ── v0.6.0 WebSocket / MCP / 记忆 ────────────────────────── */
+	ws_enabled?: boolean;
+	ws_path?: string;
 }

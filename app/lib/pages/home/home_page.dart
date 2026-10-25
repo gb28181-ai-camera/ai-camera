@@ -128,6 +128,12 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           IconButton(
+            key: const Key('home-voice-entry'),
+            tooltip: '语音聊天',
+            onPressed: () => context.push('/voice'),
+            icon: const Icon(Icons.record_voice_over_outlined),
+          ),
+          IconButton(
             key: const Key('home-notification-entry'),
             onPressed: () => context.push('/notifications'),
             icon: Badge(
