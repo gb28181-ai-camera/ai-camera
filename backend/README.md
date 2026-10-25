@@ -6,7 +6,7 @@ Go 后端服务：Gin + GORM + PostgreSQL + Casbin，按 `Handler → Service �
 MQTT 鉴权与 WebRTC 信令、TURN/STUN 凭据签发；v0.4.0 对齐 WVP-GB28181-Pro 的
 设备配置/控制、媒体指标与流会话、日志 SSE、分享播放、录像合并等运维能力。
 
-> 当前版本: **v0.4.0** | 最后更新: 2026-10-25
+> 当前版本: **v0.5.0** | 最后更新: 2026-10-25
 
 ---
 
@@ -801,6 +801,9 @@ IOT 模块共 **39 条路由**（Web 29 + App 8 + 设备端 2），另有内部 
   `MD5(username:realm:password)`）；App 播放仍用 `/app/rtc/ice-servers` 的 REST 短期凭据。
   compose 与 K8s 已注入 `TURN_STATIC_AUTH_SECRET` / `TURN_REALM` / `TURN_URLS` /
   `TURN_TTL_SECONDS` / `TURN_RPC_TOKEN`。
+- **按服务组过滤设备（v0.5.0）**：`GET /web/iot/devices` 支持
+  `service_group_type=gb28181|webrtc|aichat`，通过「设备 → 产品 → 产品-服务组 →
+  服务组」过滤，供「实时音视频」「智能语音聊天」页面复用。
 
 > 设计依据：`docs/敏捷开发/v0.3.0 IOT与多协议接入/00-新增需求与设计.md`；
 > 契约见 `docs/开发文档/后端开发/00-接口契约.md` §10.14–§10.16。

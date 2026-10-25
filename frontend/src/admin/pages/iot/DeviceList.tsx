@@ -61,8 +61,18 @@ interface OneTimeCredential {
  *
  * 设备数据复用 `ac_device`，本页只维护 IOT 视角的字段：
  * 所属产品、激活状态（主账号）、接入密钥与分享账号。
+ *
+ * 「实时音视频」「智能语音聊天」复用本页，通过 serviceGroupType 只展示
+ * 产品绑定了对应服务组（webrtc / aichat）的设备。
  */
-export default function DeviceList() {
+export interface DeviceListProps {
+  /** 按产品绑定的服务组类型过滤；不传表示全部 IOT 设备。 */
+  serviceGroupType?: 'webrtc' | 'aichat'
+  title?: string
+  subTitle?: string
+}
+
+export default function DeviceList({ serviceGroupType, title, subTitle }: DeviceListProps = {}) {
   const permCodes = useAuthStore((s) => s.permCodes)
   const canUpdate = permCodes.includes('iot:device:update')
   const canActivate = permCodes.includes('iot:device:activate')
@@ -159,7 +169,7 @@ export default function DeviceList() {
     setLoading(true)
     try {
       const res = await IOTController.pageIotDevices(
-        page, pageSize, keyword || undefined, productFilter, statusFilter,
+        page, pageSize, keyword || undefined, productFilter, statusFilter, serviceGroupType,
       )
       const items = res.data?.items ?? []
       setData(items)
@@ -170,7 +180,7 @@ export default function DeviceList() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, keyword, productFilter, statusFilter, loadOwners])
+  }, [page, pageSize, keyword, productFilter, statusFilter, serviceGroupType, loadOwners])
 
   useEffect(() => { void fetchData() }, [fetchData])
   useEffect(() => { void fetchProducts() }, [fetchProducts])
@@ -695,8 +705,22 @@ export default function DeviceList() {
 
   return (
     <PageContainer
-      title="设备管理"
-      subTitle="维护设备的所属产品、主账号激活与接入密钥；设备数据与平台设备共用一套"
+      title={
+        title
+        ?? (serviceGroupType === 'webrtc'
+          ? '实时音视频设备'
+          : serviceGroupType === 'aichat'
+            ? '智能语音聊天设备'
+            : '设备管理')
+      }
+      subTitle={
+        subTitle
+        ?? (serviceGroupType === 'webrtc'
+          ? '仅展示产品已绑定 WebRTC 服务组的设备；可维护产品、主账号与接入密钥'
+          : serviceGroupType === 'aichat'
+            ? '仅展示产品已绑定 AIChat 服务组的设备；可维护产品、主账号与接入密钥'
+            : '维护设备的所属产品、主账号激活与接入密钥；设备数据与平台设备共用一套')
+      }
     >
       <SearchBar
         fields={[

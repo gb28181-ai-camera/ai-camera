@@ -3,7 +3,7 @@
 AI 智能监控平台前端。**一个 npm 工程、三个构建目标**：管理后台（Web）、官网介绍页（Web）、
 桌面端（Electron 渲染进程）。
 
-> 当前版本: **v0.4.0** | 最后更新: 2026-10-25
+> 当前版本: **v0.5.0** | 最后更新: 2026-10-25
 
 ---
 
@@ -341,6 +341,24 @@ API 客户端为 `GbDeviceController`、`GbChannelController`、`GbPlayControlle
 - E2E 已有 `e2e/smoke/11a-gb-device.spec.ts` ~ `11d-gb-platform-voice.spec.ts`（共 20 个页面级用例），
   `99-all-list-page.spec.ts` 已包含 19 条 `/gb/*` 路由；
 - 页面已定义 35 个 `e2e-gb-*` class（清单见页面文档 §7），新增 E2E 时应直接复用。
+
+---
+
+## 运营后台信息架构（v0.5.0）
+
+一级目录：
+
+1. **首页**
+2. **系统管理** —— 账号与权限、基础信息、告警设置、第三方平台
+3. **物联网管理** —— 产品、服务组、设备、设备资源、升级管理、设备监控
+4. **国标视频** —— GB28181 设备/通道、播放与录像、报警与位置、流媒体运维、级联、组织管理
+5. **实时音视频** —— WebRTC 服务组设备管理、服务设置（`/av/device`、`/av/service`）
+6. **智能语音聊天** —— AIChat 服务组设备管理、服务设置、语音 Agent（`/voice/*`）
+7. **AI 智能分析** —— 实时监控、AI 风险/监控、风险监控、巡检中心、统计分析
+
+- 新页面的设备列表复用 IOT 设备管理组件，通过 `service_group_type=webrtc|aichat` 过滤；
+- `MainLayout` 的菜单点击已补 `onClick → navigate(key)`；
+- 菜单/按钮权限仍由后端菜单树驱动，配置入口为 `/system/menu` 与 `/system/role`。
 
 ---
 

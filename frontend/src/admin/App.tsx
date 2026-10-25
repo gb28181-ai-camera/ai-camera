@@ -139,6 +139,15 @@ const ROUTES: { path: string; page: LazyPage }[] = [
   { path: 'gb/org/group', page: lazy(() => import('./pages/gb/GbGroupTree')) },
   { path: 'gb/org/voice-agent', page: lazy(() => import('./pages/gb/VoiceAgentConfig')) },
 
+  // 实时音视频（WebRTC 服务组）
+  { path: 'av/device', page: lazy(() => import('./pages/av/WebRtcDeviceList')) },
+  { path: 'av/service', page: lazy(() => import('./pages/av/WebRtcServiceSettings')) },
+
+  // 智能语音聊天（AIChat 服务组）
+  { path: 'voice/device', page: lazy(() => import('./pages/voice/AiChatDeviceList')) },
+  { path: 'voice/service', page: lazy(() => import('./pages/voice/AiChatServiceSettings')) },
+  { path: 'voice/agent', page: lazy(() => import('./pages/gb/VoiceAgentConfig')) },
+
   // 统计分析
   { path: 'stats/risk', page: lazy(() => import('./pages/stats/RiskStats')) },
   { path: 'stats/alarm', page: lazy(() => import('./pages/stats/AlarmStats')) },

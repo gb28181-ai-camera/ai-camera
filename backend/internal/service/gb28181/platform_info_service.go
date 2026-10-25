@@ -27,7 +27,7 @@ import (
 //
 // 与 CHANGE_LOG 保持一致；构建信息里的 module version 在本地构建时
 // 通常是 "(devel)"，因此以常量为主、构建信息为辅。
-const PlatformVersion = "v0.4.0"
+const PlatformVersion = "v0.5.0"
 
 // platformStartedAt 进程启动时间（包初始化即记录）。
 var platformStartedAt = time.Now()

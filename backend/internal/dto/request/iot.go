@@ -115,6 +115,9 @@ type PageIotDeviceReq struct {
 	Keyword   string `form:"keyword" json:"keyword" example:"CAM"`
 	ProductID *int64 `form:"product_id" json:"product_id"`
 	Status    string `form:"status" json:"status" example:"online"`
+	// ServiceGroupType 按产品绑定的服务组类型过滤：webrtc / aichat / gb28181。
+	// 「实时音视频」「智能语音聊天」页面用它复用同一个设备列表接口。
+	ServiceGroupType string `form:"service_group_type" json:"service_group_type" example:"webrtc"`
 }
 
 // CreateIotDeviceAccountReq 新增设备账号。

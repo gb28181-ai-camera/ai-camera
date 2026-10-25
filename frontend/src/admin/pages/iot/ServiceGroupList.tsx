@@ -72,8 +72,16 @@ interface ServicesFormValues {
  *
  * 服务组是系统预置的三条固定数据（gb28181 / webrtc / aichat），不开放新增/删除；
  * 页面只维护「组内服务」与组名称。服务凭据在产品页按「产品×服务」生成。
+ *
+ * 「实时音视频」「智能语音聊天」复用本页并通过 groupType 固定只显示对应服务组。
  */
-export default function ServiceGroupList() {
+export interface ServiceGroupListProps {
+  groupType?: 'webrtc' | 'aichat'
+  title?: string
+  subTitle?: string
+}
+
+export default function ServiceGroupList({ groupType, title, subTitle }: ServiceGroupListProps = {}) {
   const permCodes = useAuthStore((s) => s.permCodes)
   const canUpdate = permCodes.includes('iot:service-group:update')
 
@@ -83,7 +91,7 @@ export default function ServiceGroupList() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
-  const [typeFilter, setTypeFilter] = useState<string | undefined>(undefined)
+  const [typeFilter, setTypeFilter] = useState<string | undefined>(groupType)
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<IotServiceGroup | null>(null)
@@ -100,7 +108,7 @@ export default function ServiceGroupList() {
     setLoading(true)
     try {
       const res = await IOTController.pageIotServiceGroups(
-        page, pageSize, keyword || undefined, typeFilter || undefined, undefined,
+        page, pageSize, keyword || undefined, groupType ?? typeFilter ?? undefined, undefined,
       )
       setData(res.data?.items ?? [])
       setTotal(Number(res.data?.total ?? 0))
@@ -109,19 +117,21 @@ export default function ServiceGroupList() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, keyword, typeFilter])
+  }, [page, pageSize, keyword, typeFilter, groupType])
 
   useEffect(() => { void fetchData() }, [fetchData])
 
   const handleSearch = (values: Record<string, unknown>) => {
     setKeyword(typeof values.keyword === 'string' ? values.keyword : '')
-    setTypeFilter(typeof values.type === 'string' && values.type ? values.type : undefined)
+    if (!groupType) {
+      setTypeFilter(typeof values.type === 'string' && values.type ? values.type : undefined)
+    }
     setPage(1)
   }
 
   const handleReset = () => {
     setKeyword('')
-    setTypeFilter(undefined)
+    if (!groupType) setTypeFilter(undefined)
     setPage(1)
   }
 
@@ -323,13 +333,29 @@ export default function ServiceGroupList() {
 
   return (
     <PageContainer
-      title="服务组"
-      subTitle="系统预置 GB28181 / WebRTC / AIChat 三条服务组；被产品引用后只读，需先解绑"
+      title={
+        title
+        ?? (groupType === 'webrtc'
+          ? '实时音视频服务设置'
+          : groupType === 'aichat'
+            ? '智能语音聊天服务设置'
+            : '服务组')
+      }
+      subTitle={
+        subTitle
+        ?? (groupType === 'webrtc'
+          ? '维护 WebRTC 服务组下的服务地址与端口；被产品引用后只读，需先解绑'
+          : groupType === 'aichat'
+            ? '维护 AIChat 服务组下的 WebSocket 接入地址；被产品引用后只读，需先解绑'
+            : '系统预置 GB28181 / WebRTC / AIChat 三条服务组；被产品引用后只读，需先解绑')
+      }
     >
       <SearchBar
         fields={[
           { name: 'keyword', label: '关键字', placeholder: '请输入名称/编码' },
-          { name: 'type', label: '类型', type: 'select', options: TYPE_OPTIONS },
+          ...(groupType
+            ? []
+            : [{ name: 'type', label: '类型', type: 'select' as const, options: TYPE_OPTIONS }]),
         ]}
         onSearch={handleSearch}
         onReset={handleReset}

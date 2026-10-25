@@ -167,7 +167,7 @@ type GbDependencyStatus struct {
 
 // GbPlatformInfoResp 平台运行信息。
 type GbPlatformInfoResp struct {
-	Version            string                       `json:"version" example:"v0.4.0"`
+	Version            string                       `json:"version" example:"v0.5.0"`
 	BuildVersion       string                       `json:"build_version"`
 	BuildTime          string                       `json:"build_time"`
 	GoVersion          string                       `json:"go_version" example:"go1.26.0"`
