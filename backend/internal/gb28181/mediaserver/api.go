@@ -399,18 +399,23 @@ func (c *Client) CloseStreams(ctx context.Context, app, stream string) error {
 // IsStreamReady 判断流是否在线（isMediaOnline）。
 //
 // 前端「流已就绪」提示与编排侧 10s 超时判定都用它。
+//
+// schema 缺省为 rtsp：新版 ZLM（2026-09 之后的 master）把 schema 变成必填参数，
+// 不传会直接返回 -300「Required parameter missed」，点播因此白等 10 秒后超时。
+// RTP 收流在 ZLM 里注册的 schema 就是 rtsp，故这里统一兜底，调用方无需关心。
 func (c *Client) IsStreamReady(ctx context.Context, app, stream, schema, vhost string) (bool, error) {
+	if schema == "" {
+		schema = "rtsp"
+	}
 	params := map[string]any{
-		"vhost": vhostOr(vhost),
+		"vhost":  vhostOr(vhost),
+		"schema": schema,
 	}
 	if app != "" {
 		params["app"] = app
 	}
 	if stream != "" {
 		params["stream"] = stream
-	}
-	if schema != "" {
-		params["schema"] = schema
 	}
 	resp, err := c.doResponse(ctx, "isMediaOnline", params)
 	if err != nil {
