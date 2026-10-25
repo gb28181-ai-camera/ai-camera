@@ -9,7 +9,6 @@ import {
   InputNumber,
   List,
   Modal,
-  Select,
   Space,
   Spin,
   Tag,
@@ -27,7 +26,8 @@ import {
   StopOutlined,
 } from '@ant-design/icons'
 import PageContainer from '../../components/PageContainer'
-import LivePlayer, { type LiveProtocol } from '../../components/LivePlayer'
+import LivePlayerTabs from '../../components/LivePlayerTabs'
+import GbPtzAdvancedModal from '../../components/GbPtzAdvancedModal'
 import PtzControl, { type PtzDirection, type PtzPresetAction, type PtzRunAction, type PtzZoomAction } from '../../components/PtzControl'
 import { GbDeviceController } from '../../api/generated/GbDeviceController'
 import { GbChannelController } from '../../api/generated/GbChannelController'
@@ -42,6 +42,7 @@ import type { GbHomePositionResp } from '../../api/generated/definitions/GbHomeP
 import type { GbPlayResp } from '../../api/generated/definitions/GbPlayResp'
 import type { GbPtzPositionResp } from '../../api/generated/definitions/GbPtzPositionResp'
 import type { GbPtzPreciseReq } from '../../api/generated/definitions/GbPtzPreciseReq'
+import type { GbPresetItem } from '../../api/generated/definitions/GbPresetItem'
 import type { GbSDCardStatusResp } from '../../api/generated/definitions/GbSDCardStatusResp'
 import type { GbSnapshotResp } from '../../api/generated/definitions/GbSnapshotResp'
 import { useAuthStore } from '../../store/authStore'
@@ -89,6 +90,16 @@ const LivePlay: React.FC = () => {
   const canSnap = permCodes.includes('gb:live:snap')
   const canBroadcast = permCodes.includes('gb:live:broadcast')
   const canTalk = permCodes.includes('gb:live:talk')
+  /** 雨刷（PTZCmd 0x8C/0x8D）；权限码由种子数据补入 ac_menu */
+  const canWiper = permCodes.includes('gb:ptz:wiper')
+  // 云台高级操作（巡航点 / 扫描边界 / 预置位重命名）
+  const canPresetUpdate = permCodes.includes('gb:ptz:preset-update')
+  const canCruisePointCreate = permCodes.includes('gb:ptz:cruise-point:create')
+  const canCruisePointUpdate = permCodes.includes('gb:ptz:cruise-point:update')
+  const canCruisePointDelete = permCodes.includes('gb:ptz:cruise-point:delete')
+  const canScanBounds = permCodes.includes('gb:ptz:scan-bounds')
+  const canPtzAdvanced =
+    canCruisePointCreate || canCruisePointUpdate || canCruisePointDelete || canScanBounds
   // GB/T 28181-2022 扩展按钮（权限码已写入 ac_menu，仅 2022 设备可用）
   const canPosition = permCodes.includes('gb:live:ptz-position')
   const canPrecise = permCodes.includes('gb:live:ptz-precise')
@@ -103,12 +114,16 @@ const LivePlay: React.FC = () => {
   const [treeLoading, setTreeLoading] = useState(false)
   const [selectedChannel, setSelectedChannel] = useState<GbChannelItem | null>(null)
   const [playInfo, setPlayInfo] = useState<GbPlayResp | null>(null)
-  const [protocol, setProtocol] = useState<LiveProtocol>('webrtc')
   const [starting, setStarting] = useState(false)
   const [playError, setPlayError] = useState('')
   const [snapshot, setSnapshot] = useState<GbSnapshotResp | null>(null)
   const [broadcasting, setBroadcasting] = useState(false)
   const [talking, setTalking] = useState(false)
+  /** 平台侧预置位（含名称），随通道切换重新拉取 */
+  const [presets, setPresets] = useState<GbPresetItem[]>([])
+  const [presetsLoading, setPresetsLoading] = useState(false)
+  /** 云台高级操作（巡航点 / 扫描边界）弹窗 */
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   // ── GB/T 28181-2022 扩展查询状态 ──
   const [ptzPosition, setPtzPosition] = useState<GbPtzPositionResp | null>(null)
@@ -158,6 +173,24 @@ const LivePlay: React.FC = () => {
   useEffect(() => {
     void loadTree()
   }, [loadTree])
+
+  /**
+   * 拉取平台侧预置位列表（含名称）。
+   *
+   * 名称来自 `ac_gb_ptz_preset`，设备侧只认编号；列表失败不影响云台其他操作，
+   * 因此这里静默降级为空列表（按钮仍可按 1..8 编号操作）。
+   */
+  const loadPresets = useCallback(async (channelId: number) => {
+    setPresetsLoading(true)
+    try {
+      const res = await GbPtzController.listGbPtzPresets(channelId)
+      setPresets(res.data ?? [])
+    } catch {
+      setPresets([])
+    } finally {
+      setPresetsLoading(false)
+    }
+  }, [])
 
   /** 停止实时播放：仅当拿到了后端返回的 stream_id 时才发 stop 请求 */
   const stopPlaySession = useCallback(async () => {
@@ -226,7 +259,18 @@ const LivePlay: React.FC = () => {
     setSdCard(null)
     setCompat2022('')
     setPreciseOpen(false)
+    setAdvancedOpen(false)
   }, [selectedChannel?.id])
+
+  // 切换通道时重新拉取预置位名称；未选通道或无云台权限则清空
+  useEffect(() => {
+    const channelId = selectedChannel?.id
+    if (!channelId || !canPtz) {
+      setPresets([])
+      return
+    }
+    void loadPresets(channelId)
+  }, [selectedChannel?.id, canPtz, loadPresets])
 
   const handlePlay = useCallback(
     async (channel: GbChannelItem) => {
@@ -253,7 +297,9 @@ const LivePlay: React.FC = () => {
       await stopVoiceSessions()
 
       try {
-        const res = await GbPlayController.playGbChannel(channel.id, { protocol })
+        // 后端始终返回 webrtc / flv / hls 三个地址；协议选择交给前端播放器页签，
+        // 切换引擎不再重新 INVITE（re-INVITE 会重建 SIP 会话并造成黑屏）。
+        const res = await GbPlayController.playGbChannel(channel.id, {})
         const data = res.data
         // 请求期间用户又切了通道 / 点了停止：本次响应已过期，立即停掉迟到建立的流
         if (playRequestRef.current !== requestId) {
@@ -277,7 +323,7 @@ const LivePlay: React.FC = () => {
         setStarting(false)
       }
     },
-    [canPlay, protocol, stopPlaySession, stopVoiceSessions],
+    [canPlay, stopPlaySession, stopVoiceSessions],
   )
 
   const handleTreeSelect = (keys: React.Key[]) => {
@@ -380,40 +426,95 @@ const LivePlay: React.FC = () => {
     })
   }
 
-  const handlePtzPreset = (action: PtzPresetAction, presetIndex: number) => {
+  /**
+   * 预置位：调用 / 设置 / 删除。
+   *
+   * 设置时必须带名称（平台侧持久化到 `ac_gb_ptz_preset`，不下发设备），
+   * 不允许再写死「预置位N」；设置/删除成功后刷新列表，让按钮直接显示名称。
+   */
+  const handlePtzPreset = async (
+    action: PtzPresetAction,
+    presetIndex: number,
+    name?: string,
+  ) => {
     if (!ptzChannelId) return
-    if (action === 'goto') {
-      // 调用预置位走 PTZCmd 0x82，与设置(0x81)/删除(0x83)是三条独立命令码。
-      // 必须有这个分支，否则「预置位」只有存没有用。
-      void GbPtzController.gotoGbPtzPreset(ptzChannelId, presetIndex).catch(() => {
+    try {
+      if (action === 'goto') {
+        // 调用预置位走 PTZCmd 0x82，与设置(0x81)/删除(0x83)是三条独立命令码。
+        // 必须有这个分支，否则「预置位」只有存没有用。
+        await GbPtzController.gotoGbPtzPreset(ptzChannelId, presetIndex)
+        return
+      }
+      if (action === 'set') {
+        const presetName = name?.trim()
+        if (!presetName) {
+          message.warning('请先填写预置位名称')
+          return
+        }
+        await GbPtzController.addGbPtzPreset(ptzChannelId, {
+          action: 'set',
+          preset_id: presetIndex,
+          name: presetName,
+        })
+        message.success(`预置位 ${presetIndex} 已设置`)
+        await loadPresets(ptzChannelId)
+        return
+      }
+      await GbPtzController.deleteGbPtzPreset(ptzChannelId, presetIndex)
+      message.success(`预置位 ${presetIndex} 已删除`)
+      await loadPresets(ptzChannelId)
+    } catch {
+      /* 拦截器已提示 */
+    }
+  }
+
+  /**
+   * 重命名预置位：只更新平台侧 `ac_gb_ptz_preset.name`，不下发设备指令，
+   * 因此设备离线也可改名。
+   */
+  const handleRenamePreset = async (presetIndex: number, name: string) => {
+    if (!ptzChannelId) return
+    const presetName = name?.trim()
+    if (!presetName) {
+      message.warning('请先填写预置位新名称')
+      return
+    }
+    try {
+      await GbPtzController.renameGbPtzPreset(ptzChannelId, presetIndex, { name: presetName })
+      message.success(`预置位 ${presetIndex} 已重命名`)
+      await loadPresets(ptzChannelId)
+    } catch {
+      /* 拦截器已提示 */
+    }
+  }
+
+  /** 巡航 / 扫描：组号由调用方选择（后端 group_id 1–255） */
+  const handlePtzRun = (kind: 'cruise' | 'scan', action: PtzRunAction, groupId: number) => {
+    if (!ptzChannelId) return
+    if (kind === 'cruise') {
+      void GbPtzController.cruiseGbPtz(ptzChannelId, { action, group_id: groupId }).catch(() => {
         /* 拦截器已提示 */
       })
       return
     }
-    if (action === 'set') {
-      void GbPtzController.addGbPtzPreset(ptzChannelId, {
-        action: 'set',
-        preset_id: presetIndex,
-        name: `预置位${presetIndex}`,
-      }).catch(() => {
-        /* 拦截器已提示 */
-      })
-      return
-    }
-    void GbPtzController.deleteGbPtzPreset(ptzChannelId, presetIndex).catch(() => {
+    void GbPtzController.scanGbPtz(ptzChannelId, { action, group_id: groupId }).catch(() => {
       /* 拦截器已提示 */
     })
   }
 
-  const handlePtzRun = (kind: 'cruise' | 'scan', action: PtzRunAction) => {
+  /**
+   * 雨刷开关。
+   *
+   * 后端 DTO 是 `GbPtzWiperReq{on: boolean}`（PTZCmd 0x8C 开 / 0x8D 关），
+   * 字段名以 `backend/internal/dto/request/gb28181_play.go` 为准。
+   */
+  const handlePtzWiper = (on: boolean) => {
     if (!ptzChannelId) return
-    if (kind === 'cruise') {
-      void GbPtzController.cruiseGbPtz(ptzChannelId, { action, group_id: 1 }).catch(() => {
-        /* 拦截器已提示 */
-      })
+    if (!canWiper) {
+      message.warning('当前账号没有雨刷控制权限')
       return
     }
-    void GbPtzController.scanGbPtz(ptzChannelId, { action, group_id: 1 }).catch(() => {
+    void GbPtzController.wiperGbPtz(ptzChannelId, { on }).catch(() => {
       /* 拦截器已提示 */
     })
   }
@@ -653,6 +754,7 @@ const LivePlay: React.FC = () => {
                   <Tag color={channelStatusMeta(selectedChannel.status).color}>
                     {channelStatusMeta(selectedChannel.status).text}
                   </Tag>
+                  {playInfo?.codec ? <Tag color="blue">{playInfo.codec}</Tag> : null}
                 </Space>
               ) : (
                 '播放窗口'
@@ -660,19 +762,6 @@ const LivePlay: React.FC = () => {
             }
             extra={
               <Space wrap>
-                <Select<LiveProtocol>
-                  size="small"
-                  value={protocol}
-                  style={{ width: 150 }}
-                  options={[
-                    { label: 'WebRTC（低延迟）', value: 'webrtc' },
-                    { label: 'HTTP-FLV（兼容）', value: 'flv' },
-                  ]}
-                  onChange={(value) => {
-                    setProtocol(value)
-                    setPlayError('')
-                  }}
-                />
                 <Button
                   size="small"
                   icon={<PlayCircleOutlined />}
@@ -728,7 +817,7 @@ const LivePlay: React.FC = () => {
                 description={
                   <span>
                     {playError}
-                    {protocol === 'webrtc' ? '（WebRTC 不通时可切换为 HTTP-FLV 重试）' : ''}
+                    {'（可在播放器页签切换引擎，或等待默认引擎自动回落）'}
                   </span>
                 }
               />
@@ -746,18 +835,25 @@ const LivePlay: React.FC = () => {
               }}
             >
               {playInfo ? (
-                <LivePlayer
+                <LivePlayerTabs
                   app={playInfo.app}
                   stream={playInfo.stream}
                   httpBase={playInfo.http_base}
-                  protocol={protocol}
+                  // 后端一次返回三种地址；页签切换只换前端引擎，不重新 INVITE
+                  urls={{
+                    webrtc: playInfo.webrtc,
+                    flv: playInfo.flv,
+                    hls: playInfo.hls,
+                  }}
+                  codec={playInfo.codec}
+                  allowSwitch
                   objectFit="contain"
                   style={{ width: '100%', height: '100%' }}
                   onError={(error) => setPlayError(error.message)}
-                  onProtocolChange={(used) => {
+                  onEngineChange={(engine, reason) => {
                     setPlayError('')
-                    if (used === 'flv') {
-                      message.info('WebRTC 连接失败，已自动切换为 HTTP-FLV')
+                    if (reason === 'fallback') {
+                      message.info(`默认播放引擎不可用，已自动切换为 ${engine}`)
                     }
                   }}
                 />
@@ -783,17 +879,34 @@ const LivePlay: React.FC = () => {
             title="云台控制"
             style={{ marginTop: 12 }}
             extra={
-              canPtz ? null : <Typography.Text type="secondary">无云台操作权限</Typography.Text>
+              canPtz ? (
+                canPtzAdvanced ? (
+                  <Button
+                    size="small"
+                    className="e2e-gb-ptz-advanced-btn"
+                    disabled={!selectedChannel}
+                    onClick={() => setAdvancedOpen(true)}
+                  >
+                    高级操作
+                  </Button>
+                ) : null
+              ) : (
+                <Typography.Text type="secondary">无云台操作权限</Typography.Text>
+              )
             }
           >
             {canPtz ? (
               <PtzControl
                 disabled={!selectedChannel}
+                presets={presets}
+                presetsLoading={presetsLoading}
+                onRenamePreset={canPresetUpdate ? handleRenamePreset : undefined}
                 onCommand={handlePtzCommand}
                 onZoom={handlePtzZoom}
                 onPreset={handlePtzPreset}
-                onCruise={(action) => handlePtzRun('cruise', action)}
-                onScan={(action) => handlePtzRun('scan', action)}
+                onCruise={(action, groupId) => handlePtzRun('cruise', action, groupId)}
+                onScan={(action, groupId) => handlePtzRun('scan', action, groupId)}
+                onWiper={canWiper ? handlePtzWiper : undefined}
               />
             ) : (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前账号未授予云台控制权限" />
@@ -1081,6 +1194,18 @@ const LivePlay: React.FC = () => {
           </div>
         </Space>
       </Modal>
+
+      {/* 云台高级操作：巡航点（0x84–0x87）与扫描边界（0x89/0x8A） */}
+      <GbPtzAdvancedModal
+        open={advancedOpen}
+        channelId={ptzChannelId}
+        presets={presets}
+        canCreatePoint={canCruisePointCreate}
+        canUpdatePoint={canCruisePointUpdate}
+        canDeletePoint={canCruisePointDelete}
+        canScanBounds={canScanBounds}
+        onClose={() => setAdvancedOpen(false)}
+      />
     </PageContainer>
   )
 }

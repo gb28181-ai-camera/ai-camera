@@ -6,7 +6,6 @@ import {
   DatePicker,
   Empty,
   Select,
-  Slider,
   Space,
   Table,
   Tag,
@@ -18,7 +17,9 @@ import { PlayCircleOutlined, StopOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import PageContainer from '../../components/PageContainer'
 import ActionButtons from '../../components/ActionButtons'
-import LivePlayer from '../../components/LivePlayer'
+import LivePlayerTabs from '../../components/LivePlayerTabs'
+import VideoTimeLine from '../../components/VideoTimeLine'
+import { PLAYER_ENGINE_LABELS } from '../../lib/playerEngines'
 import { GbChannelController } from '../../api/generated/GbChannelController'
 import { GbPlaybackController } from '../../api/generated/GbPlaybackController'
 import type { GbRecordItem } from '../../api/generated/definitions/GbRecordItem'
@@ -221,6 +222,35 @@ const Playback: React.FC = () => {
     return Math.max(0, end.diff(start, 'second'))
   }, [session])
 
+  /** 按引擎覆盖播放地址：后端已返回 webrtc/flv/hls/ws_flv 时直接用，缺失的由前端按 app/stream 拼装 */
+  const playbackUrls = useMemo(() => {
+    if (!session) return undefined
+    return {
+      webrtc: session.webrtc,
+      flv: session.flv,
+      hls: session.hls,
+      jessibuca: session.ws_flv,
+      h265web: session.ws_flv,
+    }
+  }, [session])
+
+  /** 把查询到的录像片段换算成「相对本次回放起点」的秒数，供时间轴绘制 */
+  const timelineSegments = useMemo(() => {
+    if (!session?.start_time || durationSeconds <= 0) return []
+    const sessionStart = dayjs(session.start_time)
+    if (!sessionStart.isValid()) return []
+    const mapped: { start: number; end: number }[] = records.flatMap((record) => {
+      if (!record.start_time || !record.end_time) return []
+      const recordStart = dayjs(record.start_time)
+      const recordEnd = dayjs(record.end_time)
+      if (!recordStart.isValid() || !recordEnd.isValid()) return []
+      const start = Math.max(0, recordStart.diff(sessionStart, 'second'))
+      const end = Math.min(durationSeconds, recordEnd.diff(sessionStart, 'second'))
+      return end > start ? [{ start, end }] : []
+    })
+    return mapped.length > 0 ? mapped : [{ start: 0, end: durationSeconds }]
+  }, [records, session, durationSeconds])
+
   // 无进度回调：用一个本地计时器驱动进度条（仅 UI 参考值，不作为精确播放位置）
   useEffect(() => {
     if (!session || paused) return undefined
@@ -386,17 +416,20 @@ const Playback: React.FC = () => {
           }}
         >
           {session ? (
-            <LivePlayer
+            <LivePlayerTabs
               app={session.app}
               stream={session.stream}
               httpBase={session.http_base}
-              protocol="webrtc"
+              urls={playbackUrls}
+              defaultEngine="webrtc"
               objectFit="contain"
               style={{ width: '100%', height: '100%' }}
+              onFirstFrame={() => setVideoError('')}
               onError={(error) => setVideoError(error.message)}
-              onProtocolChange={(used) => {
+              onEngineChange={(engine, reason) => {
+                if (reason !== 'fallback') return
                 setVideoError('')
-                if (used === 'flv') message.info('WebRTC 连接失败，已自动切换为 HTTP-FLV')
+                message.info(`默认播放引擎不可用，已切换到 ${PLAYER_ENGINE_LABELS[engine]}`)
               }}
             />
           ) : (
@@ -437,18 +470,18 @@ const Playback: React.FC = () => {
               {formatDuration(position)} / {formatDuration(durationSeconds)}
             </Typography.Text>
           </Space>
-          <Slider
-            min={0}
-            max={Math.max(1, durationSeconds)}
-            value={Math.min(position, Math.max(1, durationSeconds))}
+          <VideoTimeLine
+            segments={timelineSegments}
+            duration={durationSeconds}
+            current={position}
             disabled={!session || !canControl || durationSeconds <= 0}
-            tooltip={{ formatter: (value) => formatDuration(value) }}
-            onChange={(value: number) => setPosition(value)}
-            onAfterChange={(value: number) => void handleSeek(value)}
+            onSeek={(value) => void handleSeek(value)}
           />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            回放控制通过带内 SIP INFO（MANSRTSP）下发，与云台控制不是同一接口。
-          </Typography.Text>
+          <div style={{ marginTop: 4 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              回放控制通过带内 SIP INFO（MANSRTSP）下发，与云台控制不是同一接口。时间轴支持点击、拖拽与滚轮缩放。
+            </Typography.Text>
+          </div>
         </div>
       </Card>
     </PageContainer>

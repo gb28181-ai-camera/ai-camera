@@ -44,6 +44,9 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 
 const Login = lazy(() => import('./pages/Login'))
 
+/** 国标免登录分享播放页：顶层路由，不在 ProtectedRoute 内（匿名可访问） */
+const GbSharePlayPage = lazy(() => import('./pages/gb/GbSharePlayPage'))
+
 /**
  * 业务路由表（全部懒加载）。
  * path 为相对于 `/`（MainLayout）的子路由，与 `pages/` 目录结构一一对应。
@@ -129,6 +132,8 @@ const ROUTES: { path: string; page: LazyPage }[] = [
   { path: 'gb/ops/stream-proxy', page: lazy(() => import('./pages/gb/StreamProxyList')) },
   { path: 'gb/ops/stream-push', page: lazy(() => import('./pages/gb/StreamPushList')) },
   { path: 'gb/ops/sip-log', page: lazy(() => import('./pages/gb/SipLogList')) },
+  { path: 'gb/ops/platform-info', page: lazy(() => import('./pages/gb/PlatformInfo')) },
+  { path: 'gb/ops/logs', page: lazy(() => import('./pages/gb/GbLogList')) },
   { path: 'gb/platform/list', page: lazy(() => import('./pages/gb/PlatformList')) },
   { path: 'gb/platform/channel', page: lazy(() => import('./pages/gb/PlatformChannelList')) },
   { path: 'gb/org/group', page: lazy(() => import('./pages/gb/GbGroupTree')) },
@@ -157,6 +162,8 @@ function AppRoutes() {
           <Route key={path} path={path} element={<Page />} />
         ))}
       </Route>
+      {/* 免登录分享播放页：必须与 /login 同级，不能放进 ProtectedRoute */}
+      <Route path="/share/gb/:token" element={<GbSharePlayPage />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   )

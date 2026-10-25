@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Spin } from 'antd'
 import { CloseCircleOutlined } from '@ant-design/icons'
+import type { ErrorData } from 'hls.js'
 
 /**
  * 直播播放器内核：WebRTC(WHEP) 优先 / HTTP-FLV 兜底 / HLS 保底。
@@ -399,12 +400,79 @@ async function startFlv(
 }
 
 /**
- * 直接交给浏览器原生播放（mp4 / Safari 的原生 HLS）。
+ * 启动 HLS 播放：
+ * 1. 优先使用 hls.js（Chromium / Electron / Firefox，支持 MSE）；
+ * 2. 不支持 MSE 时退回浏览器原生 HLS（Safari / iOS）；
+ * 3. 两者都不可用时抛错——**不要静默失败**。
  *
- * ⚠️ 设计 §7.4 为 HLS 指定的前端库是 `hls.js`，**当前未安装**（本批交付只加了 `mpegts.js`）。
- * 因此 `hls` / `native` 两条路径都走这里的原生实现：Chrome / Electron 下能播 mp4，
- * 但 **HLS（.m3u8）在 Chromium 内核里原生不支持**。若要在浏览器播放 ZLM 的 HLS，
- * 需 `npm i hls.js` 并在此分支接入（改动量约 20 行）。
+ * 引擎按需动态引入，非 HLS 场景不加载该 chunk。
+ */
+async function startHls(
+  video: HTMLVideoElement,
+  url: string,
+  isDisposed: () => boolean,
+  onRuntimeError: (error: Error) => void,
+): Promise<() => void> {
+  const { default: Hls } = await import('hls.js')
+  if (isDisposed()) throw new Error('已取消播放')
+
+  if (Hls.isSupported()) {
+    const hls = new Hls({
+      // 直播低延迟优先：细分片、追帧
+      lowLatencyMode: true,
+      enableWorker: true,
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 5,
+    })
+
+    let released = false
+    const handleError = (_event: unknown, data: ErrorData) => {
+      if (!data.fatal) return
+      let message = `HLS 播放失败（${String(data.type)}: ${String(data.details)}）`
+      if (data.type === 'networkError') message = 'HLS 网络错误：无法获取播放列表或分片'
+      if (data.type === 'mediaError') message = 'HLS 媒体错误：分片解码失败'
+      onRuntimeError(new Error(message))
+    }
+    hls.on(Hls.Events.ERROR, handleError)
+
+    const release = () => {
+      if (released) return
+      released = true
+      try {
+        hls.off(Hls.Events.ERROR, handleError)
+      } catch {
+        /* 已销毁 */
+      }
+      try {
+        hls.destroy()
+      } catch {
+        /* 已销毁 */
+      }
+    }
+
+    try {
+      hls.loadSource(url)
+      hls.attachMedia(video)
+      await video.play().catch(() => {
+        /* 自动播放被拦截 */
+      })
+      return release
+    } catch (error) {
+      release()
+      throw toError(error)
+    }
+  }
+
+  // 原生 HLS（Safari / iOS）
+  if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    return startNative(video, url, isDisposed, onRuntimeError)
+  }
+
+  throw new Error('当前浏览器不支持 HLS：hls.js 不可用，且不支持原生 HLS 播放')
+}
+
+/**
+ * 直接交给浏览器原生播放（mp4 / Safari 的原生 HLS）。
  */
 async function startNative(
   video: HTMLVideoElement,
@@ -520,6 +588,12 @@ export default function LivePlayer({
         return startFlv(video, playAddress, isDisposed, (error) => {
           if (isDisposed()) return
           reportError(error, 'flv')
+        })
+      }
+      if (target === 'hls') {
+        return startHls(video, playAddress, isDisposed, (error) => {
+          if (isDisposed()) return
+          reportError(error, 'hls')
         })
       }
       return startNative(video, playAddress, isDisposed, (error) => {

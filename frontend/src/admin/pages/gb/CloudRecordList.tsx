@@ -17,21 +17,38 @@ import type { ColumnsType } from 'antd/es/table'
 import {
   DeleteOutlined,
   DownloadOutlined,
+  MergeCellsOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  ShareAltOutlined,
   StarFilled,
   StarOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import PageContainer from '../../components/PageContainer'
 import ActionButtons from '../../components/ActionButtons'
-import LivePlayer from '../../components/LivePlayer'
+import LivePlayerTabs from '../../components/LivePlayerTabs'
 import { GbChannelController } from '../../api/generated/GbChannelController'
 import { GbCloudRecordController } from '../../api/generated/GbCloudRecordController'
 import type { GbCloudRecordItem } from '../../api/generated/definitions/GbCloudRecordItem'
 import type { GbCloudRecordPlayResp } from '../../api/generated/definitions/GbCloudRecordPlayResp'
 import type { OptionItem } from '../../api/generated/definitions/OptionItem'
 import { useAuthStore } from '../../store/authStore'
+import { downloadCloudRecords } from './GbCloudRecordDownload'
+import GbMergeTaskModal from './GbMergeTaskModal'
+import GbShareModal from './GbShareModal'
+
+/** 播放地址：只透出后端实际返回的协议地址，空值不占用引擎位。 */
+function buildPlayUrls(
+  info: GbCloudRecordPlayResp | null,
+): Partial<Record<'webrtc' | 'flv' | 'hls', string>> | undefined {
+  if (!info) return undefined
+  const urls: Partial<Record<'webrtc' | 'flv' | 'hls', string>> = {}
+  if (info.webrtc) urls.webrtc = info.webrtc
+  if (info.flv) urls.flv = info.flv
+  if (info.hls) urls.hls = info.hls
+  return urls
+}
 
 function fmtDT(value?: string | null): string {
   if (!value) return '-'
@@ -81,6 +98,8 @@ const CloudRecordList: React.FC = () => {
   const canDownload = permCodes.includes('gb:cloud-record:download')
   const canCollect = permCodes.includes('gb:cloud-record:collect')
   const canDelete = permCodes.includes('gb:cloud-record:delete')
+  const canShare = permCodes.includes('gb:share:list') || permCodes.includes('gb:share:create')
+  const canMerge = permCodes.includes('gb:cloud-record:merge')
 
   const [channelOptions, setChannelOptions] = useState<OptionItem[]>([])
   const [channelId, setChannelId] = useState<number | undefined>()
@@ -94,6 +113,9 @@ const CloudRecordList: React.FC = () => {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [downloading, setDownloading] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [mergeOpen, setMergeOpen] = useState(false)
 
   const [playOpen, setPlayOpen] = useState(false)
   const [playLoading, setPlayLoading] = useState(false)
@@ -117,6 +139,12 @@ const CloudRecordList: React.FC = () => {
         return [{ label: `${item.name ?? item.id}${code}`, value: item.id }]
       }),
     [channelOptions],
+  )
+
+  /** 当前筛选通道的名称（分享弹窗标题使用） */
+  const selectedChannelName = useMemo(
+    () => channelOptions.find((item) => item.id === channelId)?.name ?? undefined,
+    [channelOptions, channelId],
   )
 
   const loadDates = useCallback(async () => {
@@ -209,7 +237,7 @@ const CloudRecordList: React.FC = () => {
       }
       window.open(url, '_blank', 'noopener,noreferrer')
       if (res.data?.packaging === false) {
-        message.info('本期仅支持单文件直接下载，不做合并/切片/打包')
+        message.info('该录像按单文件直接下载；需要打包多个文件请使用「下载选中」')
       }
     } catch {
       /* 拦截器已提示 */
@@ -240,6 +268,27 @@ const CloudRecordList: React.FC = () => {
       void loadDates()
     } catch {
       /* 拦截器已提示 */
+    }
+  }
+
+  /** 下载选中：1 条走直链，多条走后端流式 zip（见 GbCloudRecordDownload）。 */
+  const handleBatchDownload = async () => {
+    if (selectedIds.length === 0) return
+    setDownloading(true)
+    try {
+      const result = await downloadCloudRecords(selectedIds)
+      if (selectedIds.length > 1) {
+        message.success(`已开始打包下载 ${selectedIds.length} 条录像`)
+      } else {
+        message.success('已开始下载')
+      }
+      if (result.skipped.length > 0) {
+        message.warning(`以下录像不可下载，已跳过：${result.skipped.join('、')}`)
+      }
+    } catch (error) {
+      message.error(extractErrorMessage(error, '下载失败'))
+    } finally {
+      setDownloading(false)
     }
   }
 
@@ -358,6 +407,35 @@ const CloudRecordList: React.FC = () => {
             刷新
           </Button>
           <Button
+            className="e2e-gb-cloud-record-batch-download"
+            icon={<DownloadOutlined />}
+            loading={downloading}
+            disabled={!canDownload || selectedIds.length === 0}
+            onClick={() => void handleBatchDownload()}
+          >
+            下载选中
+          </Button>
+          {canMerge ? (
+            <Button
+              className="e2e-gb-merge-open-btn"
+              icon={<MergeCellsOutlined />}
+              onClick={() => setMergeOpen(true)}
+            >
+              合并任务
+            </Button>
+          ) : null}
+          {canShare ? (
+            <Button
+              className="e2e-gb-share-open-btn"
+              icon={<ShareAltOutlined />}
+              disabled={!channelId}
+              title={channelId ? undefined : '请先在筛选栏选择一个通道'}
+              onClick={() => setShareOpen(true)}
+            >
+              分享
+            </Button>
+          ) : null}
+          <Button
             disabled={!canCollect || selectedIds.length === 0}
             onClick={() => void handleBatchCollect(true)}
           >
@@ -468,17 +546,24 @@ const CloudRecordList: React.FC = () => {
           {playLoading ? (
             <Spin />
           ) : playInfo ? (
-            <LivePlayer
+            <LivePlayerTabs
               app={playInfo.app}
               stream={playInfo.stream}
               httpBase={playInfo.http_base}
-              protocol="webrtc"
+              urls={buildPlayUrls(playInfo)}
               objectFit="contain"
               style={{ width: '100%', height: '100%' }}
               onError={(error) => setPlayError(error.message)}
-              onProtocolChange={(used) => {
+              onEngineChange={(_engine, reason) => {
+                if (reason === 'manual') {
+                  setPlayError('')
+                  return
+                }
                 setPlayError('')
-                if (used === 'flv') message.info('WebRTC 连接失败，已自动切换为 HTTP-FLV')
+                message.info('默认播放引擎不可用，已自动切换')
+              }}
+              onStatusChange={(next) => {
+                if (next === 'playing') setPlayError('')
               }}
             />
           ) : (
@@ -486,6 +571,21 @@ const CloudRecordList: React.FC = () => {
           )}
         </div>
       </Modal>
+
+      {/* 云端录像合并任务（多选 -> ffmpeg concat） */}
+      <GbMergeTaskModal
+        open={mergeOpen}
+        selectedIds={selectedIds}
+        onClose={() => setMergeOpen(false)}
+      />
+
+      {/* 通道免登录分享令牌管理 */}
+      <GbShareModal
+        open={shareOpen}
+        channelId={channelId}
+        channelName={selectedChannelName}
+        onClose={() => setShareOpen(false)}
+      />
     </PageContainer>
   )
 }

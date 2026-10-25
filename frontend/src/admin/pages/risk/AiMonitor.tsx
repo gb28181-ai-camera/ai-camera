@@ -8,7 +8,7 @@ import RegionSelect from '../../components/RegionSelect'
 import DeviceSelect from '../../components/DeviceSelect'
 import StatusTag from '../../components/StatusTag'
 import EmptyState from '../../components/EmptyState'
-import LivePlayer from '../../components/LivePlayer'
+import LivePlayerTabs from '../../components/LivePlayerTabs'
 import { RiskController } from '../../api/generated/RiskController'
 import { DeviceController } from '../../api/generated/DeviceController'
 import type { RiskRecord } from '../../api/generated/definitions/RiskRecord'
@@ -191,11 +191,11 @@ const AiMonitor: React.FC = () => {
             }}
           >
             {device && streamUrl && !offline ? (
-              // 播放器内核统一走 LivePlayer。现有 stream_url 是整串地址，按扩展名自动选内核；
-              // 接入国标后应改为传 httpBase + stream + protocol="webrtc"（单画面走低延迟主协议）。
+              // AI 监控是单画面场景，默认走 WebRTC 低延迟主协议，允许手动切换其他引擎。
               // 容器高度不定（minHeight），故这里显式给高度，避免 100% 高度解析为 0
-              <LivePlayer
+              <LivePlayerTabs
                 url={streamUrl}
+                defaultEngine="webrtc"
                 controls
                 style={{ width: '100%', height: 480 }}
               />

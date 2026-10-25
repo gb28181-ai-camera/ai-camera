@@ -2,10 +2,13 @@ import React, {
   forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
 } from 'react'
 import {
-  Button, DatePicker, Descriptions, Form, Image, Input, message, Modal, Popconfirm, Space, Table, Tag,
+  Badge, Button, DatePicker, Descriptions, Form, Image, Input, message, Modal, Popconfirm, Space,
+  Switch, Table, Tag, Tooltip,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { CameraOutlined, DeleteOutlined, EyeOutlined, ToolOutlined } from '@ant-design/icons'
+import {
+  CameraOutlined, DeleteOutlined, EyeOutlined, ReloadOutlined, ToolOutlined,
+} from '@ant-design/icons'
 import type { Dayjs } from 'dayjs'
 import axios from 'axios'
 import PageContainer from '../../components/PageContainer'
@@ -13,10 +16,12 @@ import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
 import DeviceSelect from '../../components/DeviceSelect'
 import { GbAlarmController } from '../../api/generated/GbAlarmController'
+import { GbOpsController } from '../../api/generated/GbOpsController'
 import type { GbAlarmItem } from '../../api/generated/definitions/GbAlarmItem'
 import type { GbAlarmDetailResp } from '../../api/generated/definitions/GbAlarmDetailResp'
 import { useAuthStore } from '../../store/authStore'
 import { formatDT } from '../../types/business'
+import { backoffDelay, buildSseUrl, sleep, streamSse } from './GbSse'
 
 const { RangePicker } = DatePicker
 
@@ -118,12 +123,20 @@ const GbAlarmList: React.FC = () => {
   const canHandle = permCodes.includes('gb:alarm:handle')
   const canSnap = permCodes.includes('gb:alarm:snap')
   const canDelete = permCodes.includes('gb:alarm:delete')
+  const canStream = permCodes.includes('gb:alarm:stream')
 
   const [data, setData] = useState<GbAlarmItem[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+
+  /** 实时推送（SSE）状态：连接中 / 已连通 / 退避重连中 / 已暂停 */
+  const [realtimeOn, setRealtimeOn] = useState(true)
+  const [sseStatus, setSseStatus] = useState<'connecting' | 'live' | 'reconnecting' | 'paused'>('paused')
+  const [retryIn, setRetryIn] = useState(0)
+  const [unhandledCount, setUnhandledCount] = useState(0)
+  const [unhandledLoading, setUnhandledLoading] = useState(false)
 
   const [keyword, setKeyword] = useState('')
   const [handled, setHandled] = useState<boolean | undefined>()
@@ -171,6 +184,99 @@ const GbAlarmList: React.FC = () => {
 
   useEffect(() => { void fetchData() }, [fetchData])
 
+  /** 抓取未处理报警总数（只取 1 条，复用分页接口的 total）。 */
+  const refreshUnhandled = useCallback(async () => {
+    setUnhandledLoading(true)
+    try {
+      const res = await GbAlarmController.pageGbAlarms(
+        1, 1, undefined, undefined, undefined, undefined, undefined, false,
+      )
+      setUnhandledCount(Number(res.data?.total ?? 0))
+    } catch {
+      // 轮询失败不打断页面；拦截器已按需提示
+    } finally {
+      setUnhandledLoading(false)
+    }
+  }, [])
+
+  // 首屏与筛选变化后仍要展示未处理数量（与 SSE 是否可用无关）
+  useEffect(() => { void refreshUnhandled() }, [refreshUnhandled])
+
+  /**
+   * 报警 SSE。
+   *
+   * - 用 fetch + ReadableStream 读取（EventSource 无法携带 JWT）；
+   * - 收到 `alarm` 事件后合并刷新列表与未处理数（400ms 去抖，避免突发报警打爆接口）；
+   * - 断线指数退避重连（2s→4s→…→30s），切换「暂停」或卸载时 abort。
+   */
+  const refreshRef = useRef({ fetchData, refreshUnhandled })
+  useEffect(() => {
+    refreshRef.current = { fetchData, refreshUnhandled }
+  })
+
+  const alarmRefreshTimer = useRef<number | null>(null)
+  const scheduleAlarmRefresh = useCallback(() => {
+    if (alarmRefreshTimer.current !== null) return
+    alarmRefreshTimer.current = window.setTimeout(() => {
+      alarmRefreshTimer.current = null
+      void refreshRef.current.fetchData()
+      void refreshRef.current.refreshUnhandled()
+    }, 400)
+  }, [])
+
+  useEffect(() => () => {
+    if (alarmRefreshTimer.current !== null) {
+      window.clearTimeout(alarmRefreshTimer.current)
+      alarmRefreshTimer.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!realtimeOn || !canStream) {
+      setSseStatus('paused')
+      return undefined
+    }
+
+    const controller = new AbortController()
+    let attempt = 0
+
+    const run = async () => {
+      while (!controller.signal.aborted) {
+        setSseStatus(attempt === 0 ? 'connecting' : 'reconnecting')
+        try {
+          await streamSse(
+            buildSseUrl(GbOpsController.streamGbAlarmsPath),
+            controller.signal,
+            (message) => {
+              if (message.event === 'ready') {
+                attempt = 0
+                setRetryIn(0)
+                setSseStatus('live')
+                void refreshRef.current.refreshUnhandled()
+                return
+              }
+              if (message.event === 'alarm') {
+                scheduleAlarmRefresh()
+              }
+            },
+          )
+        } catch {
+          // 连接失败/中断：统一走下面的退避逻辑
+        }
+        if (controller.signal.aborted) break
+
+        attempt += 1
+        const delay = backoffDelay(attempt)
+        setRetryIn(Math.round(delay / 1000))
+        setSseStatus('reconnecting')
+        await sleep(delay, controller.signal)
+      }
+    }
+
+    void run()
+    return () => controller.abort()
+  }, [realtimeOn, canStream, scheduleAlarmRefresh])
+
   const handleSearch = (values: Record<string, unknown>) => {
     setKeyword(typeof values.keyword === 'string' ? values.keyword : '')
     setHandled(typeof values.handled === 'boolean' ? values.handled : undefined)
@@ -217,6 +323,7 @@ const GbAlarmList: React.FC = () => {
       setHandleOpen(false)
       setDetailOpen(false)
       void fetchData()
+      void refreshUnhandled()
     } catch (err) {
       message.error(apiErrorMessage(err, '处理报警失败'))
     } finally {
@@ -256,6 +363,7 @@ const GbAlarmList: React.FC = () => {
       setSelectedRowKeys([])
       setDetailOpen(false)
       void fetchData()
+      void refreshUnhandled()
     } catch (err) {
       message.error(apiErrorMessage(err, '清除报警失败'))
     }
@@ -360,10 +468,60 @@ const GbAlarmList: React.FC = () => {
 
   const detailMeta = detail ? priorityMeta(detail.alarm_priority) : null
 
+  const sseStatusMeta = (() => {
+    switch (sseStatus) {
+      case 'live':
+        return { text: '实时中', color: 'green' }
+      case 'connecting':
+        return { text: '连接中', color: 'blue' }
+      case 'reconnecting':
+        return { text: retryIn > 0 ? `${retryIn} 秒后重连` : '重连中', color: 'orange' }
+      default:
+        return { text: '已暂停', color: 'default' }
+    }
+  })()
+
   return (
     <PageContainer
       title="国标报警"
       subTitle="国标设备主动上报的报警查询、抓图与处理"
+      extra={
+        <Space wrap>
+          <Tooltip
+            title={
+              canStream
+                ? '实时报警（SSE）：收到新报警后自动刷新列表与未处理数；断线自动退避重连'
+                : '当前账号无「实时报警」权限（gb:alarm:stream）'
+            }
+          >
+            <Space size={8}>
+              <Switch
+                className="e2e-gb-alarm-realtime-switch"
+                checked={realtimeOn && canStream}
+                disabled={!canStream}
+                onChange={(checked) => setRealtimeOn(checked)}
+                checkedChildren="实时"
+                unCheckedChildren="暂停"
+              />
+              <Tag className="e2e-gb-alarm-stream-status" color={sseStatusMeta.color}>
+                {sseStatusMeta.text}
+              </Tag>
+              <span className="e2e-gb-alarm-realtime-badge">
+                <Badge count={unhandledCount} showZero color="#fa8c16" overflowCount={999}>
+                  <Tag color="orange" style={{ marginInlineEnd: 0 }}>未处理</Tag>
+                </Badge>
+              </span>
+            </Space>
+          </Tooltip>
+          <Button
+            icon={<ReloadOutlined />}
+            loading={unhandledLoading}
+            onClick={() => { void fetchData(); void refreshUnhandled() }}
+          >
+            刷新
+          </Button>
+        </Space>
+      }
     >
       <SearchBar
         fields={[

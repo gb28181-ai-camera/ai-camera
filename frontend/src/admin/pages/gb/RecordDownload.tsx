@@ -22,11 +22,16 @@ import dayjs, { type Dayjs } from 'dayjs'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
+import SelectorModal from '../../components/SelectorModal'
+import type { SelectorFetchParams, SelectorFetchResult } from '../../components/SelectorModal'
 import { GbChannelController } from '../../api/generated/GbChannelController'
 import { GbPlaybackController } from '../../api/generated/GbPlaybackController'
+import { GbCloudRecordController } from '../../api/generated/GbCloudRecordController'
+import type { GbCloudRecordItem } from '../../api/generated/definitions/GbCloudRecordItem'
 import type { GbDownloadItem } from '../../api/generated/definitions/GbDownloadItem'
 import type { OptionItem } from '../../api/generated/definitions/OptionItem'
 import { useAuthStore } from '../../store/authStore'
+import { downloadCloudRecords } from './GbCloudRecordDownload'
 
 const { RangePicker } = DatePicker
 
@@ -94,7 +99,7 @@ const DownloadFormContent = forwardRef<DownloadFormHandle, DownloadFormContentPr
         <Alert
           type="info"
           showIcon
-          message="下载任务保存在服务进程内存，重启会丢失；本期只做单文件直接下载，不做合并打包。"
+          message="下载任务保存在服务进程内存，重启会丢失；设备侧录像按单文件直接下载，需要打包请使用页面右上角「打包下载云端录像」。"
         />
       </Form>
     )
@@ -131,6 +136,30 @@ function statusMeta(status?: string): { text: string; color: string } {
   }
 }
 
+/** 秒数 → HH:mm:ss */
+function formatDuration(totalSeconds?: number): string {
+  if (totalSeconds === undefined || totalSeconds === null || Number.isNaN(totalSeconds)) return '-'
+  const sec = Math.max(0, Math.floor(totalSeconds))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(Math.floor(sec / 3600))}:${pad(Math.floor((sec % 3600) / 60))}:${pad(sec % 60)}`
+}
+
+/** 云端录像多选列（复用「云端录像」页面的字段口径）。 */
+const cloudRecordColumns: ColumnsType<GbCloudRecordItem> = [
+  {
+    title: '通道',
+    dataIndex: 'channel_name',
+    width: 180,
+    ellipsis: true,
+    render: (_: string | undefined, row) =>
+      row.channel_name || row.device_name || (row.channel_id ? `通道 ${row.channel_id}` : '-'),
+  },
+  { title: '开始时间', dataIndex: 'start_time', width: 170, render: (v?: string) => fmtDT(v) },
+  { title: '结束时间', dataIndex: 'end_time', width: 170, render: (v?: string) => fmtDT(v) },
+  { title: '时长', dataIndex: 'time_len', width: 100, render: (v?: number) => formatDuration(v) },
+  { title: '文件', dataIndex: 'file_name', width: 220, ellipsis: true, render: (v?: string) => v || '-' },
+]
+
 /**
  * 录像下载：设备侧录像按时间段下载到 ZLM 落盘。
  *
@@ -141,6 +170,7 @@ const RecordDownload: React.FC = () => {
   const permCodes = useAuthStore((s) => s.permCodes)
   const canStart = permCodes.includes('gb:record-download:start')
   const canCancel = permCodes.includes('gb:record-download:cancel')
+  const canCloudDownload = permCodes.includes('gb:cloud-record:download')
 
   const [channelOptions, setChannelOptions] = useState<OptionItem[]>([])
   const [data, setData] = useState<GbDownloadItem[]>([])
@@ -199,6 +229,35 @@ const RecordDownload: React.FC = () => {
     }, 5000)
     return () => window.clearInterval(timer)
   }, [hasDownloading, fetchData])
+
+  /* ── 云端录像打包下载（复用现有 ?ids= zip 接口） ── */
+  const fetchCloudRecords = useCallback(async ({
+    page: p, page_size, keyword: kw,
+  }: SelectorFetchParams): Promise<SelectorFetchResult<GbCloudRecordItem>> => {
+    const res = await GbCloudRecordController.pageGbCloudRecords(p, page_size, kw)
+    return { items: res.data?.items ?? [], total: Number(res.data?.total ?? 0) }
+  }, [])
+
+  const submitCloudZip = async (rows: GbCloudRecordItem[]) => {
+    const ids = rows.flatMap((row) => (row.id === undefined ? [] : [row.id]))
+    if (ids.length === 0) {
+      message.warning('请选择要下载的云端录像')
+      return
+    }
+    try {
+      const result = await downloadCloudRecords(ids)
+      if (ids.length > 1) {
+        message.success(`已开始打包下载 ${ids.length} 条云端录像`)
+      } else {
+        message.success('已开始下载')
+      }
+      if (result.skipped.length > 0) {
+        message.warning(`以下录像不可下载，已跳过：${result.skipped.join('、')}`)
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '云端录像下载失败')
+    }
+  }
 
   const openCreate = () => setModalOpen(true)
 
@@ -329,9 +388,25 @@ const RecordDownload: React.FC = () => {
       title="录像下载"
       subTitle="按通道与时间段把设备侧录像下载到媒体服务器"
       extra={
-        <Button type="primary" icon={<PlusOutlined />} disabled={!canStart} onClick={openCreate}>
-          开始下载
-        </Button>
+        <Space wrap>
+          <SelectorModal<GbCloudRecordItem>
+            className="e2e-gb-cloud-record-zip-modal"
+            triggerText="打包下载云端录像"
+            title="选择云端录像（可多选，打包为 zip 下载）"
+            mode="multiple"
+            columns={cloudRecordColumns}
+            fetchData={fetchCloudRecords}
+            rowKey="id"
+            searchPlaceholder="请输入通道名称 / 设备名称 / 文件名"
+            width={960}
+            disabled={!canCloudDownload}
+            onOk={(rows) => void submitCloudZip(rows)}
+            onCancel={() => { /* 受控开关由 SelectorModal 内部管理 */ }}
+          />
+          <Button type="primary" icon={<PlusOutlined />} disabled={!canStart} onClick={openCreate}>
+            开始下载
+          </Button>
+        </Space>
       }
     >
       <Alert

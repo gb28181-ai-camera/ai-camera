@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Divider, Segmented, Slider, Space, Tooltip } from 'antd'
+import { Button, Divider, Input, InputNumber, Segmented, Slider, Space, Spin, Tooltip } from 'antd'
 import {
   ArrowDownOutlined,
   ArrowLeftOutlined,
@@ -44,8 +44,23 @@ export type PtzZoomAction = 'zoom-in' | 'zoom-out' | 'zoom-stop'
 
 export type PtzPresetAction = 'goto' | 'set' | 'delete'
 
+/** 预置位面板的动作：调用 / 设置 / 删除 / 重命名（重命名仅平台侧，不下发设备） */
+type PtzPresetMode = PtzPresetAction | 'rename'
+
 /** 启动 / 停止类指令（巡航、扫描） */
 export type PtzRunAction = 'start' | 'stop'
+
+/**
+ * 平台侧预置位（来自 `ac_gb_ptz_preset`，后端 `GET /web/gb/ptz/{id}/presets`）。
+ *
+ * 名称只在平台侧保存，不下发设备；列表为空时组件回退为 1..presetCount 的编号按钮。
+ */
+export interface PtzPresetOption {
+  /** 预置位编号，1–255（缺失的条目会被忽略） */
+  preset_id?: number
+  /** 平台侧展示名，可为空（设备侧只认编号） */
+  name?: string
+}
 
 export interface PtzControlProps {
   /** 整块面板禁用（设备离线、通道未选中时使用） */
@@ -58,14 +73,28 @@ export interface PtzControlProps {
   onCommand?: (direction: PtzDirection, speed: number) => void
   /** 变焦（按住持续、松开停止） */
   onZoom?: (action: PtzZoomAction, speed: number) => void
-  /** 预置位：调用 / 设置 / 删除 */
-  onPreset?: (action: PtzPresetAction, presetIndex: number) => void
-  /** 预置位数量，默认 8 */
+  /**
+   * 预置位：调用 / 设置 / 删除。
+   * `name` 只在 action=set 时有意义 —— 平台侧展示名，必填。
+   */
+  onPreset?: (action: PtzPresetAction, presetIndex: number, name?: string) => void
+  /** 预置位数量，默认 8（与后端返回的列表合并展示） */
   presetCount?: number
-  /** 巡航（按预置位序列自动巡视） */
-  onCruise?: (action: PtzRunAction) => void
-  /** 扫描（左右自动扫描） */
-  onScan?: (action: PtzRunAction) => void
+  /** 平台侧预置位列表（含名称）；为空时回退为编号按钮 */
+  presets?: PtzPresetOption[]
+  /** 预置位列表加载中 */
+  presetsLoading?: boolean
+  /**
+   * 重命名预置位（仅改平台侧名称，不下发设备）。
+   * 传入时才渲染「重命名」动作；由页面按 `gb:ptz:preset-update` 权限决定是否传入。
+   */
+  onRenamePreset?: (presetIndex: number, name: string) => void
+  /** 巡航（按预置位序列自动巡视），groupId 为巡航组号 1–255 */
+  onCruise?: (action: PtzRunAction, groupId: number) => void
+  /** 扫描（左右自动扫描），groupId 为扫描组号 1–255 */
+  onScan?: (action: PtzRunAction, groupId: number) => void
+  /** 雨刷开 / 关；不传时不渲染雨刷按钮（无权限） */
+  onWiper?: (on: boolean) => void
   /**
    * 附加区域（例如 GB28181-2022 的精准位置/精准控制/巡航轨迹）。
    *
@@ -183,20 +212,53 @@ export default function PtzControl({
   onZoom,
   onPreset,
   presetCount = DEFAULT_PRESET_COUNT,
+  presets: presetList,
+  presetsLoading = false,
+  onRenamePreset,
   onCruise,
   onScan,
+  onWiper,
   extra,
   className,
   style,
 }: PtzControlProps) {
   const [speed, setSpeed] = useState(defaultSpeed)
-  const [presetAction, setPresetAction] = useState<PtzPresetAction>('goto')
+  const [presetAction, setPresetAction] = useState<PtzPresetMode>('goto')
+  /** 设置预置位时填写的平台侧名称（不写死「预置位N」） */
+  const [presetName, setPresetName] = useState('')
+  /** 巡航 / 扫描组号，默认 1；后端字段 group_id 取值 1–255 */
+  const [groupID, setGroupID] = useState(1)
   const [cruising, setCruising] = useState(false)
   const [scanning, setScanning] = useState(false)
 
-  const presets = useMemo(
-    () => Array.from({ length: Math.max(0, presetCount) }, (_, index) => index + 1),
-    [presetCount],
+  /**
+   * 预置位按钮 = 1..presetCount 的编号 ∪ 后端返回的列表。
+   * 名称取平台侧持久化值；没有名称时只显示编号，绝不伪造「预置位N」。
+   */
+  const presetButtons = useMemo(() => {
+    const merged = new Map<number, string | undefined>()
+    for (let index = 1; index <= Math.max(0, presetCount); index += 1) {
+      merged.set(index, undefined)
+    }
+    for (const item of presetList ?? []) {
+      const id = Number(item.preset_id)
+      if (!Number.isFinite(id) || id < 1) continue
+      merged.set(id, item.name?.trim() || undefined)
+    }
+    return Array.from(merged.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([presetIndex, name]) => ({ presetIndex, name }))
+  }, [presetCount, presetList])
+
+  const hasPresetName = presetButtons.some((item) => Boolean(item.name))
+
+  /** 「重命名」仅在页面传入 onRenamePreset（有权限）时出现 */
+  const presetActionOptions = useMemo(
+    () =>
+      onRenamePreset
+        ? [...PRESET_ACTIONS, { label: '重命名', value: 'rename' as const }]
+        : PRESET_ACTIONS,
+    [onRenamePreset],
   )
 
   const handleMoveHold = useCallback(
@@ -223,27 +285,35 @@ export default function PtzControl({
 
   const handlePresetClick = useCallback(
     (presetIndex: number) => {
-      onPreset?.(presetAction, presetIndex)
+      if (presetAction === 'rename') {
+        onRenamePreset?.(presetIndex, presetName)
+        return
+      }
+      onPreset?.(presetAction, presetIndex, presetAction === 'set' ? presetName : undefined)
     },
-    [onPreset, presetAction],
+    [onPreset, onRenamePreset, presetAction, presetName],
   )
 
   const handlePresetActionChange = (value: string | number) => {
-    if (value === 'goto' || value === 'set' || value === 'delete') setPresetAction(value)
+    if (value === 'goto' || value === 'set' || value === 'delete') {
+      setPresetAction(value)
+      return
+    }
+    if (value === 'rename' && onRenamePreset) setPresetAction('rename')
   }
 
   const handleCruiseToggle = () => {
     if (disabled) return
     const next = !cruising
     setCruising(next)
-    onCruise?.(next ? 'start' : 'stop')
+    onCruise?.(next ? 'start' : 'stop', groupID)
   }
 
   const handleScanToggle = () => {
     if (disabled) return
     const next = !scanning
     setScanning(next)
-    onScan?.(next ? 'start' : 'stop')
+    onScan?.(next ? 'start' : 'stop', groupID)
   }
 
   return (
@@ -327,40 +397,74 @@ export default function PtzControl({
 
       <Divider style={{ margin: '8px 0' }} />
 
-      {/* 预置位：先选动作，再点序号 */}
+      {/* 预置位：先选动作，再点编号；名称来自平台侧列表 */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>预置位</span>
+        {presetsLoading ? <Spin size="small" /> : null}
+      </div>
       <Segmented
         className="e2e-ptz-preset-action"
         size="small"
         block
         value={presetAction}
-        options={PRESET_ACTIONS}
+        options={presetActionOptions}
         onChange={handlePresetActionChange}
       />
+      {presetAction === 'set' || presetAction === 'rename' ? (
+        <Input
+          size="small"
+          className="e2e-ptz-preset-name"
+          style={{ marginTop: 6 }}
+          maxLength={64}
+          placeholder={presetAction === 'rename' ? '新名称，如：东门' : '预置位名称，如：大门'}
+          value={presetName}
+          disabled={disabled}
+          onChange={(event) => setPresetName(event.target.value)}
+        />
+      ) : null}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
+          gridTemplateColumns: `repeat(${hasPresetName ? 2 : 4}, 1fr)`,
           gap: 4,
           marginTop: 6,
         }}
       >
-        {presets.map((presetIndex) => (
-          <Button
-            key={presetIndex}
-            size="small"
-            className={`e2e-ptz-preset-${presetIndex}`}
-            disabled={disabled}
-            onClick={() => handlePresetClick(presetIndex)}
-          >
-            {presetIndex}
-          </Button>
+        {presetButtons.map(({ presetIndex, name }) => (
+          <Tooltip key={presetIndex} title={name ? `#${presetIndex} ${name}` : `预置位 ${presetIndex}`}>
+            <Button
+              size="small"
+              className={`e2e-ptz-preset-${presetIndex}`}
+              disabled={disabled}
+              style={{ width: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}
+              onClick={() => handlePresetClick(presetIndex)}
+            >
+              {name || presetIndex}
+            </Button>
+          </Tooltip>
         ))}
       </div>
 
       <Divider style={{ margin: '8px 0' }} />
 
-      {/* 巡航 / 扫描 */}
-      <Space>
+      {/* 巡航 / 扫描：组号可选（后端 group_id 1–255） */}
+      <Space size={6} wrap>
+        <span style={{ fontSize: 12, color: '#8c8c8c' }}>组号</span>
+        <InputNumber
+          size="small"
+          className="e2e-ptz-group"
+          min={1}
+          max={255}
+          precision={0}
+          value={groupID}
+          disabled={disabled}
+          style={{ width: 72 }}
+          onChange={(value) => {
+            setGroupID(typeof value === 'number' && value >= 1 ? value : 1)
+          }}
+        />
+      </Space>
+      <Space style={{ marginTop: 6 }} wrap>
         <Button
           size="small"
           type={cruising ? 'primary' : 'default'}
@@ -382,6 +486,29 @@ export default function PtzControl({
           {scanning ? '停止扫描' : '开始扫描'}
         </Button>
       </Space>
+
+      {/* 雨刷：仅在账号有 gb:ptz:wiper 权限时由页面注入 onWiper */}
+      {onWiper ? (
+        <Space className="e2e-ptz-wiper" style={{ marginTop: 6 }} size={6}>
+          <span style={{ fontSize: 12, color: '#8c8c8c' }}>雨刷</span>
+          <Button
+            size="small"
+            className="e2e-ptz-wiper-on"
+            disabled={disabled}
+            onClick={() => onWiper(true)}
+          >
+            开启
+          </Button>
+          <Button
+            size="small"
+            className="e2e-ptz-wiper-off"
+            disabled={disabled}
+            onClick={() => onWiper(false)}
+          >
+            关闭
+          </Button>
+        </Space>
+      ) : null}
 
       {/* 附加区域：由页面注入（例如 GB28181-2022 能力面板） */}
       {extra ? <div className="e2e-ptz-extra">{extra}</div> : null}

@@ -11,6 +11,7 @@ export type GbChannelDetailResp = Definition & {
 	device_code?: string;
 	device_id?: number;
 	device_name?: string;
+	direction_type?: number;
 	enable_broadcast?: boolean;
 	gb_channel_id?: string;
 	gb_device_id?: string;
@@ -19,6 +20,9 @@ export type GbChannelDetailResp = Definition & {
 	has_audio?: boolean;
 	id?: number;
 	is_custom?: boolean;
+	latitude?: number;
+	/** 设备参数扩展（WVP 对齐）。 */
+	longitude?: number;
 	manufacturer?: string;
 	model?: string;
 	name?: string;
@@ -27,14 +31,19 @@ export type GbChannelDetailResp = Definition & {
 	parental?: number;
 	/** Password 设备侧上报的通道密码，读接口脱敏为 ****。 */
 	password?: string;
+	position_type?: number;
 	ptz_type?: number;
 	record_plan_id?: number;
 	record_plan_name?: string;
 	region_id?: number;
 	region_name?: string;
 	remark?: string;
+	room_type?: number;
+	secrecy?: number;
 	status?: string;
 	stream_id?: string;
+	supply_light_type?: number;
 	sync_dt?: string;
 	updated_dt?: string;
+	use_type?: number;
 }

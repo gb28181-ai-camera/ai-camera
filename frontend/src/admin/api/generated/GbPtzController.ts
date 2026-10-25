@@ -4,12 +4,16 @@
 // 需要保留的手写方法/别名请登记到 scripts/api-gen-preserve.mjs。
 import request from '../request';
 import type { BaseResponse } from './definitions/BaseResponse';
+import type { GbCruisePointReq } from './definitions/GbCruisePointReq';
+import type { GbCruisePointSetReq } from './definitions/GbCruisePointSetReq';
+import type { GbPresetRenameReq } from './definitions/GbPresetRenameReq';
 import type { GbPresetReq } from './definitions/GbPresetReq';
 import type { GbPtzCruiseReq } from './definitions/GbPtzCruiseReq';
 import type { GbPtzPreciseReq } from './definitions/GbPtzPreciseReq';
 import type { GbPtzReq } from './definitions/GbPtzReq';
 import type { GbPtzScanReq } from './definitions/GbPtzScanReq';
 import type { GbPtzWiperReq } from './definitions/GbPtzWiperReq';
+import type { GbScanBoundsReq } from './definitions/GbScanBoundsReq';
 import type { RGbCruiseTrackDetail } from './definitions/RGbCruiseTrackDetail';
 import type { RGbCruiseTrackList } from './definitions/RGbCruiseTrackList';
 import type { RGbHomePosition } from './definitions/RGbHomePosition';
@@ -37,6 +41,38 @@ export class GbPtzController {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "POST",
         data: JSON.stringify(data),
+        headers,
+      });
+    }
+
+    static addGbPtzCruisePointPath: string = "/web/gb/ptz/{channelId}/cruise-points";
+    /// 加入巡航点
+    static async addGbPtzCruisePoint(channelId: string | number, data: GbCruisePointReq, headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/ptz/${channelId}/cruise-points`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: JSON.stringify(data),
+        headers,
+      });
+    }
+
+    static setGbPtzCruisePointPath: string = "/web/gb/ptz/{channelId}/cruise-points";
+    /// 设置巡航速度/停留时间
+    static async setGbPtzCruisePoint(channelId: string | number, data: GbCruisePointSetReq, headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/ptz/${channelId}/cruise-points`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "PUT",
+        data: JSON.stringify(data),
+        headers,
+      });
+    }
+
+    static deleteGbPtzCruisePointPath: string = "/web/gb/ptz/{channelId}/cruise-points";
+    /// 删除巡航点
+    static async deleteGbPtzCruisePoint(channelId: string | number, group_id: number, preset_id?: number, headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/ptz/${channelId}/cruise-points?group_id=${group_id ?? "" }&preset_id=${preset_id ?? "" }`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "DELETE",
         headers,
       });
     }
@@ -113,6 +149,17 @@ export class GbPtzController {
       });
     }
 
+    static renameGbPtzPresetPath: string = "/web/gb/ptz/{channelId}/presets/{presetId}";
+    /// 重命名预置位
+    static async renameGbPtzPreset(channelId: string | number, presetId: string | number, data: GbPresetRenameReq, headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/ptz/${channelId}/presets/${presetId}`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "PUT",
+        data: JSON.stringify(data),
+        headers,
+      });
+    }
+
     static deleteGbPtzPresetPath: string = "/web/gb/ptz/{channelId}/presets/{presetId}";
     /// 删除预置位
     static async deleteGbPtzPreset(channelId: string | number, presetId: string | number, headers?: any): Promise<BaseResponse> {
@@ -140,6 +187,17 @@ export class GbPtzController {
       return request(`/web/gb/ptz/${channelId}/scan`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "POST",
+        data: JSON.stringify(data),
+        headers,
+      });
+    }
+
+    static setGbPtzScanBoundsPath: string = "/web/gb/ptz/{channelId}/scan/bounds";
+    /// 设置扫描边界/速度
+    static async setGbPtzScanBounds(channelId: string | number, data: GbScanBoundsReq, headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/ptz/${channelId}/scan/bounds`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "PUT",
         data: JSON.stringify(data),
         headers,
       });
