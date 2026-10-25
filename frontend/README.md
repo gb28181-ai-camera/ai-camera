@@ -3,7 +3,7 @@
 AI 智能监控平台前端。**一个 npm 工程、三个构建目标**：管理后台（Web）、官网介绍页（Web）、
 桌面端（Electron 渲染进程）。
 
-> 当前版本: **v0.2.0** | 最后更新: 2026-10-21
+> 当前版本: **v0.3.0** | 最后更新: 2026-10-24
 
 ---
 
@@ -16,9 +16,12 @@ AI 智能监控平台前端。**一个 npm 工程、三个构建目标**：管�
   `LivePlayer`（WebRTC/WHEP 优先 → `mpegts.js` HTTP-FLV 兜底 → HLS 保底）
 - 📡 **国标视频（GB/T 28181）** —— 19 个管理页面：设备/通道、实时播放与云台、回放/下载、
   云端录像、录像计划、报警、移动位置、媒体节点、拉流代理、推流、信令日志、级联、语音 Agent
+- 🔌 **IOT 管理与多协议接入（v0.3.0）** —— 产品 / 服务组与服务 / 设备三页；
+  产品选择服务组后按「产品×服务」生成凭据并支持明文复制（JSON/文本）、
+  设备激活与账号管理、接入密钥与设备二维码、一次性分享码、解绑设备、服务授权查看
 - 📊 **可视化大屏** —— `/screen` 大屏聚合视图，轮询 `/web/stats/screen` 刷新
 - 🖨️ **图表分析** —— ECharts（`echarts` + `echarts-for-react`）实现风险统计、告警统计、流量趋势、设备状态分布
-- 🧩 **自动生成 API 客户端** —— 41 个 Controller + 394 个类型定义由 Swagger 生成，**严禁手写 API 请求代码**
+- 🧩 **自动生成 API 客户端** —— 42 个 Controller + 468 个类型定义由 Swagger 生成，**严禁手写 API 请求代码**
 - 📐 **公共组件体系** —— PageContainer / SearchBar / ActionButtons / SelectorModal / OptionSelect / RegionSelect / DynamicIcon / EmptyState
 - 🧪 **双测试体系** —— Vitest + MSW（单测，无需后端）/ Playwright（E2E，真实后端 + `e2e-xxx-modal` 定位规范）
 - 📦 **多平台打包** —— Electron Forge 7 支持 NSIS（Windows）/ DMG（macOS）/ DEB + RPM + ZIP（Linux）
@@ -159,7 +162,8 @@ frontend/
     │   ├── layouts/
     │   │   └── MainLayout.tsx    # 主布局（侧边栏 + 顶栏 + 内容区）
     │   ├── pages/                # 业务页面（按模块分目录）
-    │   │   └── gb/               # 19 个国标视频页面（设备/通道/播放/录像/报警/运维/级联）
+    │   │   ├── gb/               # 19 个国标视频页面（设备/通道/播放/录像/报警/运维/级联）
+    │   │   └── iot/              # 3 个 IOT 页面（产品/服务组/设备）
     │   ├── store/
     │   │   └── authStore.ts      # Zustand 认证 store（token / 用户信息 / 权限码持久化）
     │   └── types/
@@ -337,6 +341,36 @@ API 客户端为 `GbDeviceController`、`GbChannelController`、`GbPlayControlle
 
 ---
 
+## IOT 管理页面（v0.3.0）
+
+3 个页面位于 `src/admin/pages/iot/`，路由与后端菜单 seed 对应
+（见 [`docs/开发文档/页面功能和接口/14-IOT管理页面与接口.md`](../docs/开发文档/页面功能和接口/14-IOT管理页面与接口.md)）：
+
+| 路由 | 页面 | 主要能力 |
+|:---|:---|:---|
+| `/iot/product` | 产品管理 | 产品 CRUD、自动联网/配网方式/允许分享、服务组多选（随产品保存）、分享二维码、产品×服务明文鉴权信息复制 |
+| `/iot/service-group` | 服务组 | 系统预置 GB28181 / WebRTC / AIChat 三条；维护组内服务（协议/地址）与名称；被产品引用后只读；不持有凭据 |
+| `/iot/device` | 设备管理 | 按产品/状态筛选、设置产品、激活、账号管理、服务授权、设备二维码、一次性分享码与撤销、重置密钥、后台解绑 |
+
+公共组件：`CredentialModal`（JSON/文本复制、密码显隐、MQTT/TURN 信息）、
+`DeviceQrModal` / `ShareQrModal`（二维码 + 内容复制）、`SecretModal`（一次性敏感信息）。
+
+- API 统一走 `IOTController`；`IOTController` 与请求/响应类型由 Swagger 生成，**禁止手改**。
+- 读取接口的 `device_secret` / `sip_password` / 产品服务密码均为 `****`；明文只出现在
+  「复制鉴权」「重置凭据」「设备激活」「重置密钥」等一次性弹窗。
+- 凭据按「产品 × 服务」生成：产品表单选中服务组后，后端为组内每个服务生成独立账号；
+  服务组页面不再维护凭据。
+- 分享码按钮在产品 `allow_share=false` 时禁用；设备未绑定产品时不生成二维码（后端 400）。
+
+### 测试现状
+
+- E2E：`e2e/smoke/12a-iot-product.spec.ts`、`12b-iot-service-group.spec.ts`、
+  `12c-iot-device.spec.ts`，覆盖 CRUD、二维码、凭据、账号、激活、解绑与权限码；
+- 公共夹具：`e2e/helpers/iot.ts`（造数 / 清理 / 弹窗关闭 / 非搜索型 Select）；
+- `99-all-list-page.spec.ts` 已包含 3 条 `/iot/*` 路由。
+
+---
+
 ## 环境检测
 
 同一份管理后台代码同时运行在 Web 与 Electron 中，通过两个标志判断当前环境。
@@ -474,7 +508,7 @@ npx playwright show-report                 # 查看 HTML 报告
 
 - 新增 antd `<Modal>` 必须添加 `className="e2e-xxx-modal"`。
 - `SelectorModal` 会把传入的 `className` 应用到 Modal（`.e2e-xxx`）与触发按钮（`.e2e-xxx-btn`）。
-- 冒烟测试（`e2e/smoke/`）串行执行，spec 按文件名字母序；功能性用例编号 `01a` ~ `10f`，
+- 冒烟测试（`e2e/smoke/`）串行执行，spec 按文件名字母序；功能性用例编号 `01a` ~ `12c`，
   **全页面覆盖类收尾用例固定 `99-` 前缀**。
 
 ---
@@ -504,7 +538,7 @@ docker build -f Dockerfile.website -t ai-camera-website .
 ## 相关文档
 
 - [../README.md](../README.md) — 仓库根说明
-- [../backend/README.md](../backend/README.md) — 后端技术栈与 200 个 API 路由总览
+- [../backend/README.md](../backend/README.md) — 后端技术栈与 API 路由总览
 - [../app/README.md](../app/README.md) — 移动端说明
 - [../docs/介绍网站/README.md](../docs/介绍网站/README.md) — 官网设计风格与视觉实现方案
 - [../docs/开发文档/页面功能和接口/00-页面功能与接口总览.md](../docs/开发文档/页面功能和接口/00-页面功能与接口总览.md) — 48 个页面目录与接口对照

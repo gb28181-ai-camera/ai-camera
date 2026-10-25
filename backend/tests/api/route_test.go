@@ -205,6 +205,8 @@ var contractIotRoutes = []string{
 	"DELETE /web/iot/products/:id",
 	"POST /web/iot/products/:id/share-qr",
 	"GET /web/iot/products/:id/credentials",
+	"GET /web/iot/products/:id/services",
+	"POST /web/iot/products/:id/services/:serviceId/reset-credentials",
 	"GET /web/iot/products/:id/service-groups",
 	"PUT /web/iot/products/:id/service-groups",
 
@@ -214,9 +216,7 @@ var contractIotRoutes = []string{
 	"POST /web/iot/service-groups",
 	"PUT /web/iot/service-groups/:id",
 	"DELETE /web/iot/service-groups/:id",
-	"POST /web/iot/service-groups/:id/reset-credentials",
-	"GET /web/iot/service-groups/:id/credentials",
-	"PUT /web/iot/service-groups/:id/items",
+	"PUT /web/iot/service-groups/:id/services",
 
 	// ── 设备与账号 ──
 	"GET /web/iot/devices",
@@ -230,6 +230,7 @@ var contractIotRoutes = []string{
 	"POST /web/iot/devices/:id/qr",
 	"POST /web/iot/devices/:id/share-token",
 	"DELETE /web/iot/devices/:id/share-token",
+	"POST /web/iot/devices/:id/unbind",
 }
 
 // contractAppIotRoutes 契约 §10.16「移动端 IOT / RTC」的端点。

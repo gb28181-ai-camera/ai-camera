@@ -14,7 +14,7 @@
 /// [MqttWebRtcClient] 中。这样信令可以用假传输层做单元测试，不依赖真机与插件。
 ///
 /// **为什么 MQTT 失败要回退 HTTP WHEP**：MQTT 只是「信令的另一种搬运方式」，
-/// 媒体面仍是 WebRTC。失败原因通常与媒体无关（broker 不可达、服务组凭据过期、
+/// 媒体面仍是 WebRTC。失败原因通常与媒体无关（broker 不可达、产品服务凭据失效、
 /// 后端未部署 MQTT 转发）。此时设备仍可能在同一媒体节点上提供 WHEP 地址，
 /// 回退 WHEP 可以避免用户因为一条信令链路故障而完全看不到画面。
 library;
@@ -50,7 +50,7 @@ class MqttSignalingConfig {
 
   /// 从设备的服务组推导配置。
   ///
-  /// 服务组里必须存在 MQTT 服务项；缺失时抛出 [MqttSignalingException]，
+  /// 服务组里必须存在 MQTT 服务；缺失时抛出 [MqttSignalingException]，
   /// 由调用方回退 WHEP（不要静默使用错误端口）。
   factory MqttSignalingConfig.fromServiceGroup(
     IotServiceGroup group, {
@@ -62,10 +62,17 @@ class MqttSignalingConfig {
     }
     final IotServiceItem? item = group.mqttItem;
     if (item == null) {
-      throw MqttSignalingException('服务组「${group.name.isNotEmpty ? group.name : code}」未配置 MQTT 服务项');
+      throw MqttSignalingException('服务组「${group.name.isNotEmpty ? group.name : code}」未配置 MQTT 服务');
     }
     if (item.host.trim().isEmpty) {
-      throw MqttSignalingException('MQTT 服务项缺少主机地址');
+      throw MqttSignalingException('MQTT 服务缺少主机地址');
+    }
+    final String username =
+        item.username.isNotEmpty ? item.username : group.username;
+    final String password =
+        item.password.isNotEmpty ? item.password : group.password;
+    if (username.isEmpty || password.isEmpty) {
+      throw MqttSignalingException('MQTT 服务缺少产品级凭据');
     }
     final dynamic tlsRaw = item.extra['tls'];
     return MqttSignalingConfig(
@@ -74,8 +81,8 @@ class MqttSignalingConfig {
       // 后端约定 `port=0` 时按协议取默认端口（MQTT 1883）。
       port: item.port > 0 ? item.port : 1883,
       clientId: clientId,
-      username: group.username,
-      password: group.password,
+      username: username,
+      password: password,
       useTls: tlsRaw is bool ? tlsRaw : false,
     );
   }
@@ -84,7 +91,7 @@ class MqttSignalingConfig {
   ///
   /// 优先使用后端下发的 `mqtt.url` / `mqtt.topic_prefix`：
   /// topic 前缀是 MQTT ACL 的隔离边界，客户端自己拼容易与服务端不一致。
-  /// 后端未下发时回退到服务组里的 MQTT 服务项。
+  /// 后端未下发时回退到服务组里的 MQTT 服务。
   factory MqttSignalingConfig.fromCredentials(
     IotCredentials credentials, {
     required String clientId,
@@ -94,10 +101,17 @@ class MqttSignalingConfig {
       throw MqttSignalingException('设备所属产品未授权任何服务组');
     }
     final IotServiceItem? item = group.mqttItem;
-    final IotMqttInfo? mqtt = credentials.mqtt;
-    if (mqtt == null && item == null) {
-      throw MqttSignalingException('服务组「${group.name.isNotEmpty ? group.name : group.code}」未配置 MQTT 服务项');
+    if (item == null) {
+      throw MqttSignalingException('服务组「${group.name.isNotEmpty ? group.name : group.code}」未配置 MQTT 服务');
     }
+    final String username =
+        item.username.isNotEmpty ? item.username : group.username;
+    final String password =
+        item.password.isNotEmpty ? item.password : group.password;
+    if (username.isEmpty || password.isEmpty) {
+      throw MqttSignalingException('MQTT 服务缺少产品级凭据');
+    }
+    final IotMqttInfo? mqtt = credentials.mqtt;
 
     String host = '';
     int port = 1883;
@@ -110,8 +124,8 @@ class MqttSignalingConfig {
       useTls = broker.tls;
     }
     if (host.isEmpty) {
-      if (item == null || item.host.trim().isEmpty) {
-        throw MqttSignalingException('MQTT 服务项缺少主机地址');
+      if (item.host.trim().isEmpty) {
+        throw MqttSignalingException('MQTT 服务缺少主机地址');
       }
       host = item.host.trim();
       port = item.port > 0 ? item.port : 1883;
@@ -126,8 +140,8 @@ class MqttSignalingConfig {
       host: host,
       port: port,
       clientId: clientId,
-      username: group.username,
-      password: group.password,
+      username: username,
+      password: password,
       useTls: useTls,
     );
   }
@@ -266,7 +280,7 @@ class MqttClientTransport implements MqttSignalingTransport {
     if (client.connectionStatus?.state != MqttConnectionState.connected) {
       final String code = client.connectionStatus?.returnCode?.toString() ?? '未知错误';
       await disconnect();
-      throw MqttSignalingException('MQTT 登录失败：$code（请检查服务组凭据）');
+      throw MqttSignalingException('MQTT 登录失败：$code（请检查产品服务凭据）');
     }
 
     final Stream<List<MqttReceivedMessage<MqttMessage>>>? updates =

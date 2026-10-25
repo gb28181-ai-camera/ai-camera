@@ -457,18 +457,18 @@ func registerWebRoutes(r *gin.Engine) {
 			wiot.DELETE("/products/:id", iotProductH.Delete)
 			wiot.POST("/products/:id/share-qr", iotProductH.GenerateShareQR)
 			wiot.GET("/products/:id/credentials", iotProductH.Credentials)
+			wiot.GET("/products/:id/services", iotProductH.GetServices)
+			wiot.POST("/products/:id/services/:serviceId/reset-credentials", iotProductH.ResetServiceCredentials)
 			wiot.GET("/products/:id/service-groups", iotProductH.GetServiceGroups)
 			wiot.PUT("/products/:id/service-groups", iotProductH.BindServiceGroups)
 
-			// 服务组
+			// 服务组（固定三条，不开放新增/删除）
 			wiot.GET("/service-groups", iotServiceGroupH.Page)
 			wiot.GET("/service-groups/:id", iotServiceGroupH.Get)
 			wiot.POST("/service-groups", iotServiceGroupH.Create)
 			wiot.PUT("/service-groups/:id", iotServiceGroupH.Update)
 			wiot.DELETE("/service-groups/:id", iotServiceGroupH.Delete)
-			wiot.POST("/service-groups/:id/reset-credentials", iotServiceGroupH.ResetCredentials)
-			wiot.GET("/service-groups/:id/credentials", iotServiceGroupH.Credentials)
-			wiot.PUT("/service-groups/:id/items", iotServiceGroupH.ReplaceItems)
+			wiot.PUT("/service-groups/:id/services", iotServiceGroupH.ReplaceServices)
 
 			// 设备与账号
 			wiot.GET("/devices", iotDeviceH.Page)
@@ -484,6 +484,8 @@ func registerWebRoutes(r *gin.Engine) {
 			// 分享令牌：生成一次、App 认领后失效；DELETE 只撤销未认领的令牌。
 			wiot.POST("/devices/:id/share-token", iotDeviceH.CreateShareToken)
 			wiot.DELETE("/devices/:id/share-token", iotDeviceH.RevokeShareToken)
+			// 解绑：删除全部账号（含主账号）并清除激活状态，用于收回分享/认领。
+			wiot.POST("/devices/:id/unbind", iotDeviceH.Unbind)
 		}
 	}
 }

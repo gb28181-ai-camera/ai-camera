@@ -6,12 +6,13 @@ export type CreateIotProductReq = Definition & {
 	active?: boolean;
 	allow_share?: boolean;
 	auto_network?: boolean;
+	/** 配网方式由产品配置：qrcode（无需配网）/ bluetooth / ap。 */
 	category?: string;
 	code: string;
 	description?: string;
-	/** DeviceType 缺省 security；未知值直接拒绝，不做静默回退。 */
-	device_type?: string;
 	name: string;
 	net_config_mode?: string;
 	sequence?: number;
+	/** 产品可选的服务组（系统预置三条）。创建时同步绑定，并为组内服务生成凭据。 */
+	service_group_ids?: number[];
 }

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Transfer,
+  Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip,
   Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  DeleteOutlined, EditOutlined, KeyOutlined, LinkOutlined, PlusOutlined, QrcodeOutlined,
+  DeleteOutlined, EditOutlined, KeyOutlined, PlusOutlined, QrcodeOutlined,
 } from '@ant-design/icons'
 import { QRCodeSVG } from 'qrcode.react'
 import PageContainer from '../../components/PageContainer'
@@ -32,6 +32,8 @@ interface ProductFormValues {
   net_config_mode: string
   allow_share: boolean
   active: boolean
+  /** 产品可用的服务组（系统预置三条，多选）。 */
+  service_group_ids: number[]
 }
 
 /** 配网方式字典 */
@@ -66,6 +68,7 @@ function buildProductInitialValues(editing: IotProduct | null): Partial<ProductF
       net_config_mode: 'bluetooth',
       allow_share: false,
       active: true,
+      service_group_ids: [],
     }
   }
   return {
@@ -76,6 +79,7 @@ function buildProductInitialValues(editing: IotProduct | null): Partial<ProductF
     net_config_mode: editing.net_config_mode || 'bluetooth',
     allow_share: editing.allow_share ?? false,
     active: editing.active ?? true,
+    service_group_ids: [],
   }
 }
 
@@ -115,12 +119,8 @@ export default function ProductList() {
   const [credProduct, setCredProduct] = useState<IotProduct | null>(null)
   const [credData, setCredData] = useState<IotCredentials | null>(null)
 
-  const [bindOpen, setBindOpen] = useState(false)
-  const [bindProduct, setBindProduct] = useState<IotProduct | null>(null)
-  const [bindLoading, setBindLoading] = useState(false)
-  const [bindSaving, setBindSaving] = useState(false)
+  /** 系统预置的三条服务组，供产品表单多选。 */
   const [allGroups, setAllGroups] = useState<IotServiceGroup[]>([])
-  const [targetKeys, setTargetKeys] = useState<string[]>([])
 
   /** 按当前页产品批量统计已绑定服务组数量 */
   const loadGroupCounts = useCallback(async (rows: IotProduct[]) => {
@@ -155,7 +155,18 @@ export default function ProductList() {
     }
   }, [page, pageSize, keyword, activeFilter, loadGroupCounts])
 
+  /** 服务组是系统预置的三条，这里一次拉全量用于表单多选。 */
+  const fetchGroups = useCallback(async () => {
+    try {
+      const res = await IOTController.pageIotServiceGroups(1, 200)
+      setAllGroups(res.data?.items ?? [])
+    } catch (err) {
+      notifyError(err, '获取服务组失败')
+    }
+  }, [])
+
   useEffect(() => { void fetchData() }, [fetchData])
+  useEffect(() => { void fetchGroups() }, [fetchGroups])
 
   const handleSearch = (values: Record<string, unknown>) => {
     setKeyword(typeof values.keyword === 'string' ? values.keyword : '')
@@ -176,11 +187,21 @@ export default function ProductList() {
     setModalOpen(true)
   }
 
-  const openEdit = (row: IotProduct) => {
+  const openEdit = async (row: IotProduct) => {
     setEditing(row)
     form.resetFields()
     form.setFieldsValue(buildProductInitialValues(row))
     setModalOpen(true)
+    if (row.id == null) return
+    try {
+      const res = await IOTController.getIotProductServiceGroups(row.id)
+      form.setFieldValue(
+        'service_group_ids',
+        (res.data ?? []).flatMap((g) => (g.id == null ? [] : [g.id])),
+      )
+    } catch (err) {
+      notifyError(err, '获取产品服务组失败')
+    }
   }
 
   const handleSave = async () => {
@@ -203,6 +224,8 @@ export default function ProductList() {
           net_config_mode: values.net_config_mode,
           allow_share: values.allow_share,
           active: values.active,
+          // 服务组随产品表单整体替换；后端同步产品×服务凭据。
+          service_group_ids: values.service_group_ids ?? [],
         }
         const res = await IOTController.updateIotProduct(editing.id, payload)
         if (res.code === 200) {
@@ -222,6 +245,7 @@ export default function ProductList() {
           net_config_mode: values.net_config_mode,
           allow_share: values.allow_share,
           active: values.active,
+          service_group_ids: values.service_group_ids ?? [],
         }
         const res = await IOTController.createIotProduct(payload)
         if (res.code === 200) {
@@ -298,47 +322,6 @@ export default function ProductList() {
     }
   }
 
-  const openBind = async (row: IotProduct) => {
-    if (row.id == null) return
-    setBindProduct(row)
-    setBindOpen(true)
-    setBindLoading(true)
-    setTargetKeys([])
-    try {
-      const [allRes, boundRes] = await Promise.all([
-        IOTController.pageIotServiceGroups(1, 200),
-        IOTController.getIotProductServiceGroups(row.id),
-      ])
-      setAllGroups(allRes.data?.items ?? [])
-      setTargetKeys((boundRes.data ?? []).flatMap((g) => (g.id == null ? [] : [String(g.id)])))
-    } catch (err) {
-      notifyError(err, '获取服务组失败')
-    } finally {
-      setBindLoading(false)
-    }
-  }
-
-  const handleBind = async () => {
-    if (bindProduct?.id == null) return
-    setBindSaving(true)
-    try {
-      const res = await IOTController.bindIotProductServiceGroups(bindProduct.id, {
-        service_group_ids: targetKeys.map((key) => Number(key)),
-      })
-      if (res.code === 200) {
-        message.success('绑定成功')
-        setBindOpen(false)
-        void fetchData()
-      } else {
-        message.error(res.message || '绑定失败')
-      }
-    } catch (err) {
-      notifyError(err, '绑定失败')
-    } finally {
-      setBindSaving(false)
-    }
-  }
-
   const columns: ColumnsType<IotProduct> = [
     { title: '产品名称', dataIndex: 'name', width: 180, ellipsis: true, render: (v?: string) => v || '-' },
     { title: '产品编码', dataIndex: 'code', width: 160, ellipsis: true, render: (v?: string) => v || '-' },
@@ -395,11 +378,6 @@ export default function ProductList() {
             </Tooltip>
           )}
           {canUpdate && (
-            <Button type="link" size="small" icon={<LinkOutlined />} onClick={() => void openBind(row)}>
-              绑定服务组
-            </Button>
-          )}
-          {canUpdate && (
             <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
               编辑
             </Button>
@@ -417,13 +395,13 @@ export default function ProductList() {
   ]
 
   // 服务组由管理员按产品实际能力选择，平台不按「设备类型」过滤。
-  const transferDataSource = allGroups.flatMap((group) => (
+  /** 系统预置三条服务组，产品表单多选。 */
+  const groupOptions = allGroups.flatMap((group) => (
     group.id == null
       ? []
       : [{
-        key: String(group.id),
-        title: `${group.name ?? ''}（${group.code ?? ''}）`,
-        description: SERVICE_TYPE_LABEL[group.type ?? ''] ?? group.type ?? '',
+        label: `${group.name ?? ''}（${SERVICE_TYPE_LABEL[group.type ?? ''] ?? group.type ?? group.code ?? ''}）`,
+        value: group.id,
       }]
   ))
 
@@ -509,6 +487,20 @@ export default function ProductList() {
               <Input placeholder="如：摄像头" maxLength={100} />
             </Form.Item>
           </Space>
+          <Form.Item
+            name="service_group_ids"
+            label="服务组"
+            extra="系统预置三条服务组；产品与设备通过它获得接入配置。被产品引用后服务组不可修改。"
+            rules={[{ required: true, type: 'array', min: 1, message: '请选择至少一个服务组' }]}
+          >
+            <Select
+              className="e2e-iot-product-groups-select"
+              mode="multiple"
+              allowClear
+              placeholder="请选择服务组"
+              options={groupOptions}
+            />
+          </Form.Item>
           <Form.Item name="description" label="产品描述">
             <Input.TextArea rows={3} maxLength={500} showCount placeholder="请输入产品描述" />
           </Form.Item>
@@ -570,28 +562,6 @@ export default function ProductList() {
         ) : (
           <Typography.Text type="secondary">暂无二维码内容，请重新生成。</Typography.Text>
         )}
-      </Modal>
-
-      <Modal
-        className="e2e-iot-product-groups-modal"
-        title={bindProduct ? `绑定服务组 - ${bindProduct.name ?? ''}` : '绑定服务组'}
-        open={bindOpen}
-        onCancel={() => setBindOpen(false)}
-        onOk={() => void handleBind()}
-        confirmLoading={bindSaving}
-        okButtonProps={{ disabled: bindLoading }}
-        width={760}
-        destroyOnHidden
-      >
-        <Transfer
-          dataSource={transferDataSource}
-          titles={['未绑定', '已绑定']}
-          targetKeys={targetKeys}
-          onChange={(keys) => setTargetKeys(keys.map((key) => String(key)))}
-          render={(item) => item.title ?? ''}
-          showSearch
-          listStyle={{ width: 300, height: 320 }}
-        />
       </Modal>
 
       <CredentialModal

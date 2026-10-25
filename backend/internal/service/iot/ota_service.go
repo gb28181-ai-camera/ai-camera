@@ -11,7 +11,6 @@ import (
 	"github.com/boticz/ai-camera-backend/internal/dto/response"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/internal/repository"
-	turnsvc "github.com/boticz/ai-camera-backend/internal/service/turn"
 	"gorm.io/gorm"
 )
 
@@ -30,17 +29,19 @@ import (
 
 // DeviceEndpointService 设备端业务逻辑。
 type DeviceEndpointService struct {
-	devices  *repository.IotDeviceRepo
-	products *repository.IotProductRepo
-	groups   *repository.IotServiceGroupRepo
+	devices        *repository.IotDeviceRepo
+	products       *repository.IotProductRepo
+	groups         *repository.IotServiceGroupRepo
+	productService *repository.IotProductServiceRepo
 }
 
 // NewDeviceEndpointService 构造设备端服务。
 func NewDeviceEndpointService() *DeviceEndpointService {
 	return &DeviceEndpointService{
-		devices:  repository.NewIotDeviceRepo(),
-		products: repository.NewIotProductRepo(),
-		groups:   repository.NewIotServiceGroupRepo(),
+		devices:        repository.NewIotDeviceRepo(),
+		products:       repository.NewIotProductRepo(),
+		groups:         repository.NewIotServiceGroupRepo(),
+		productService: repository.NewIotProductServiceRepo(),
 	}
 }
 
@@ -98,36 +99,62 @@ func (s *DeviceEndpointService) OTA(ctx context.Context, deviceCode, deviceSecre
 		if err != nil {
 			return nil, err
 		}
+		rows, err := s.productService.ListByProduct(ctx, product.ID)
+		if err != nil {
+			return nil, err
+		}
+		rowByService := make(map[int64]model.IotProductService, len(rows))
+		for _, row := range rows {
+			if row.Active != nil && !*row.Active {
+				continue
+			}
+			rowByService[row.ServiceID] = row
+		}
+
 		for i := range list {
 			if list[i].Active != nil && !*list[i].Active {
 				continue
 			}
-			items, err := s.groups.ListItems(ctx, list[i].ID)
+			services, err := s.groups.ListServices(ctx, list[i].ID)
 			if err != nil {
 				return nil, err
 			}
-			activeItems := make([]model.IotServiceItem, 0, len(items))
-			for _, it := range items {
-				if it.Active != nil && !*it.Active {
+			out := make([]response.IotOTAService, 0, len(services))
+			for _, svc := range services {
+				if svc.Active != nil && !*svc.Active {
 					continue
 				}
-				activeItems = append(activeItems, it)
+				row, ok := rowByService[svc.ID]
+				if !ok {
+					continue
+				}
+				out = append(out, response.IotOTAService{
+					Code:     svc.Code,
+					Name:     svc.Name,
+					Protocol: svc.Protocol,
+					Host:     svc.Host,
+					Port:     svc.Port,
+					Path:     svc.Path,
+					Extra:    svc.Extra,
+					// 设备端必须拿到明文才能登录服务；Web 读接口仍然脱敏。
+					Username: row.Username,
+					Password: row.Password,
+				})
 			}
 			groups = append(groups, response.IotOTAServiceGroup{
 				Code:     list[i].Code,
 				Name:     list[i].Name,
 				Type:     list[i].Type,
-				Username: list[i].Username,
-				// 设备端必须拿到明文才能登录服务；Web 读接口仍然脱敏。
-				Password: list[i].Password,
-				Items:    activeItems,
+				Services: out,
 			})
 		}
 	}
 
-	// OTA 响应不回传 device_secret：设备已经持有它，回传只会扩大泄露面。
+	// OTA 响应不回传 device_secret / sip_password：
+	// 设备已经持有这两个凭据，回传只会扩大泄露面。
 	outDevice := *d
 	outDevice.DeviceSecret = ""
+	outDevice.SipPassword = ""
 
 	detail, _ := json.Marshal(map[string]interface{}{
 		"client_version": strings.TrimSpace(clientVersion),
@@ -140,29 +167,10 @@ func (s *DeviceEndpointService) OTA(ctx context.Context, deviceCode, deviceSecre
 		IP:       ip,
 	})
 
-	// TURN/STUN：设备做 WebRTC 时经常需要穿透，随 OTA 一并下发短期凭据。
-	// 未配置 TURN 时省略该字段，不影响 OTA 其它内容。
-	var turnCred *response.IotOTATurn
-	tsvc := turnsvc.New()
-	if tsvc.Configured() {
-		if c, err := tsvc.Issue(d.DeviceCode, 0); err == nil {
-			turnCred = &response.IotOTATurn{
-				URLs:       c.URLs,
-				Username:   c.Username,
-				Credential: c.Password,
-				TTL:        c.TTL,
-				ExpiresAt:  c.ExpiresAt,
-				Realm:      c.Realm,
-			}
-		}
-		// 签发失败只省略字段：TURN 不可用不应阻断设备拿服务组配置。
-	}
-
 	return &response.IotOTAResp{
 		Product:       product,
 		Device:        outDevice,
 		ServiceGroups: groups,
-		Turn:          turnCred,
 		ServerTime:    time.Now().Format("2006-01-02 15:04:05"),
 	}, nil
 }

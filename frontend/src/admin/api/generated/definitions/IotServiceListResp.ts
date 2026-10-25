@@ -1,10 +1,8 @@
 /* eslint-disable prettier/prettier */
 // 本文件由 `cd frontend && bash scripts/api-gen.sh` 自动生成，请勿手工修改。
 import type { Definition } from './Definition';
-import type { IotGroupCredentials } from './IotGroupCredentials';
+import type { IotService } from './IotService';
 
-export type RIotGroupCredentials = Definition & {
-	code?: number;
-	data?: IotGroupCredentials;
-	message?: string;
+export type IotServiceListResp = Definition & {
+	services?: IotService[];
 }

@@ -7,6 +7,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../layout/Gaps.dart';
+import '../../services/IotAppController.dart';
 import '../../services/generated/GbController.dart';
 import '../../services/generated/definitions/AppGb.dart';
 import '../../services/generated/definitions/Response.dart';
@@ -726,8 +727,20 @@ class _GbPlaybackPageState extends State<GbPlaybackPage>
       if (!mounted || gen != _generation) return false;
 
       final RTCVideoRenderer renderer = _renderer!;
+      // 与实时页一致：WHEP 也使用后端签发的 TURN/STUN 凭据；
+      // 未配置 TURN 时返回空数组，退化为直连，不阻断回放。
+      final RIceServers iceResp = await IotAppController.iceServers();
+      final List<IceServerConfig> iceServers =
+          iceResp.isSuccess ? iceResp.servers : const <IceServerConfig>[];
+      if (!mounted || gen != _generation) return false;
       final GbWhepClient client = GbWhepClient();
-      await client.connect(url: info.webrtc, renderer: renderer);
+      await client.connect(
+        url: info.webrtc,
+        renderer: renderer,
+        iceServers: iceServers
+            .map((IceServerConfig item) => item.toRtcIceServer())
+            .toList(growable: false),
+      );
       if (!mounted || gen != _generation) {
         await client.close();
         return false;

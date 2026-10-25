@@ -2427,8 +2427,12 @@ INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, pl
 SELECT 152, '15', 2, '服务组', '/iot/service-group', 'ClusterOutlined', 'iot/ServiceGroupList', 'menu', 'pc', 'iot:service-group:list', '菜单', 2, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 152);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
-SELECT 153, '15', 2, '设备管理', '/iot/device', 'MobileOutlined', 'iot/IotDeviceList', 'menu', 'pc', 'iot:device:list', '菜单', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+SELECT 153, '15', 2, '设备管理', '/iot/device', 'MobileOutlined', 'iot/DeviceList', 'menu', 'pc', 'iot:device:list', '菜单', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 153);
+-- 已存在的库修正历史 component 元数据（路由由 App.tsx 硬编码，不影响运行）。
+UPDATE ac_menu
+   SET component = 'iot/DeviceList', updated_by = 'system', updated_dt = CURRENT_TIMESTAMP
+ WHERE path = '/iot/device' AND component <> 'iot/DeviceList';
 
 -- 产品按钮
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
@@ -2471,8 +2475,11 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 1535);
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
 SELECT 1536, '153', 3, '重置密钥', '', '', '', 'button', 'pc', 'iot:device:secret-reset', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 1536);
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 1537, '153', 3, '解绑设备', '', '', '', 'button', 'pc', 'iot:device:unbind', '按钮', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE id = 1537);
 
--- ac_menu_api：Web 端 28 条端点 + App 端 7 条端点（设备端 /iot/* 不走 Casbin，不登记）
+-- ac_menu_api：Web 端 29 条端点 + App 端 8 条端点（设备端 /iot/* 不走 Casbin，不登记）
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 700, 151, 'GET', '/web/iot/products', 'IOT产品分页列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/iot/products');
@@ -2489,8 +2496,13 @@ INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, cre
 SELECT 704, 1513, 'DELETE', '/web/iot/products/:id', '删除IOT产品', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'DELETE' AND path = '/web/iot/products/:id');
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
-SELECT 705, 151, 'POST', '/web/iot/products/:id/share-qr', '生成产品分享二维码内容', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+SELECT 705, 1512, 'POST', '/web/iot/products/:id/share-qr', '生成产品分享二维码内容', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/iot/products/:id/share-qr');
+-- 历史数据修正：分享码是写操作，权限必须是 iot:product:update（menu 1512），
+-- 不能沿用列表权限 151；否则只有列表权限的角色也能生成分享内容。
+UPDATE ac_menu_api
+   SET menu_id = 1512, updated_by = 'system', updated_dt = CURRENT_TIMESTAMP
+ WHERE method = 'POST' AND path = '/web/iot/products/:id/share-qr' AND menu_id <> 1512;
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 706, 151, 'GET', '/web/iot/products/:id/service-groups', '查询产品已绑定服务组', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/iot/products/:id/service-groups');
@@ -2513,11 +2525,13 @@ INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, cre
 SELECT 712, 1523, 'DELETE', '/web/iot/service-groups/:id', '删除IOT服务组', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'DELETE' AND path = '/web/iot/service-groups/:id');
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
-SELECT 713, 1522, 'POST', '/web/iot/service-groups/:id/reset-credentials', '重置服务组凭据', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/iot/service-groups/:id/reset-credentials');
-INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
-SELECT 714, 1522, 'PUT', '/web/iot/service-groups/:id/items', '整体替换服务组服务项', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'PUT' AND path = '/web/iot/service-groups/:id/items');
+SELECT 714, 1522, 'PUT', '/web/iot/service-groups/:id/services', '整体替换服务组服务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'PUT' AND path = '/web/iot/service-groups/:id/services');
+-- 历史接口下线：服务组不再持有凭据，凭据迁移到「产品×服务」。
+DELETE FROM ac_menu_api
+ WHERE (method = 'POST' AND path = '/web/iot/service-groups/:id/reset-credentials')
+    OR (method = 'GET'  AND path = '/web/iot/service-groups/:id/credentials')
+    OR (method = 'PUT'  AND path = '/web/iot/service-groups/:id/items');
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 715, 153, 'GET', '/web/iot/devices', 'IOT设备分页列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/iot/devices');
@@ -2548,9 +2562,6 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'PUT' AND path = '/we
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 729, 1512, 'GET', '/web/iot/products/:id/credentials', '产品明文鉴权信息(复制)', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/iot/products/:id/credentials');
-INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
-SELECT 730, 1522, 'GET', '/web/iot/service-groups/:id/credentials', '服务组明文鉴权信息(复制)', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/iot/service-groups/:id/credentials');
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 731, 1532, 'POST', '/web/iot/devices/:id/share-token', '生成设备分享令牌', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/iot/devices/:id/share-token');
@@ -2589,13 +2600,24 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/a
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 741, 105, 'POST', '/app/iot/devices/:id/share-token', 'App生成设备分享码', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/app/iot/devices/:id/share-token');
+-- 后台解绑：删除设备全部账号（含主账号）并清除激活状态。
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 742, 1537, 'POST', '/web/iot/devices/:id/unbind', '解绑设备(删除全部账号/绑定)', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/iot/devices/:id/unbind');
+-- 产品×服务凭据
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 743, 151, 'GET', '/web/iot/products/:id/services', '产品服务凭据列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/iot/products/:id/services');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 744, 1512, 'POST', '/web/iot/products/:id/services/:serviceId/reset-credentials', '重置产品服务凭据', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/iot/products/:id/services/:serviceId/reset-credentials');
 
 -- ── 12.7f 预置产品（v0.3.0）─────────────────────────────────
 --     业务上目前只有两款产品，差异全部通过**产品自身配置**表达：
 --       安防相机           net_config_mode=qrcode，无需配网，扫设备码绑定
 --       适老化智能相机     net_config_mode=bluetooth，蓝牙配网后分享
---     服务组（GB28181 / WebRTC / AIChat）也由管理员在产品上绑定。
---     这里只预置产品本身，**不伪造**服务组与服务地址。
+--     服务组是**三条系统预置数据**（见 12.7g），不开放新增/删除；
+--     管理员维护组内服务，并在产品上选择；凭据由平台按产品×服务生成。
 INSERT INTO ac_iot_product (active, name, code, description,
                             auto_network, net_config_mode, allow_share, sequence,
                             created_by, created_dt, updated_by, updated_dt)
@@ -2613,6 +2635,78 @@ SELECT TRUE, '适老化智能相机', 'elderly_camera',
        FALSE, 'bluetooth', TRUE, 2,
        'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_iot_product WHERE code = 'elderly_camera');
+
+-- ── 12.7g 预置服务组（固定三条）─────────────────────────────
+--     服务组编码就是业务分类：gb28181 / webrtc / aichat。
+--     **不开放新增/删除**，编码与类型不可修改；组本身不持有凭据。
+--     凭据在「产品 × 服务」维度生成（见 ac_iot_product_service）。
+INSERT INTO ac_iot_service_group (active, name, code, type, description,
+                                  created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, 'GB28181 服务组', 'gb28181', 'gb28181', '国标视频接入（SIP / RTSP）',
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_iot_service_group WHERE code = 'gb28181');
+
+INSERT INTO ac_iot_service_group (active, name, code, type, description,
+                                  created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, 'WebRTC 服务组', 'webrtc', 'webrtc', 'WebRTC / MQTT / TURN / RTSP 接入',
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_iot_service_group WHERE code = 'webrtc');
+
+INSERT INTO ac_iot_service_group (active, name, code, type, description,
+                                  created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, 'AI 聊天服务组', 'aichat', 'aichat', 'AI 语音对话（WebSocket）',
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_iot_service_group WHERE code = 'aichat');
+
+-- ── 12.7h 预置服务（组内具体接入项）──────────────────────────
+--     只预置“服务种类”，host/port 由管理员按实际部署填写；被产品引用后只读。
+INSERT INTO ac_iot_service (active, group_id, code, name, protocol, host, port, path, extra, sequence,
+                            created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, g.id, 'sip', 'SIP 信令', 'SIP', '', 0, '', '', 1,
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_iot_service_group g
+WHERE g.code = 'gb28181'
+  AND NOT EXISTS (SELECT 1 FROM ac_iot_service s WHERE s.group_id = g.id AND s.code = 'sip');
+
+INSERT INTO ac_iot_service (active, group_id, code, name, protocol, host, port, path, extra, sequence,
+                            created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, g.id, 'rtsp', 'RTSP 视频', 'RTSP', '', 0, '', '', 2,
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_iot_service_group g
+WHERE g.code = 'gb28181'
+  AND NOT EXISTS (SELECT 1 FROM ac_iot_service s WHERE s.group_id = g.id AND s.code = 'rtsp');
+
+INSERT INTO ac_iot_service (active, group_id, code, name, protocol, host, port, path, extra, sequence,
+                            created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, g.id, 'webrtc', 'WebRTC 视频', 'WebRTC', '', 0, '', '', 1,
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_iot_service_group g
+WHERE g.code = 'webrtc'
+  AND NOT EXISTS (SELECT 1 FROM ac_iot_service s WHERE s.group_id = g.id AND s.code = 'webrtc');
+
+INSERT INTO ac_iot_service (active, group_id, code, name, protocol, host, port, path, extra, sequence,
+                            created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, g.id, 'mqtt', 'MQTT 信令', 'MQTT', '', 0, '', '', 2,
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_iot_service_group g
+WHERE g.code = 'webrtc'
+  AND NOT EXISTS (SELECT 1 FROM ac_iot_service s WHERE s.group_id = g.id AND s.code = 'mqtt');
+
+INSERT INTO ac_iot_service (active, group_id, code, name, protocol, host, port, path, extra, sequence,
+                            created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, g.id, 'turn', 'TURN 中继', 'TURN', '', 0, '', '', 3,
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_iot_service_group g
+WHERE g.code = 'webrtc'
+  AND NOT EXISTS (SELECT 1 FROM ac_iot_service s WHERE s.group_id = g.id AND s.code = 'turn');
+
+INSERT INTO ac_iot_service (active, group_id, code, name, protocol, host, port, path, extra, sequence,
+                            created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, g.id, 'websocket', 'AI 对话', 'WebSocket', '', 0, '', '', 1,
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_iot_service_group g
+WHERE g.code = 'aichat'
+  AND NOT EXISTS (SELECT 1 FROM ac_iot_service s WHERE s.group_id = g.id AND s.code = 'websocket');
 
 -- 授权给 super_admin（角色 1）
 INSERT INTO ac_role_menu_rel (role_id, menu_id)

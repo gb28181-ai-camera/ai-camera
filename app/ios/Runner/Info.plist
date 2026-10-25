@@ -26,12 +26,18 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- 用途说明（中文）：iOS 首次调用麦克风/相机时，系统弹窗展示该文案。
+	<!-- 用途说明（中文）：iOS 首次调用麦克风/相机/蓝牙/局域网时，系统弹窗展示该文案。
 	     缺少任一条，App 调用对应能力会直接崩溃，且无法通过审核。 -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>用于语音对讲：在对讲时采集您的语音并发送到监控设备。</string>
 	<key>NSCameraUsageDescription</key>
 	<string>用于拍照巡检：拍摄现场照片并上传，作为巡检记录留存。</string>
+	<!-- v0.3.0 蓝牙配网（Nordic UART Service）：扫描并连接待配网摄像头。 -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>用于蓝牙配网：发现并连接附近的摄像头设备，完成网络配置。</string>
+	<!-- MQTT / TURN / ZLM 常部署在局域网，iOS 14+ 访问局域网需声明用途。 -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于在局域网内连接摄像头与管理服务，建立视频与设备管理连接。</string>
 	<!-- 开发/测试期后端走 http（局域网 http://192.168.x.x:8080）。
 	     这里使用 Apple 官方的「窄例外」NSAllowsLocalNetworking：
 	     仅放行局域网 / .local 域名的明文流量，**不**设置 NSAllowsArbitraryLoads，

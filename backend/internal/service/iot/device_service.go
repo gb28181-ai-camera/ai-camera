@@ -78,23 +78,28 @@ func (s *DeviceService) Get(ctx context.Context, id int64) (*response.IotDeviceD
 			return nil, err
 		}
 		for i := range list {
-			items, err := s.groups.ListItems(ctx, list[i].ID)
+			services, err := s.groups.ListServices(ctx, list[i].ID)
 			if err != nil {
 				return nil, err
 			}
-			if items == nil {
-				items = []model.IotServiceItem{}
+			if services == nil {
+				services = []model.IotService{}
 			}
 			groups = append(groups, response.IotServiceGroupDetail{
 				IotServiceGroup: maskGroup(list[i]),
-				Items:           items,
+				Services:        services,
 			})
 		}
 	}
 
 	productCode := ""
 	if d.Product != nil {
-		productCode = d.Product.Code
+		productCode = strings.TrimSpace(d.Product.Code)
+	}
+	// 没有产品时不生成二维码内容，避免前端渲染 `qrDevice//<code>`。
+	qrContent := ""
+	if productCode != "" {
+		qrContent = deviceQRContent(productCode, d.DeviceCode)
 	}
 
 	return &response.IotDeviceDetail{
@@ -103,7 +108,7 @@ func (s *DeviceService) Get(ctx context.Context, id int64) (*response.IotDeviceD
 		ServiceGroups: groups,
 		// 详情直接带二维码内容：前端列表/详情都可以就地渲染，
 		// 不必为了一个纯本地可推导的字符串多打一次接口。
-		QRContent: deviceQRContent(productCode, d.DeviceCode),
+		QRContent: qrContent,
 	}, nil
 }
 
@@ -177,15 +182,8 @@ func (s *DeviceService) CreateAccount(ctx context.Context, deviceID int64, req *
 		return nil, err
 	}
 
-	shareToken := strings.TrimSpace(req.ShareToken)
-	if shareToken == "" {
-		suffix, err := randomFrom(usernameAlphabet, 24)
-		if err != nil {
-			return nil, errors.New("生成分享令牌失败")
-		}
-		shareToken = "share_" + suffix
-	}
-
+	// 分享令牌只由 POST /devices/:id/share-token 生成：
+	// 管理端新增的普通分享账号不带令牌，避免「创建账号即产生一个可被认领的入口」。
 	account := &model.IotDeviceAccount{
 		DeviceID:     deviceID,
 		Username:     username,
@@ -194,7 +192,6 @@ func (s *DeviceService) CreateAccount(ctx context.Context, deviceID int64, req *
 		Nickname:     strings.TrimSpace(req.Nickname),
 		Phone:        strings.TrimSpace(req.Phone),
 		Status:       status,
-		ShareToken:   &shareToken,
 	}
 	if err := s.devices.CreateAccount(ctx, account); err != nil {
 		return nil, err
@@ -251,9 +248,6 @@ func (s *DeviceService) UpdateAccount(ctx context.Context, deviceID, accountID i
 			return nil, err
 		}
 		m.Status = v
-	}
-	if v := strings.TrimSpace(req.ShareToken); v != "" {
-		m.ShareToken = &v
 	}
 	if err := s.devices.UpdateAccount(ctx, m); err != nil {
 		return nil, err
@@ -318,6 +312,35 @@ func (s *DeviceService) Activate(ctx context.Context, deviceID int64, ip string)
 	}, nil
 }
 
+// Unbind 后台解绑设备：删除全部账号（含主账号）并清除激活状态。
+//
+// 设计 §9 要求「绑定后可在后台解绑」：二维码/蓝牙绑定一旦发出，
+// 管理员必须能在后台收回，否则设备会永久挂在第一个认领用户名下。
+// 解绑是幂等的：重复调用返回 accounts=0，仍记一条解绑事件。
+// 设备接入配置（产品、接入密钥、国标编码）保持不变，设备无需重新配网，
+// 只需重新激活主账号。
+func (s *DeviceService) Unbind(ctx context.Context, deviceID int64, ip string) (*response.IotDeviceUnbindResult, error) {
+	d, err := s.devices.GetByID(ctx, deviceID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrDeviceNotFound
+		}
+		return nil, err
+	}
+
+	removed, err := s.devices.UnbindAll(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.devices.CreateEvent(ctx, &model.IotDeviceEvent{
+		DeviceID: deviceID,
+		Event:    model.IotEventUnbind,
+		Detail:   fmt.Sprintf(`{"device_code":%q,"accounts":%d}`, d.DeviceCode, removed),
+		IP:       ip,
+	})
+	return &response.IotDeviceUnbindResult{DeviceID: deviceID, Accounts: removed}, nil
+}
+
 // ResetSecret 重置设备接入密钥，返回一次性明文。
 func (s *DeviceService) ResetSecret(ctx context.Context, deviceID int64, ip string) (*response.IotDeviceSecret, error) {
 	d, err := s.devices.GetByID(ctx, deviceID)
@@ -352,6 +375,9 @@ func (s *DeviceService) ResetSecret(ctx context.Context, deviceID int64, ip stri
 // 之后该设备就能进入正常的国标注册流程。
 //
 // 规则：
+//   - **未同时携带产品编码与设备编码 → 不做任何绑定**，返回 (nil, nil)：
+//     这类 GB28181 设备按独立设备接入（只按 gb_device_id 走国标白名单），
+//     不要求也不自动绑定产品；OTA 对无产品设备返回空服务组。
 //   - 设备不存在 → ErrDeviceNotFound；
 //   - 产品为空/编码不一致 → ErrDeviceProductMismatch（绝不跨产品挂设备）；
 //   - gb_device_id 为空 → 写入并置 activated；
@@ -362,6 +388,10 @@ func (s *DeviceService) BindBySIP(ctx context.Context, productCode, deviceCode, 
 	productCode = strings.TrimSpace(productCode)
 	deviceCode = strings.TrimSpace(deviceCode)
 	gbDeviceID = strings.TrimSpace(gbDeviceID)
+	if productCode == "" || deviceCode == "" {
+		// 没有产品编码/设备编码 = 独立国标设备，不参与 IOT 产品绑定。
+		return nil, nil
+	}
 	if gbDeviceID == "" {
 		return nil, ErrGbDeviceIDRequired
 	}

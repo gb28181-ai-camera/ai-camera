@@ -63,10 +63,10 @@ type RIotShareQR struct {
 
 // ── 服务组 ────────────────────────────────────────────────────
 
-// IotServiceGroupDetail 服务组详情（含服务项）。
+// IotServiceGroupDetail 服务组详情（含服务）。
 type IotServiceGroupDetail struct {
 	model.IotServiceGroup
-	Items []model.IotServiceItem `json:"items"`
+	Services []model.IotService `json:"services"`
 }
 
 // PageIotServiceGroupResp 服务组分页载荷。
@@ -95,27 +95,40 @@ type RIotServiceGroupList struct {
 	Data []model.IotServiceGroup `json:"data"`
 }
 
-// IotServiceItemListResp 服务项列表载荷。
-type IotServiceItemListResp struct {
-	Items []model.IotServiceItem `json:"items"`
+// IotServiceListResp 服务列表载荷。
+type IotServiceListResp struct {
+	Services []model.IotService `json:"services"`
 }
 
-// RIotServiceItemList 服务项列表响应。
-type RIotServiceItemList struct {
+// RIotServiceList 服务列表响应。
+type RIotServiceList struct {
 	BaseResponse
-	Data IotServiceItemListResp `json:"data"`
+	Data IotServiceListResp `json:"data"`
 }
 
-// IotServiceGroupCredentials 服务组凭据（重置后一次性返回明文）。
-type IotServiceGroupCredentials struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+// IotProductServiceListResp 产品服务凭据列表载荷（密码脱敏）。
+type IotProductServiceListResp struct {
+	Services []model.IotProductService `json:"services"`
 }
 
-// RIotServiceGroupCredentials 重置凭据响应。
-type RIotServiceGroupCredentials struct {
+// RIotProductServiceList 产品服务凭据列表响应。
+type RIotProductServiceList struct {
 	BaseResponse
-	Data IotServiceGroupCredentials `json:"data"`
+	Data IotProductServiceListResp `json:"data"`
+}
+
+// IotProductServiceCredentials 产品-服务凭据（重置后一次性返回明文）。
+type IotProductServiceCredentials struct {
+	ProductID int64  `json:"product_id"`
+	ServiceID int64  `json:"service_id"`
+	Username  string `json:"username"`
+	Password  string `json:"password"`
+}
+
+// RIotProductServiceCredentials 产品-服务凭据响应。
+type RIotProductServiceCredentials struct {
+	BaseResponse
+	Data IotProductServiceCredentials `json:"data"`
 }
 
 // ── 设备与账号 ────────────────────────────────────────────────
@@ -145,8 +158,9 @@ type IotDeviceDetail struct {
 
 // IotDeviceQR 设备二维码。
 //
-// qr_content 固定为 {"type":"device","product_code":"...","device_code":"..."}：
-// App 扫到 type=device 即视为持有该设备，用 bind-qr 完成绑定。
+// qr_content 固定为 URL：https://boticz.cn/qrDevice/<product_code>/<device_code>。
+// App 扫到该前缀即视为持有该设备，用 bind-qr 完成绑定；JSON 形式仅作输入兼容。
+// 设备未绑定产品时接口返回 400，不生成空产品编码的地址。
 type IotDeviceQR struct {
 	DeviceID    int64  `json:"device_id"`
 	ProductCode string `json:"product_code"`
@@ -214,33 +228,45 @@ type RIotDeviceSecret struct {
 	Data IotDeviceSecret `json:"data"`
 }
 
-// ── 设备端 OTA / 激活 ────────────────────────────────────────
-
-// IotOTAServiceGroup 下发给设备的服务组配置。
+// IotDeviceUnbindResult 后台解绑结果。
 //
-// username/password 是**明文**：设备已用 device_secret 完成身份确认，
-// 若此处再脱敏，设备将无法登录服务。Web 读接口仍然脱敏。
-type IotOTAServiceGroup struct {
-	Code     string                 `json:"code"`
-	Name     string                 `json:"name"`
-	Type     string                 `json:"type"`
-	Username string                 `json:"username"`
-	Password string                 `json:"password"`
-	Items    []model.IotServiceItem `json:"items"`
+// Accounts 为本次删除的账号数（含主账号与分享账号）；
+// 重复解绑返回 0，接口保持幂等。
+type IotDeviceUnbindResult struct {
+	DeviceID int64 `json:"device_id"`
+	Accounts int64 `json:"accounts"`
 }
 
-// IotOTATurn 是随 OTA 下发的 TURN/STUN 接入信息。
+// RIotDeviceUnbind 后台解绑响应。
+type RIotDeviceUnbind struct {
+	BaseResponse
+	Data IotDeviceUnbindResult `json:"data"`
+}
+
+// ── 设备端 OTA / 激活 ────────────────────────────────────────
+
+// IotOTAService 下发给设备的单个服务配置。
 //
-// coturn 没有鉴权回调，凭据由后端用共享密钥签发（TURN REST API）：
-// Username 是 "<过期时间戳>:<device_code>"，Credential 是 HMAC-SHA1 的 Base64。
-// 未配置 TURN 时整个字段省略，设备侧按「无 TURN」降级。
-type IotOTATurn struct {
-	URLs       []string `json:"urls"`
-	Username   string   `json:"username"`
-	Credential string   `json:"credential"`
-	TTL        int      `json:"ttl"`
-	ExpiresAt  int64    `json:"expires_at"`
-	Realm      string   `json:"realm"`
+// username/password 是**该产品在该服务上的明文凭据**：设备已用 device_secret
+// 完成身份确认，若此处再脱敏，设备将无法登录服务。Web 读接口仍然脱敏。
+type IotOTAService struct {
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Path     string `json:"path"`
+	Extra    string `json:"extra"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// IotOTAServiceGroup 下发给设备的服务组配置（服务组 → 服务）。
+type IotOTAServiceGroup struct {
+	Code     string          `json:"code"`
+	Name     string          `json:"name"`
+	Type     string          `json:"type"`
+	Services []IotOTAService `json:"services"`
 }
 
 // IotOTAResp 设备端 OTA 响应。
@@ -248,7 +274,6 @@ type IotOTAResp struct {
 	Product       *model.IotProduct    `json:"product"`
 	Device        model.Device         `json:"device"`
 	ServiceGroups []IotOTAServiceGroup `json:"service_groups"`
-	Turn          *IotOTATurn          `json:"turn,omitempty"`
 	ServerTime    string               `json:"server_time"`
 }
 
@@ -278,14 +303,25 @@ type IotCredentialsProduct struct {
 	Name string `json:"name"`
 }
 
-// IotCredentialsGroup 单个服务组的明文凭据与服务项。
+// IotCredentialsService 单个服务的明文凭据。
+type IotCredentialsService struct {
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Path     string `json:"path"`
+	Extra    string `json:"extra"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// IotCredentialsGroup 单个服务组及其服务的明文凭据。
 type IotCredentialsGroup struct {
-	Code     string                 `json:"code"`
-	Name     string                 `json:"name"`
-	Type     string                 `json:"type"`
-	Username string                 `json:"username"`
-	Password string                 `json:"password"`
-	Items    []model.IotServiceItem `json:"items"`
+	Code     string                  `json:"code"`
+	Name     string                  `json:"name"`
+	Type     string                  `json:"type"`
+	Services []IotCredentialsService `json:"services"`
 }
 
 // IotMqttInfo MQTT 连接信息。
@@ -317,24 +353,12 @@ type RIotCredentials struct {
 	Data IotCredentials `json:"data"`
 }
 
-// IotGroupCredentials 单个服务组的明文鉴权信息。
-type IotGroupCredentials struct {
-	Group IotCredentialsGroup `json:"group"`
-	MQTT  *IotMqttInfo        `json:"mqtt"`
-}
-
-// RIotGroupCredentials 单个服务组明文鉴权信息响应。
-type RIotGroupCredentials struct {
-	BaseResponse
-	Data IotGroupCredentials `json:"data"`
-}
-
 // ── 设备分享令牌 ──────────────────────────────────────────────
 
 // IotDeviceShareToken 设备分享令牌（一次性）。
 //
-// QRContent 固定为 {"type":"device_share","token":"..."}：
-// App 扫码后先按 type 判断这是设备分享而不是产品分享，再取 token 认领。
+// QRContent 固定为 URL：https://boticz.cn/deviceShareToken/<token>。
+// App 按前缀识别为设备分享码，再取 token 调用 claim；JSON 形式仅作输入兼容。
 type IotDeviceShareToken struct {
 	DeviceID  int64  `json:"device_id"`
 	AccountID int64  `json:"account_id"`

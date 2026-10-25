@@ -234,6 +234,32 @@ func (h *IotDeviceHandler) ResetSecret(c *gin.Context) {
 	utils.Success(c, resp)
 }
 
+// Unbind 后台解绑设备
+//
+// @Summary      解绑设备（删除全部账号）
+// @Description  删除该设备全部账号（含主账号）并清除激活时间；设备接入配置保持不变，可重新激活。幂等。
+// @Tags         IOT
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "设备ID"
+// @Success      200  {object}  response.RIotDeviceUnbind
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/iot/devices/{id}/unbind [post]
+// @ID           unbindIotDevice
+func (h *IotDeviceHandler) Unbind(c *gin.Context) {
+	id, ok := iotDevicePathID(c)
+	if !ok {
+		return
+	}
+	resp, err := h.svc.Unbind(c.Request.Context(), id, c.ClientIP())
+	if err != nil {
+		respondIotErr(c, err, iotsvc.ErrDeviceNotFound)
+		return
+	}
+	utils.Success(c, resp)
+}
+
 // SetProduct 设置设备所属产品
 //
 // @Summary      设置设备所属产品
@@ -268,7 +294,7 @@ func (h *IotDeviceHandler) SetProduct(c *gin.Context) {
 // QR 设备二维码
 //
 // @Summary      设备二维码
-// @Description  返回设备二维码内容 {"type":"device","product_code":"...","device_code":"..."}；App 扫码后绑定
+// @Description  返回 https://boticz.cn/qrDevice/<product_code>/<device_code>；App 扫码后绑定。设备未绑定产品时返回 400
 // @Tags         IOT
 // @Accept       json
 // @Produce      json

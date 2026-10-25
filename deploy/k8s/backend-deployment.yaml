@@ -155,6 +155,54 @@ spec:
             - name: SIP_LOG_RETENTION_DAYS
               value: "30"
 
+            # ── IOT：MQTT 鉴权 / WebRTC 信令（v0.3.0）──
+            # 内部 fork 的 mochi-mqtt 用 gRPC 回调后端鉴权；开启时暴露 50051。
+            - name: MQTT_GRPC_ENABLED
+              value: "false"
+            - name: MQTT_GRPC_LISTEN
+              value: ":50051"
+            - name: MQTT_SIGNAL_ENABLED
+              value: "false"
+            - name: MQTT_BROKER_URL
+              value: "tcp://ai-camera-mqtt:1883"
+            - name: MQTT_RPC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: MQTT_RPC_TOKEN
+                  optional: true
+
+            # ── IOT：TURN / STUN 凭据签发（v0.3.0）──
+            # secret 必须与 coturn 的 static-auth-secret 一致；
+            # 未配置时 /app/rtc/ice-servers 返回 []（客户端降级为直连/STUN）。
+            - name: TURN_STATIC_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: TURN_STATIC_AUTH_SECRET
+                  optional: true
+            - name: TURN_RPC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-camera-secrets
+                  key: TURN_RPC_TOKEN
+                  optional: true
+            - name: TURN_REALM
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: TURN_REALM
+            - name: TURN_URLS
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: TURN_URLS
+            - name: TURN_TTL_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: ai-camera-config
+                  key: TURN_TTL_SECONDS
+
           readinessProbe:
             httpGet:
               path: /health

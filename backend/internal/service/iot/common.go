@@ -23,15 +23,21 @@ import (
 // 业务错误：Handler 依据 errors.Is 分类返回 400 / 401 / 404 / 409。
 var (
 	ErrProductNotFound        = errors.New("IOT产品不存在")
+	ErrProductServiceNotFound = errors.New("产品服务凭据不存在")
 	ErrProductCodeExists      = errors.New("产品编码已存在")
 	ErrServiceGroupNotFound   = errors.New("服务组不存在")
 	ErrServiceGroupCodeExists = errors.New("服务组编码已存在")
 	ErrServiceGroupInUse      = errors.New("服务组已被产品引用，无法删除")
-	ErrDeviceNotFound         = errors.New("设备不存在")
-	ErrAccountNotFound        = errors.New("设备账号不存在")
-	ErrOwnerExists            = errors.New("设备主账号已存在")
-	ErrAlreadyActivated       = errors.New("设备已激活，请勿重复激活")
-	ErrOwnerDeleteForbidden   = errors.New("主账号不允许删除")
+	// 服务组是系统预置的三条固定数据，不开放新增/删除，编码与类型也不可修改。
+	ErrServiceGroupCreateForbidden = errors.New("服务组为系统预置，不允许新增")
+	ErrServiceGroupDeleteForbidden = errors.New("服务组为系统预置，不允许删除")
+	ErrServiceGroupCodeImmutable   = errors.New("服务组编码固定为 gb28181 / webrtc / aichat，不允许修改")
+	ErrServiceGroupTypeImmutable   = errors.New("服务组类型由编码决定，不允许修改")
+	ErrDeviceNotFound              = errors.New("设备不存在")
+	ErrAccountNotFound             = errors.New("设备账号不存在")
+	ErrOwnerExists                 = errors.New("设备主账号已存在")
+	ErrAlreadyActivated            = errors.New("设备已激活，请勿重复激活")
+	ErrOwnerDeleteForbidden        = errors.New("主账号不允许删除")
 
 	// 设备二维码 / SIP 绑定相关。
 	//
@@ -39,6 +45,7 @@ var (
 	// 用「产品编码 + 设备编码 + 国标编码」做一次显式绑定。两者的共同前提是
 	// 产品与设备必须匹配，否则会把设备错挂到另一个产品下。
 	ErrDeviceProductMismatch = errors.New("设备不属于该产品")
+	ErrDeviceProductRequired = errors.New("设备未绑定产品，无法生成设备二维码")
 	ErrGbDeviceIDConflict    = errors.New("设备已绑定其他国标编码，禁止改绑")
 	ErrGbDeviceIDRequired    = errors.New("国标编码不能为空")
 	ErrBindQRInvalid         = errors.New("设备二维码无效：设备不存在或产品不匹配")
@@ -65,6 +72,7 @@ var protocolDefaultPorts = map[string]int{
 	model.IotProtocolWebRTC:    443,
 	model.IotProtocolMQTT:      1883,
 	model.IotProtocolWebSocket: 443,
+	model.IotProtocolTURN:      3478,
 }
 
 // randomFrom 从字符集中等概率取 n 个字符。
@@ -84,20 +92,20 @@ func randomFrom(alphabet string, n int) (string, error) {
 	return b.String(), nil
 }
 
-// GenerateServiceGroupPassword 生成 16 位服务组密码。
-func GenerateServiceGroupPassword() (string, error) {
+// GenerateServicePassword 生成 16 位服务登录密码。
+func GenerateServicePassword() (string, error) {
 	return randomFrom(credentialAlphabet, 16)
 }
 
-// generateUsername 生成带前缀的随机用户名，并保证在服务组表中唯一。
-func generateUsername(ctx context.Context, repo *repository.IotServiceGroupRepo, prefix string, excludeID int64) (string, error) {
+// generateProductServiceUsername 生成带前缀的随机服务用户名，保证全局唯一。
+func generateProductServiceUsername(ctx context.Context, repo *repository.IotProductServiceRepo, prefix string) (string, error) {
 	for i := 0; i < 10; i++ {
 		suffix, err := randomFrom(usernameAlphabet, 10)
 		if err != nil {
 			return "", err
 		}
 		name := prefix + suffix
-		exists, err := repo.ExistsByUsername(ctx, name, excludeID)
+		exists, err := repo.ExistsUsername(ctx, name)
 		if err != nil {
 			return "", err
 		}
@@ -105,7 +113,7 @@ func generateUsername(ctx context.Context, repo *repository.IotServiceGroupRepo,
 			return name, nil
 		}
 	}
-	return "", errors.New("生成服务组用户名失败，请重试")
+	return "", errors.New("生成服务用户名失败，请重试")
 }
 
 // generateAccountUsername 生成带前缀的随机设备账号登录名，并保证全局唯一。
@@ -183,16 +191,12 @@ func validateAccountStatus(status string) error {
 	}
 }
 
-// maskGroup 复制并脱敏服务组密码。
-//
-// 必须复制而不是原地修改：调用方可能仍需要明文（例如设备端 OTA），
-// 原地改会把同一个实体在内存里的明文抹掉。
+// maskGroup 复制服务组（服务组本身已不持有凭据）。
 func maskGroup(g model.IotServiceGroup) model.IotServiceGroup {
-	g.Password = utils.MaskSecret(g.Password)
 	return g
 }
 
-// maskGroups 批量脱敏。
+// maskGroups 批量复制。
 func maskGroups(items []model.IotServiceGroup) []model.IotServiceGroup {
 	out := make([]model.IotServiceGroup, 0, len(items))
 	for i := range items {
@@ -201,11 +205,29 @@ func maskGroups(items []model.IotServiceGroup) []model.IotServiceGroup {
 	return out
 }
 
-// maskDevice 复制并脱敏设备接入密钥。
+// maskProductService 复制并脱敏产品-服务凭据的密码。
+func maskProductService(m model.IotProductService) model.IotProductService {
+	m.Password = utils.MaskSecret(m.Password)
+	return m
+}
+
+// maskProductServices 批量脱敏。
+func maskProductServices(items []model.IotProductService) []model.IotProductService {
+	out := make([]model.IotProductService, 0, len(items))
+	for i := range items {
+		out = append(out, maskProductService(items[i]))
+	}
+	return out
+}
+
+// maskDevice 复制并脱敏设备接入密钥与国标 SIP 密码。
 //
 // 同样必须复制：OTA 响应与鉴权逻辑仍要使用原值。
+// 设备复用 ac_device，因此 IOT 读接口也会带回 GB28181 的 sip_password；
+// 该字段与 device_secret 一样属于敏感凭据，统一在 IOT 侧脱敏。
 func maskDevice(d model.Device) model.Device {
 	d.DeviceSecret = utils.MaskSecret(d.DeviceSecret)
+	d.SipPassword = utils.MaskSecret(d.SipPassword)
 	return d
 }
 

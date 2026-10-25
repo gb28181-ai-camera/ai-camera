@@ -6,7 +6,6 @@ export type UpdateIotDeviceAccountReq = Definition & {
 	nickname?: string;
 	password?: string;
 	phone?: string;
-	share_token?: string;
 	status?: string;
 	username?: string;
 }

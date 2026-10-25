@@ -1,6 +1,7 @@
 # 端到端测试（Playwright）
 
-管理后台 E2E 测试，覆盖登录、系统管理、基础信息、资源管理、风险/告警、巡检、升级、告警设置、统计与大屏等模块。
+管理后台 E2E 测试，覆盖登录、系统管理、基础信息、资源管理、风险/告警、巡检、升级、告警设置、统计与大屏、
+国标视频与 IOT 管理等模块。
 
 ## 目录结构
 
@@ -11,10 +12,12 @@ e2e/
 │   └── auth.setup.ts        # 全局准备：登录一次并落盘 e2e/.auth/admin.json
 ├── helpers/
 │   ├── console.ts           # console error / pageerror 采集器
-│   └── crud.ts              # 通用 CRUD / 搜索 / 表格断言 / 接口造数工具
+│   ├── crud.ts              # 通用 CRUD / 搜索 / 表格断言 / 接口造数工具
+│   └── iot.ts               # IOT 造数/清理、弹窗关闭、非搜索型 Select
 ├── smoke/                   # 冒烟测试（串行执行，按文件名字母序）
 │   ├── 01a-login.spec.ts
-│   ├── ...
+│   ├── 11a-gb-device.spec.ts ~ 11d-gb-platform-voice.spec.ts  # 国标视频
+│   ├── 12a-iot-product.spec.ts ~ 12c-iot-device.spec.ts       # IOT 管理
 │   └── 99-all-list-page.spec.ts   # 全页面覆盖（必须最后执行）
 └── screenshots/             # 用例截图
 ```

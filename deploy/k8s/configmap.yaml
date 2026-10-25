@@ -26,6 +26,13 @@ data:
   SIP_ADVERTISE_IP: "203.0.113.10"   # 占位：TEST-NET-3，部署时替换
   MEDIA_PUBLIC_IP: "203.0.113.10"    # 通常与 SIP_ADVERTISE_IP 相同
 
+  # ── TURN / STUN（v0.3.0 IOT）──
+  # ★ TURN_URLS 必须是**客户端可达**地址，不能写集群 Service 名。
+  #   TURN_STATIC_AUTH_SECRET / TURN_RPC_TOKEN 在 Secret 中注入。
+  TURN_REALM: "ai-camera"
+  TURN_URLS: "stun:203.0.113.10:3478,turn:203.0.113.10:3478?transport=udp,turn:203.0.113.10:3478?transport=tcp"
+  TURN_TTL_SECONDS: "3600"
+
   config.yaml: |
     server:
       port: 8080

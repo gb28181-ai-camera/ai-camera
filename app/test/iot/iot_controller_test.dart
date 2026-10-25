@@ -193,22 +193,28 @@ void main() {
               'code': 'grp-9',
               'name': '视频服务',
               'type': 'webrtc',
-              'username': 'iot_u',
-              'password': 'iot_p',
-              'items': <dynamic>[
+              'services': <dynamic>[
                 <String, dynamic>{
+                  'code': 'mqtt',
+                  'name': 'MQTT 接入',
                   'protocol': 'MQTT',
                   'host': '192.168.1.10',
                   'port': 1883,
                   'path': '',
                   'extra': '{"tls":true}',
+                  'username': 'iot_u',
+                  'password': 'iot_p',
                 },
                 <String, dynamic>{
+                  'code': 'webrtc',
+                  'name': 'WebRTC',
                   'protocol': 'WebRTC',
                   'host': 'media.local',
                   'port': 443,
                   'path': '/whep',
                   'extra': <String, dynamic>{},
+                  'username': 'iot_w',
+                  'password': 'iot_wp',
                 },
               ],
             },
@@ -234,9 +240,10 @@ void main() {
     expect(credentials?.groups, hasLength(1));
     final IotServiceGroup group = credentials!.groups.first;
     expect(group.code, 'grp-9');
-    expect(group.username, 'iot_u');
-    expect(group.items, hasLength(2));
+    expect(group.services, hasLength(2));
     expect(group.mqttItem?.host, '192.168.1.10');
+    expect(group.mqttItem?.username, 'iot_u');
+    expect(group.mqttItem?.password, 'iot_p');
     expect(group.mqttItem?.extra['tls'], isTrue);
     expect(credentials.mqtt?.topicPrefix, 'iot/grp-9');
     expect(credentials.turn?.realm, 'ai-camera');

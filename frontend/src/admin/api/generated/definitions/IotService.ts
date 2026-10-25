@@ -3,8 +3,9 @@
 import type { Definition } from './Definition';
 import type { DeletedAt } from './DeletedAt';
 
-export type IotServiceItem = Definition & {
+export type IotService = Definition & {
 	active?: boolean;
+	code?: string;
 	created_by?: string;
 	created_dt?: string;
 	deleted_at?: DeletedAt;
@@ -12,6 +13,7 @@ export type IotServiceItem = Definition & {
 	group_id?: number;
 	host?: string;
 	id?: number;
+	name?: string;
 	path?: string;
 	port?: number;
 	protocol?: string;

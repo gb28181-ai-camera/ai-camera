@@ -13,7 +13,6 @@ export type IotProduct = Definition & {
 	created_dt?: string;
 	deleted_at?: DeletedAt;
 	description?: string;
-	device_type?: string;
 	id?: number;
 	name?: string;
 	net_config_mode?: string;

@@ -134,6 +134,15 @@ services:
       MQTT_SIGNAL_ENABLED: ${MQTT_SIGNAL_ENABLED:-false}
       MQTT_BROKER_URL: ${MQTT_BROKER_URL:-tcp://mqtt:1883}
       MQTT_RPC_TOKEN: ${MQTT_RPC_TOKEN:-}
+      # ── TURN / STUN（IOT）──
+      # 后端负责签发 TURN REST 凭据：secret 必须与 coturn 的
+      # --static-auth-secret 一致；TURN_URLS 必须是**客户端可达**地址，
+      # 不能写 compose 服务名。未配置 secret 时 /app/rtc/ice-servers 返回 []。
+      TURN_STATIC_AUTH_SECRET: ${TURN_STATIC_AUTH_SECRET:-}
+      TURN_REALM: ${TURN_REALM:-ai-camera}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_TTL_SECONDS: ${TURN_TTL_SECONDS:-3600}
+      TURN_RPC_TOKEN: ${TURN_RPC_TOKEN:-}
     ports:
       - "${BACKEND_PORT:-8081}:8080"
       # SIP 端口随 backend 一起暴露（内嵌模式）。若改用独立 sipsvc，
@@ -327,6 +336,13 @@ services:
       TURN_REALM: ${TURN_REALM:-ai-camera}
       # ★ 设备/客户端可达的宿主机地址；NAT 后必须填公网/映射地址
       TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-127.0.0.1}
+      # 产品×TURN 服务凭据写入 turnusers_lt，coturn 通过 SQL userdb 查询。
+      POSTGRES_USER: ${POSTGRES_USER:-aicamera}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_camera_dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
     # 不用 `${VAR:?}`：Compose 会对所有服务插值，未启用该 profile 时也会报错。
     # 真正的 fail-fast 在下面的脚本里。
     command:
@@ -339,6 +355,7 @@ services:
           --listening-port=3478 \
           --lt-cred-mech --use-auth-secret \
           --static-auth-secret="$$TURN_STATIC_AUTH_SECRET" \
+          --userdb="host=postgres port=5432 user=$$POSTGRES_USER password=$$POSTGRES_PASSWORD dbname=$$POSTGRES_DB sslmode=disable" \
           --realm="$$TURN_REALM" \
           --external-ip="$$TURN_EXTERNAL_IP" \
           --min-port=49160 --max-port=49200 \
