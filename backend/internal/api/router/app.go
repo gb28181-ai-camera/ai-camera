@@ -45,6 +45,8 @@ func registerAppRoutes(r *gin.Engine) {
 	appGbH := handler.NewAppGbHandler()
 	// IOT 设备认领/绑定与 ICE 凭据：所有读写都以 JWT 的 user_id 为边界。
 	appIotH := handler.NewAppIotHandler()
+	// 智能语音聊天（v0.6.0）：签发一次性 WS ticket。
+	appVoiceH := handler.NewVoiceWsHandler()
 
 	// ── 公开接口 ──
 	a := r.Group("/app")
@@ -137,5 +139,9 @@ func registerAppRoutes(r *gin.Engine) {
 
 		// ── RTC ICE 服务器（TURN/STUN 短期凭据）───────────────
 		aAuth.GET("/rtc/ice-servers", appIotH.IceServers)
+
+		// ── 智能语音聊天（v0.6.0）────────────────────────────
+		// ticket 一次性，WS 网关本身在 router/voice.go。
+		aAuth.POST("/voice/ws-ticket", appVoiceH.WsTicket)
 	}
 }

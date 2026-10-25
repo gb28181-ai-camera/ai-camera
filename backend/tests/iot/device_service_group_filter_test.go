@@ -59,12 +59,15 @@ func TestPageIotDevices_ServiceGroupTypeFilter(t *testing.T) {
 		}
 
 		deviceSvc := svciot.NewDeviceService()
-		webDevice := mustDevice(t, ctx, uniq("FILTER_WEB"))
-		chatDevice := mustDevice(t, ctx, uniq("FILTER_CHAT"))
-		multiDevice := mustDevice(t, ctx, uniq("FILTER_MULTI"))
-		plainDevice := mustDevice(t, ctx, uniq("FILTER_PLAIN"))
-		disabledDevice := mustDevice(t, ctx, uniq("FILTER_DISABLED"))
-		noProductDevice := mustDevice(t, ctx, uniq("FILTER_NONE"))
+		// 用唯一前缀隔离本用例创建的设备：测试库可能残留其它用例/手工数据，
+		// 不能对「全部 AIChat 设备」做数量断言。
+		tag := uniq("SGFILTER")
+		webDevice := mustDevice(t, ctx, tag+"_WEB")
+		chatDevice := mustDevice(t, ctx, tag+"_CHAT")
+		multiDevice := mustDevice(t, ctx, tag+"_MULTI")
+		plainDevice := mustDevice(t, ctx, tag+"_PLAIN")
+		disabledDevice := mustDevice(t, ctx, tag+"_DISABLED")
+		noProductDevice := mustDevice(t, ctx, tag+"_NONE")
 		for _, pair := range []struct {
 			device  *model.Device
 			product *model.IotProduct
@@ -90,6 +93,7 @@ func TestPageIotDevices_ServiceGroupTypeFilter(t *testing.T) {
 		req := func(groupType string) *request.PageIotDeviceReq {
 			return &request.PageIotDeviceReq{
 				PageReq:          request.PageReq{Page: 1, PageSize: 50},
+				Keyword:          tag,
 				ServiceGroupType: groupType,
 			}
 		}
@@ -142,6 +146,7 @@ func TestPageIotDevices_ServiceGroupTypeFilter(t *testing.T) {
 		// 未指定类型时返回全部设备（含未绑定产品的设备）。
 		allResp, err := deviceSvc.Page(ctx, &request.PageIotDeviceReq{
 			PageReq: request.PageReq{Page: 1, PageSize: 50},
+			Keyword: tag,
 		})
 		if err != nil {
 			t.Fatalf("全部设备分页失败: %v", err)

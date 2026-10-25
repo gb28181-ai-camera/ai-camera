@@ -6,7 +6,7 @@ Go 后端服务：Gin + GORM + PostgreSQL + Casbin，按 `Handler → Service �
 MQTT 鉴权与 WebRTC 信令、TURN/STUN 凭据签发；v0.4.0 对齐 WVP-GB28181-Pro 的
 设备配置/控制、媒体指标与流会话、日志 SSE、分享播放、录像合并等运维能力。
 
-> 当前版本: **v0.5.1** | 最后更新: 2026-10-25
+> 当前版本: **v0.6.0** | 最后更新: 2026-10-25
 
 ---
 
@@ -837,6 +837,24 @@ IOT 模块共 **39 条路由**（Web 29 + App 8 + 设备端 2），另有内部 
 
 > 契约见 `docs/开发文档/后端开发/00-接口契约.md` §17；
 > 设计说明见 `docs/敏捷开发/v0.4.0 WVP功能对齐/00-实施说明.md`。
+
+### 18. 智能语音聊天（v0.6.0）
+
+Pipecat 负责 VAD/STT/LLM/TTS；Go 负责鉴权、WS 网关、MCP 与记忆数据。
+
+| 分组 | 端点 | 说明 |
+|:--|:--|:--|
+| Ticket | `POST /web/voice/ws-ticket`、`POST /app/voice/ws-ticket` | 60s 一次性 ticket |
+| WS 网关 | `/web/voice/ws`、`/app/voice/ws`、`/device/voice/ws` | 反向代理 Pipecat `/ws/voice` |
+| 内部 MCP | `POST /internal/mcp` | JSON-RPC：initialize/tools/list/tools/call |
+| 内部记忆 | `/internal/voice/memory/{retrieve,write}` | pgvector 检索/写入 |
+| 管理 | `/web/voice/memories*`、`/web/voice/mcp/*` | 记忆与 MCP 工具/日志 |
+
+- `X-Voice-Context` 使用 HMAC-SHA256；工具身份只从签名上下文注入。
+- 记忆默认 1024 维 + HNSW；未配置 embedding 时降级为时间/关键词检索。
+- ticket 进程内一次性；多副本需改 Redis。
+- DDL：`docs/开发文档/数据库设计/sql/ddl/15-语音Agent.sql`；
+  协议：`docs/敏捷开发/v0.6.0 智能语音聊天/00-设计与协议.md`。
 
 ### 路由分组与中间件
 

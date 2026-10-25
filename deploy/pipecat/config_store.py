@@ -97,6 +97,22 @@ DEFAULT_CONFIG: Dict[str, str] = {
     "barge_in": "false",
     "session_idle_timeout": "60",
     "max_session_sec": "600",
+    # ── v0.6.0 WebSocket / MCP / 记忆（与 Go voice_agent_service.go 对齐）──
+    # 这些键由 Go Apply 下发；Pipecat 读取后用于 WS 会话。
+    "fast_ack_text": "我在",
+    "memory_enabled": "true",
+    "memory_top_k": "5",
+    "mcp_enabled": "true",
+    "ws_enabled": "true",
+    "ws_path": "/ws/voice",
+    # Pipecat 侧可选扩展（不写库也能通过 /config 或 param_ 前缀下发）。
+    "ws_max_sessions": "100",
+    "ws_hello_timeout": "10",
+    "ws_idle_timeout": "0",
+    "ws_max_session_sec": "0",
+    "voice_ack_timeout": "1.5",
+    "voice_mcp_timeout": "6.0",
+    "go_internal_base_url": "",
 }
 
 # 允许的键名：小写下划线。未知但合法的键会被接受（provider 的 extra_params 透传），

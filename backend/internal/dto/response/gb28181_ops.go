@@ -601,6 +601,23 @@ type VoiceAgentConfigResp struct {
 	PipecatEndpoint string `json:"pipecat_endpoint"`
 	PipecatToken    string `json:"pipecat_token" example:"****"`
 
+	// ── v0.6.0 WebSocket / MCP / 记忆 ──────────────────────────
+	WSEnabled      bool   `json:"ws_enabled" example:"true"`
+	WSPath         string `json:"ws_path" example:"/ws/voice"`
+	DeviceWakeWord string `json:"device_wake_word"`
+	FastAckText    string `json:"fast_ack_text" example:"我在"`
+
+	MCPEnabled       bool   `json:"mcp_enabled" example:"true"`
+	MCPServerURL     string `json:"mcp_server_url"`
+	InternalMCPToken string `json:"internal_mcp_token" example:"****"`
+
+	MemoryEnabled     bool   `json:"memory_enabled" example:"true"`
+	MemoryTopK        int    `json:"memory_top_k" example:"6"`
+	MemoryTTLDays     int    `json:"memory_ttl_days" example:"180"`
+	EmbeddingEndpoint string `json:"embedding_endpoint"`
+	EmbeddingModel    string `json:"embedding_model"`
+	EmbeddingAPIKey   string `json:"embedding_api_key" example:"****"`
+
 	// ExtraParams 扩展参数：provider param_schema 中没有固定键的项。
 	// 键为原始参数名（已去掉落库时的 param_ 前缀），敏感键按 **** 脱敏。
 	ExtraParams map[string]string `json:"extra_params,omitempty"`

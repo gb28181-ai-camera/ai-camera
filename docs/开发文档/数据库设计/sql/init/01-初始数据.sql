@@ -3201,6 +3201,46 @@ INSERT INTO ac_role_menu_rel (role_id, menu_id)
 SELECT 1, 9600
 WHERE NOT EXISTS (SELECT 1 FROM ac_role_menu_rel WHERE role_id = 1 AND menu_id = 9600);
 
+-- ════════════════════════════════════════════════════════════════
+-- 16. 智能语音聊天（v0.6.0）
+-- ════════════════════════════════════════════════════════════════
+
+-- Web 端：语音 Agent 页复用现有 voice:agent:* 按钮权限，绑定新增端点。
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9700, 1263, 'GET', '/web/voice/memories', '语音长期记忆列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='GET' AND path='/web/voice/memories');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9701, 1263, 'GET', '/web/voice/memories/export', '导出语音长期记忆', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='GET' AND path='/web/voice/memories/export');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9702, 1263, 'GET', '/web/voice/mcp/tools', '语音 MCP 工具列表', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='GET' AND path='/web/voice/mcp/tools');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9703, 1263, 'GET', '/web/voice/mcp/logs', '语音 MCP 调用日志', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='GET' AND path='/web/voice/mcp/logs');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9704, 12632, 'POST', '/web/voice/ws-ticket', '创建 Web 语音 WS ticket', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/web/voice/ws-ticket');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9705, 12631, 'PUT', '/web/voice/mcp/tools/:id', '编辑语音 MCP 工具', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='PUT' AND path='/web/voice/mcp/tools/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9706, 12631, 'DELETE', '/web/voice/memories/:id', '删除语音长期记忆', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='DELETE' AND path='/web/voice/memories/:id');
+
+-- App 端：新增移动端「语音聊天」菜单，绑定 WS ticket。
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 109, NULL, 1, '语音聊天', '/m/voice', 'AudioOutlined', '', 'menu', 'mobile', 'app:voice', '菜单', 109, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'app:voice');
+
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9707, 109, 'POST', '/app/voice/ws-ticket', '创建 App 语音 WS ticket', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/app/voice/ws-ticket');
+
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT 1, 109
+WHERE NOT EXISTS (SELECT 1 FROM ac_role_menu_rel WHERE role_id = 1 AND menu_id = 109);
+
 DELETE FROM casbin_rule WHERE p_type = 'p' AND v0 = 'super_admin';
 INSERT INTO casbin_rule (p_type, v0, v1, v2)
 SELECT DISTINCT 'p', 'super_admin', path, method FROM ac_menu_api WHERE deleted_at IS NULL;

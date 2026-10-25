@@ -545,6 +545,27 @@ class AudioPipelineRunner:
 # ── provider 实例化 ────────────────────────────────────────────
 
 
+def _split_resolved(resolved: str) -> Tuple[str, str]:
+    """拆 ``module:Class`` / ``module.Class`` 两种 resolved 形式。
+
+    ``factory.ProbeResult.resolved`` 对候选路径使用 ``module.Class``，而对
+    内置适配器使用 ``module:Class``。旧代码只认冒号，导致候选 provider
+    在真正实例化时 import 整串名字失败（RTP/WS 都受影响）。
+    """
+
+    text = str(resolved or "").strip()
+    if not text:
+        raise RuntimeError("provider 未解析出实现类")
+    if ":" in text:
+        module_name, _, attr = text.partition(":")
+        if module_name and attr:
+            return module_name, attr
+    module_name, _, attr = text.rpartition(".")
+    if not module_name or not attr:
+        raise RuntimeError(f"无法解析 provider 实现：{text}")
+    return module_name, attr
+
+
 def _instantiate_service(category: str, config: Mapping[str, Any]) -> Any:
     """按 factory 的 provider 描述实例化 Pipecat Service。
 
@@ -558,7 +579,7 @@ def _instantiate_service(category: str, config: Mapping[str, Any]) -> Any:
     probe = factory.probe(spec)
     if not probe.installed or not probe.resolved:
         raise RuntimeError(f"{category.upper()} provider {provider} 不可用：{probe.detail}")
-    module_name, _, attr = probe.resolved.partition(":")
+    module_name, attr = _split_resolved(probe.resolved)
     cls = getattr(importlib.import_module(module_name), attr)
 
     params = _collect_params(category, config)
@@ -593,6 +614,9 @@ def _make_context_aggregators(config: Mapping[str, Any]) -> Tuple[Any, Any]:
     全部失败时明确报错，让会话降级而不是静默跑一个没有上下文的 pipeline。
     """
 
+    # 注意：这里保持 RTP 路径的既有行为（v0.2.0 在 pipecat 1.13 下会因
+    # pair 模块迁移而标记 agent unavailable）。WS 路径使用
+    # build_ws_pipeline 里的 1.13 正确 API，不复用本函数。
     candidates = (
         ("pipecat.processors.aggregators.llm_context", "LLMContext", "LLMContextAggregatorPair"),
         ("pipecat.processors.aggregators.openai_llm_context", "OpenAILLMContext", "OpenAIContextAggregatorPair"),
@@ -649,7 +673,7 @@ def _instantiate_vad(config: Mapping[str, Any]) -> Any:
     probe = factory.probe(spec)
     if not probe.installed or not probe.resolved:
         raise RuntimeError(f"VAD provider {provider} 不可用：{probe.detail}")
-    module_name, _, attr = probe.resolved.partition(":")
+    module_name, attr = _split_resolved(probe.resolved)
     cls = getattr(importlib.import_module(module_name), attr)
 
     params = _collect_params("vad", config)
@@ -781,6 +805,485 @@ def _mp3_to_pcm16(mp3: bytes) -> bytes:
     return process.stdout
 
 
+# ════════════════════════════════════════════════════════════════
+# WebSocket 语音管线（v0.6.0）
+# ════════════════════════════════════════════════════════════════
+#
+# 与 RTP 路径共享 provider 装配/参数映射，但**不复用** AudioPipelineRunner：
+# WS 的输入输出由 FastAPIWebsocketTransport 负责，音频格式在 serializer
+# 里协商。RTP 路径（build_pipeline / AudioPipelineRunner）保持原样。
+
+WS_INPUT_SAMPLE_RATE = 16000
+WS_OUTPUT_SAMPLE_RATE = 24000
+WS_SENTENCE_END_CHARS = "。！？!?；;\n"
+WS_MAX_SENTENCE_CHARS = 120
+
+
+@dataclass
+class WSPipelineBundle:
+    """WS 会话装配结果（供会话层运行/摘要/诊断）。"""
+
+    session_id: str
+    pipeline: Any
+    worker: Any
+    context: Any
+    llm: Any
+    user_aggregator: Any
+    assistant_aggregator: Any
+    stages: Tuple[str, ...]
+    tools_count: int
+    options: Mapping[str, Any]
+
+    def describe(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "transport": "websocket",
+            "pipeline": list(self.stages),
+            "tools": self.tools_count,
+            "options": dict(self.options),
+        }
+
+
+def split_sentences(buffer: str) -> Tuple[List[str], str]:
+    """把 LLM 增量文本切成完整句子，返回 ``(sentences, remainder)``。
+
+    句末标点包括中英文句号/问号/叹号/分号/换行。英文句点只有在后面是
+    空白或结尾时才切分，避免把 ``3.14`` 切开。超长无标点片段按
+    ``WS_MAX_SENTENCE_CHARS`` 硬切，保证 TTS 不会一直等。
+    """
+
+    text = buffer or ""
+    sentences: List[str] = []
+    start = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        boundary = char in WS_SENTENCE_END_CHARS
+        if not boundary and char == ".":
+            boundary = index + 1 >= len(text) or text[index + 1].isspace()
+        if boundary:
+            sentence = text[start : index + 1].strip()
+            if sentence:
+                sentences.append(sentence)
+            start = index + 1
+        index += 1
+
+    remainder = text[start:]
+    while len(remainder) > WS_MAX_SENTENCE_CHARS:
+        cut = remainder.rfind(" ", 0, WS_MAX_SENTENCE_CHARS)
+        if cut <= 0:
+            cut = WS_MAX_SENTENCE_CHARS
+        sentence = remainder[:cut].strip()
+        if sentence:
+            sentences.append(sentence)
+        remainder = remainder[cut:]
+    return sentences, remainder
+
+
+async def _synthesize_edge_pcm(text: str, voice: str, speed: float) -> bytes:
+    """Edge TTS 合成一句话 → 24kHz PCM16。
+
+    失败抛异常，由调用方丢弃该句（不中断整个回复）。
+    """
+
+    import edge_tts  # type: ignore
+
+    rate = f"{int(round((float(speed) - 1.0) * 100)):+d}%"
+    communicate = edge_tts.Communicate(text, voice, rate=rate)
+    mp3 = bytearray()
+    async for chunk in communicate.stream():
+        if chunk.get("type") == "audio" and chunk.get("data"):
+            mp3.extend(chunk["data"])
+    if not mp3:
+        return b""
+    return await asyncio.to_thread(_mp3_to_pcm16, bytes(mp3))
+
+
+def _make_streaming_edge_tts_processor(
+    frame_processor_cls: Any,
+    direction_cls: Any,
+    config: Mapping[str, Any],
+    *,
+    sample_rate: int = WS_OUTPUT_SAMPLE_RATE,
+) -> Any:
+    """按句流式 Edge TTS。
+
+    与 RTP 用的 ``EdgeTTSProcessor`` 不同：LLM 每输出一个句末标点就入队
+    合成，不再等整段回复结束。合成任务串行执行，保证音频顺序；打断时
+    通过 generation 丢弃过期句子。
+    """
+
+    voice = str(config.get("tts_voice") or "zh-CN-XiaoxiaoNeural").strip()
+    try:
+        speed = float(str(config.get("tts_speed") or "1.0"))
+    except ValueError:
+        speed = 1.0
+    downstream = direction_cls.DOWNSTREAM
+    logger_ = logging.getLogger("ai-camera-pipecat.pipeline.ws_tts")
+
+    class SentenceStreamingEdgeTTSProcessor(frame_processor_cls):  # type: ignore[misc, valid-type]
+        def __init__(self) -> None:
+            super().__init__()
+            self._buffer = ""
+            self._queue: "asyncio.Queue[Any]" = asyncio.Queue()
+            self._worker: Optional[asyncio.Task] = None
+            self._generation = 0
+            self._speaking = False
+            self._idle = asyncio.Event()
+            self._idle.set()
+
+        # ── FrameProcessor ──────────────────────────────────────
+        async def process_frame(self, frame: Any, direction: Any) -> None:
+            await super().process_frame(frame, direction)
+            name = type(frame).__name__
+
+            if name == "LLMFullResponseStartFrame":
+                self._generation += 1
+                self._buffer = ""
+                self._ensure_worker()
+                await self.push_frame(frame, direction)
+                return
+
+            if name in {"TextFrame", "LLMTextFrame"}:
+                if getattr(frame, "skip_tts", False):
+                    # 情绪/代码等标记不朗读，但仍由 LLM tap 下发给客户端。
+                    return
+                text = getattr(frame, "text", "") or ""
+                # 消费 LLM 文本；用 TTSTextFrame 下发实际朗读的句子，避免
+                # assistant aggregator 重复记账。
+                if text:
+                    # 兼容不发送 LLMFullResponseStartFrame 的 provider。
+                    self._ensure_worker()
+                    self._buffer += text
+                    sentences, self._buffer = split_sentences(self._buffer)
+                    for sentence in sentences:
+                        await self._queue.put((self._generation, sentence))
+                return
+
+            if name == "LLMFullResponseEndFrame":
+                if self._buffer.strip():
+                    await self._queue.put((self._generation, self._buffer.strip()))
+                    self._buffer = ""
+                await self._flush_worker()
+                await self.push_frame(frame, direction)
+                return
+
+            if name == "InterruptionFrame":
+                self._generation += 1
+                self._buffer = ""
+                self._drain_queue()
+                self._speaking = False
+                await self.push_frame(frame, direction)
+                return
+
+            if name in {"EndFrame", "CancelFrame"}:
+                self._generation += 1
+                self._drain_queue()
+                await self._queue.put(None)
+                try:
+                    await asyncio.wait_for(self._idle.wait(), timeout=1.0)
+                except (asyncio.TimeoutError, TimeoutError):
+                    pass
+                await self.push_frame(frame, direction)
+                return
+
+            await self.push_frame(frame, direction)
+
+        async def cleanup(self) -> None:
+            task = self._worker
+            self._worker = None
+            if task is not None and not task.done():
+                task.cancel()
+            self._drain_queue()
+            await super().cleanup()
+
+        # ── 内部 ────────────────────────────────────────────────
+        def _ensure_worker(self) -> None:
+            if self._worker is None or self._worker.done():
+                self._idle.clear()
+                self._worker = asyncio.create_task(self._worker_loop())
+
+        def _drain_queue(self) -> None:
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+        async def _flush_worker(self) -> None:
+            self._ensure_worker()
+            self._idle.clear()
+            await self._queue.put(None)
+            try:
+                await asyncio.wait_for(self._idle.wait(), timeout=10.0)
+            except (asyncio.TimeoutError, TimeoutError):
+                logger_.warning("等待 TTS 队列清空超时，继续下发结束帧")
+
+        async def _worker_loop(self) -> None:
+            while True:
+                item = await self._queue.get()
+                if item is None:
+                    if self._speaking:
+                        self._speaking = False
+                        try:
+                            from pipecat.frames.frames import TTSStoppedFrame  # type: ignore
+
+                            await self.push_frame(TTSStoppedFrame(), downstream)
+                        except Exception:
+                            pass
+                    self._idle.set()
+                    continue
+                generation, sentence = item
+                if generation != self._generation:
+                    continue
+                try:
+                    await self._speak(generation, sentence)
+                except Exception as exc:
+                    logger_.warning(
+                        "Edge TTS 句子合成失败（已跳过）：%s", type(exc).__name__
+                    )
+
+        async def _speak(self, generation: int, sentence: str) -> None:
+            from pipecat.frames.frames import (  # type: ignore
+                OutputAudioRawFrame,
+                TTSStartedFrame,
+                TTSTextFrame,
+            )
+            from pipecat.utils.text.base_text_aggregator import TextType  # type: ignore
+
+            if generation != self._generation:
+                return
+            if not self._speaking:
+                self._speaking = True
+                await self.push_frame(TTSStartedFrame(), downstream)
+            await self.push_frame(
+                TTSTextFrame(text=sentence, text_type=TextType.SENTENCE), downstream
+            )
+
+            pcm = await _synthesize_edge_pcm(sentence, voice, speed)
+            if generation != self._generation or not pcm:
+                return
+            await self.push_frame(
+                OutputAudioRawFrame(
+                    audio=pcm, sample_rate=sample_rate, num_channels=1
+                ),
+                downstream,
+            )
+
+    return SentenceStreamingEdgeTTSProcessor()
+
+
+def _make_ws_tts_processor(
+    frame_processor_cls: Any,
+    direction_cls: Any,
+    config: Mapping[str, Any],
+) -> Any:
+    provider = str(config.get("tts_provider") or "").strip().lower()
+    if provider and provider != "edge_tts":
+        return _instantiate_service("tts", config)
+    return _make_streaming_edge_tts_processor(frame_processor_cls, direction_cls, config)
+
+
+def _make_frame_tap(frame_processor_cls: Any, stage: str, callback: Any) -> Any:
+    """把 Pipecat 帧转发给会话层（不吞帧）。"""
+
+    class WSTapProcessor(frame_processor_cls):  # type: ignore[misc, valid-type]
+        def __init__(self) -> None:
+            super().__init__()
+            self._stage = stage
+
+        async def process_frame(self, frame: Any, direction: Any) -> None:
+            await super().process_frame(frame, direction)
+            try:
+                await callback(self._stage, frame, direction)
+            except Exception:
+                logger.debug("WS 帧回调失败 stage=%s", self._stage, exc_info=True)
+            await self.push_frame(frame, direction)
+
+    return WSTapProcessor()
+
+
+def _make_user_turn_params(
+    vad: Any,
+    listen_mode: str,
+) -> Dict[str, Any]:
+    """构造 ``LLMUserAggregatorParams`` 的关键字参数。
+
+    - auto：VAD 起句 + 语音超时断句（不走需要下载模型的 smart-turn）；
+    - manual：外部 listen/start/stop 驱动回合，但 VAD 仍保留给
+      SegmentedSTTService 切分音频。
+    """
+
+    params: Dict[str, Any] = {"vad_analyzer": vad}
+    try:
+        if listen_mode == "manual" or vad is None:
+            from pipecat.turns.user_turn_strategies import (  # type: ignore
+                ExternalUserTurnStrategies,
+            )
+
+            params["user_turn_strategies"] = ExternalUserTurnStrategies(
+                enable_interruptions=False
+            )
+        else:
+            from pipecat.turns.user_start.transcription_user_turn_start_strategy import (  # type: ignore
+                TranscriptionUserTurnStartStrategy,
+            )
+            from pipecat.turns.user_start.vad_user_turn_start_strategy import (  # type: ignore
+                VADUserTurnStartStrategy,
+            )
+            from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (  # type: ignore
+                SpeechTimeoutUserTurnStopStrategy,
+            )
+            from pipecat.turns.user_turn_strategies import UserTurnStrategies  # type: ignore
+
+            params["user_turn_strategies"] = UserTurnStrategies(
+                # 半双工：用户说话不打断 bot（barge_in 默认关闭）。
+                start=[
+                    VADUserTurnStartStrategy(enable_interruptions=False),
+                    TranscriptionUserTurnStartStrategy(enable_interruptions=False),
+                ],
+                stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.6)],
+            )
+    except Exception as exc:
+        logger.warning("无法配置用户回合策略，回退 Pipecat 默认值：%s", exc)
+    return params
+
+
+def build_ws_pipeline(
+    config: Mapping[str, Any],
+    session_id: str,
+    transport: Any,
+    *,
+    on_frame: Any,
+    system_prompt: str = "",
+    tools: Iterable[Any] = (),
+    listen_mode: str = "auto",
+    config_revision: int = 0,
+    input_rate: int = WS_INPUT_SAMPLE_RATE,
+    output_rate: int = WS_OUTPUT_SAMPLE_RATE,
+) -> WSPipelineBundle:
+    """装配 WS 语音管线。
+
+    ``on_frame(stage, frame, direction)`` 会被三个 tap 调用（stt/llm/tts），
+    用于向客户端推送字幕/TTS 状态；回调异常不会影响音频。
+
+    与 RTP 的 ``build_pipeline`` 共用 provider 校验/实例化，确保两套链路
+    的配置语义一致。装配失败抛 :class:`PipelineConfigError` 或
+    :class:`RuntimeError`（会话层转成 ``error`` 消息）。
+    """
+
+    if not str(session_id or "").strip():
+        raise PipelineConfigError("session_id 不能为空")
+
+    # 先复用 RTP 的校验（provider 存在、必填参数、依赖已安装）。
+    base = build_pipeline(
+        config=config,
+        session_id=session_id,
+        mode="half_duplex",
+        config_revision=config_revision,
+    )
+
+    try:
+        from pipecat.pipeline.pipeline import Pipeline  # type: ignore
+        from pipecat.pipeline.worker import PipelineParams, PipelineWorker  # type: ignore
+        from pipecat.processors.aggregators.llm_context import LLMContext  # type: ignore
+        from pipecat.processors.aggregators.llm_response_universal import (  # type: ignore
+            LLMAssistantAggregatorParams,
+            LLMContextAggregatorPair,
+            LLMUserAggregatorParams,
+        )
+        from pipecat.processors.frame_processor import FrameDirection, FrameProcessor  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(
+            f"当前 pipecat 版本缺少 WebSocket 管线 API（需要 1.13）：{exc}"
+        ) from exc
+
+    stt = _instantiate_service("stt", config)
+    llm = _instantiate_service("llm", config)
+    tts = _make_ws_tts_processor(FrameProcessor, FrameDirection, config)
+    vad = _instantiate_vad(config)
+
+    user_params = LLMUserAggregatorParams(
+        **_make_user_turn_params(vad, str(listen_mode or "auto").lower())
+    )
+    assistant_params = LLMAssistantAggregatorParams(
+        enable_auto_context_summarization=True
+    )
+
+    messages = None
+    if str(system_prompt or "").strip():
+        messages = [{"role": "system", "content": system_prompt.strip()}]
+
+    tool_list = [tool for tool in tools if tool is not None]
+    context_kwargs: Dict[str, Any] = {}
+    if tool_list:
+        context_kwargs["tools"] = tool_list
+    context = LLMContext(messages=messages, **context_kwargs)
+
+    user_agg, assistant_agg = LLMContextAggregatorPair(
+        context,
+        user_params=user_params,
+        assistant_params=assistant_params,
+    )
+
+    tap_stt = _make_frame_tap(FrameProcessor, "stt", on_frame)
+    tap_llm = _make_frame_tap(FrameProcessor, "llm", on_frame)
+    tap_tts = _make_frame_tap(FrameProcessor, "tts", on_frame)
+
+    pipeline_obj = Pipeline(
+        [
+            transport.input(),
+            stt,
+            tap_stt,
+            user_agg,
+            llm,
+            tap_llm,
+            tts,
+            tap_tts,
+            transport.output(),
+            assistant_agg,
+        ]
+    )
+
+    worker = PipelineWorker(
+        pipeline_obj,
+        params=PipelineParams(
+            audio_in_sample_rate=int(input_rate),
+            audio_out_sample_rate=int(output_rate),
+            enable_metrics=False,
+        ),
+        # 小智协议不需要 RTVI；关掉可避免额外的 rtvi-ai 消息。
+        enable_rtvi=False,
+        # WS 会话有自己的 idle/max 看门狗（见 ws/session.py），关闭框架
+        # 默认的 idle 取消，避免用户长时间不说话被意外踢掉。
+        idle_timeout_secs=None,
+        cancel_on_idle_timeout=False,
+    )
+
+    options = dict(base.options)
+    options.update(
+        {
+            "listen_mode": str(listen_mode or "auto").lower(),
+            "input_sample_rate": int(input_rate),
+            "output_sample_rate": int(output_rate),
+            "tools": len(tool_list),
+        }
+    )
+
+    return WSPipelineBundle(
+        session_id=session_id,
+        pipeline=pipeline_obj,
+        worker=worker,
+        context=context,
+        llm=llm,
+        user_aggregator=user_agg,
+        assistant_aggregator=assistant_agg,
+        stages=tuple(base.stage_names),
+        tools_count=len(tool_list),
+        options=options,
+    )
+
+
 __all__: Iterable[str] = (
     "AudioPipelineRunner",
     "DEFAULT_STT_SAMPLE_RATE",
@@ -789,6 +1292,11 @@ __all__: Iterable[str] = (
     "PipelineBundle",
     "PipelineConfigError",
     "STAGE_ORDER",
+    "WS_INPUT_SAMPLE_RATE",
+    "WS_OUTPUT_SAMPLE_RATE",
+    "WSPipelineBundle",
     "build_pipeline",
+    "build_ws_pipeline",
+    "split_sentences",
     "summary",
 )

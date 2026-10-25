@@ -1,0 +1,11 @@
+# 本地/CI 测试依赖（不进入运行镜像）
+#
+# 协议、鉴权、半双工、MCP bridge、记忆客户端的单测都不需要 pipecat /
+# FastAPI / aiortc，纯 Python 即可跑：
+#
+#   cd deploy/pipecat
+#   python -m pytest tests -q
+#
+# Opus 往返测试需要 av；未安装时测试自动 skip。
+pytest>=8.0,<9.0
+pytest-asyncio>=0.24,<2.0

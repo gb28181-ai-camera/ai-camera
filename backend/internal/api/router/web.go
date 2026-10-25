@@ -62,6 +62,7 @@ func registerWebRoutes(r *gin.Engine) {
 	modeH := handler.NewDeviceModeHandler()
 	cardH := handler.NewIotCardHandler()
 	voiceH := handler.NewVoiceConfigHandler()
+	voiceWsH := handler.NewVoiceWsHandler()
 	riskH := handler.NewRiskHandler()
 	alarmH := handler.NewAlarmHandler()
 	inspectH := handler.NewInspectHandler()
@@ -453,6 +454,22 @@ func registerWebRoutes(r *gin.Engine) {
 			gb.GET("/sip-logs", gbSipLogH.Page)
 			gb.GET("/sip-logs/stats", gbSipLogH.Stats)
 			gb.GET("/sip-logs/:id", gbSipLogH.Get)
+		}
+
+		// ═══ 智能语音聊天（v0.6.0）═══
+		// ticket 签发与记忆/MCP 管理需要 JWT + Casbin；
+		// WS 网关本身在 router/voice.go（ticket 鉴权）。
+		wv := wAuth.Group("/voice")
+		{
+			wv.POST("/ws-ticket", voiceWsH.WsTicket)
+
+			wv.GET("/memories", voiceWsH.PageMemories)
+			wv.GET("/memories/export", voiceWsH.ExportMemories)
+			wv.DELETE("/memories/:id", voiceWsH.DeleteMemory)
+
+			wv.GET("/mcp/tools", voiceWsH.PageMcpTools)
+			wv.PUT("/mcp/tools/:id", voiceWsH.UpdateMcpTool)
+			wv.GET("/mcp/logs", voiceWsH.PageMcpLogs)
 		}
 
 		// 播放 / 云台 / 语音：路由较多，拆到 gb_live.go

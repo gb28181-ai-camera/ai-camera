@@ -10,7 +10,8 @@
 | ``GET /config`` | 是 | 读当前配置（敏感键脱敏） |
 | ``POST /session/start`` | 是 | 启动 UDP 接收 + WebRTC 推流 + Pipeline |
 | ``POST /session/stop`` | 是 | 停止并清理会话 |
-| ``GET /sessions`` | 是 | 活跃会话与各自的音频桥状态 |
+| ``GET /sessions`` | 是 | 活跃会话与各自的音频桥状态（RTP + WS） |
+| ``WS /ws/voice`` | 是 | 小智兼容语音 WebSocket（v0.6.0，token + 签名上下文） |
 | ``POST /test`` | 是 | provider 最小连通性检查（不发外部计费请求） |
 
 ## 上行/下行参数由调用方传入
@@ -50,10 +51,12 @@ import factory
 import pipeline
 import transport
 from config_store import ConfigStore, ConfigValidationError
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, WebSocket
 from pydantic import BaseModel, Field
+from ws import auth as ws_auth
+from ws.session import WebSocketVoiceSession, ws_sessions
 
-VERSION = "0.2.0"
+VERSION = "0.6.0"
 SERVICE_NAME = "ai-camera-pipecat"
 
 logging.basicConfig(
@@ -69,6 +72,15 @@ if not _TOKEN:
         "PIPECAT_TOKEN 未配置：Pipecat 控制面拒绝启动。"
         "请在 .env 中设置 PIPECAT_TOKEN，并与后台「语音 Agent 配置」中的"
         "「Pipecat 控制面令牌」保持一致。"
+    )
+
+# Go 网关注入的 X-Voice-Context 使用这个密钥做 HMAC-SHA256。未配置时
+# /ws/voice 只接受 token-only 连接（仅限本地调试），带上下文的连接会被拒绝。
+_CONTEXT_SECRET = os.environ.get("PIPECAT_CONTEXT_SECRET", "").strip()
+if not _CONTEXT_SECRET:
+    logger.warning(
+        "PIPECAT_CONTEXT_SECRET 未配置：/ws/voice 将无法校验 Go 注入的 "
+        "X-Voice-Context（生产环境必须配置）"
     )
 
 _AUTH_SCHEMES = ("bearer",)
@@ -254,6 +266,8 @@ def health() -> Dict[str, Any]:
         status = item.bridge()["audio_bridge"]
         counts[status] = counts.get(status, 0) + 1
 
+    ws_stats = ws_sessions.stats()
+    # 向后兼容：`sessions` 仍表示 RTP 会话数（v0.2.0 的语义不变）。
     return {
         "status": "ok",
         "service": SERVICE_NAME,
@@ -263,6 +277,17 @@ def health() -> Dict[str, Any]:
         "audio_bridge_sessions": counts,
         "config_revision": store.revision,
         "sessions": sessions.count(),
+        "sessions_rtp": sessions.count(),
+        "sessions_ws": ws_stats["sessions"],
+        "sessions_total": sessions.count() + ws_stats["sessions"],
+        "transports": {
+            "rtp": {
+                "sessions": sessions.count(),
+                "audio_bridge": aggregate_bridge_status(),
+                "status_counts": counts,
+            },
+            "ws": ws_stats,
+        },
         "uptime_sec": round(time.time() - _STARTED_AT, 1),
     }
 
@@ -460,12 +485,82 @@ def list_sessions() -> Dict[str, Any]:
     """列出活跃会话（含每路的真实音频桥状态）。"""
 
     items = [state.describe() for state in sessions.list()]
+    ws_items = ws_sessions.describe_all()
     return {
         "ok": True,
+        # `sessions` / `count` 保持 v0.2.0 语义（仅 RTP），避免后端既有
+        # 解析逻辑被 WS 条目影响；WS 会话在 `ws_sessions` 中。
         "count": len(items),
         "sessions": items,
+        "ws_count": len(ws_items),
+        "ws_sessions": ws_items,
+        "total_count": len(items) + len(ws_items),
         "audio_bridge": aggregate_bridge_status(),
+        "transports": {
+            "rtp": {
+                "sessions": len(items),
+                "audio_bridge": aggregate_bridge_status(),
+            },
+            "ws": ws_sessions.stats(),
+        },
     }
+
+
+# ── WebSocket 语音（v0.6.0）─────────────────────────────────────
+@app.websocket("/ws/voice")
+async def voice_websocket(websocket: WebSocket) -> None:
+    """小智兼容的语音 WebSocket。
+
+    鉴权在 ``accept()`` 之前完成：
+
+    - ``Authorization: Bearer <PIPECAT_TOKEN>``（Go 网关注入）；
+    - ``X-Voice-Context``：base64url JSON + HMAC-SHA256，密钥
+      ``PIPECAT_CONTEXT_SECRET``。
+
+    鉴权失败直接 close（4401/4403），不读 hello。成功后的协议处理全部在
+    :class:`ws.session.WebSocketVoiceSession` 中。
+    """
+
+    try:
+        auth = ws_auth.authenticate(
+            websocket.headers,
+            websocket.query_params,
+            expected_token=_TOKEN,
+            context_secret=_CONTEXT_SECRET,
+        )
+    except ws_auth.AuthError as exc:
+        ws_sessions.record_auth_failure()
+        logger.warning("WS 鉴权失败 code=%s", exc.code)
+        try:
+            await websocket.close(code=exc.close_code, reason=exc.code[:120])
+        except Exception:
+            pass
+        return
+
+    # 鉴权通过后才接受握手；失败时 Starlette 会返回 HTTP 403 拒绝。
+    try:
+        await websocket.accept()
+    except Exception:
+        ws_sessions.record_auth_failure()
+        return
+
+    config, revision, _updated_at = store.snapshot_with_meta()
+    remote = ""
+    try:
+        client = websocket.client
+        if client is not None:
+            remote = f"{client.host}:{client.port}"
+    except Exception:
+        remote = ""
+
+    session = WebSocketVoiceSession(
+        websocket,
+        auth,
+        config,
+        config_revision=revision,
+        remote=remote,
+    )
+    await session.run()
 
 
 # ── provider 连通性测试 ────────────────────────────────────────
@@ -599,4 +694,5 @@ __all__ = (
     "start_session",
     "stop_session",
     "test_provider",
+    "voice_websocket",
 )

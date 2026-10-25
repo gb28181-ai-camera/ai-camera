@@ -65,10 +65,44 @@ const (
 	// Pipecat 控制面（设计 §8.2「Pipecat 侧控制面」）。
 	voicePipecatEndpoint = "pipecat_endpoint"
 	voicePipecatToken    = "pipecat_token"
+
+	// ── v0.6.0 WebSocket / MCP / 记忆 ──────────────────────────
+	// 这些键由 Go 网关与内部 MCP/记忆接口消费；Apply 下发 Pipecat 时
+	// 必须排除内部令牌与 embedding 密钥（见 applyExcludedKeys）。
+	voiceWSEnabled         = "ws_enabled"
+	voiceWSPath            = "ws_path"
+	voiceDeviceWakeWord    = "device_wake_word"
+	voiceFastAckText       = "fast_ack_text"
+	voiceMCPEnabled        = "mcp_enabled"
+	voiceMCPServerURL      = "mcp_server_url"
+	voiceInternalMCPToken  = "internal_mcp_token"
+	voiceMemoryEnabled     = "memory_enabled"
+	voiceMemoryTopK        = "memory_top_k"
+	voiceMemoryTTLDays     = "memory_ttl_days"
+	voiceEmbeddingEndpoint = "embedding_endpoint"
+	voiceEmbeddingModel    = "embedding_model"
+	voiceEmbeddingAPIKey   = "embedding_api_key"
 )
 
 // voiceSecretKeys 只写不读的键。
-var voiceSecretKeys = []string{voiceSTTAPIKey, voiceLLMAPIKey, voiceTTSAPIKey, voicePipecatToken}
+//
+// internal_mcp_token / embedding_api_key 只在 Go 内部使用，
+// Web 读接口必须脱敏；Apply 时也不会下发给 Pipecat。
+var voiceSecretKeys = []string{
+	voiceSTTAPIKey, voiceLLMAPIKey, voiceTTSAPIKey, voicePipecatToken,
+	voiceInternalMCPToken, voiceEmbeddingAPIKey,
+}
+
+// applyExcludedKeys 下发给 Pipecat 时必须排除的键。
+//
+// 除了控制面自身的连接信息，还包括 Go 内部鉴权令牌与 embedding 密钥：
+// Pipecat 通过 X-Voice-Context 调用 Go，不需要也不应该拿到这些凭据。
+var applyExcludedKeys = map[string]bool{
+	voicePipecatEndpoint:  true,
+	voicePipecatToken:     true,
+	voiceInternalMCPToken: true,
+	voiceEmbeddingAPIKey:  true,
+}
 
 // voiceExtraPrefix 扩展参数落库前缀。
 //
@@ -109,6 +143,15 @@ var voiceKeyNames = map[string]string{
 	voiceBargeIn: "允许打断", voiceSessionIdleTimeout: "会话空闲超时",
 	voiceMaxSessionSec:   "会话最大时长",
 	voicePipecatEndpoint: "Pipecat 控制面地址", voicePipecatToken: "Pipecat 控制面令牌",
+
+	voiceWSEnabled: "启用 WebSocket", voiceWSPath: "Pipecat WS 路径",
+	voiceDeviceWakeWord: "设备唤醒词", voiceFastAckText: "快速应答语",
+	voiceMCPEnabled: "启用 MCP", voiceMCPServerURL: "MCP 服务地址",
+	voiceInternalMCPToken: "内部 MCP 令牌",
+	voiceMemoryEnabled:    "启用长期记忆", voiceMemoryTopK: "记忆召回条数",
+	voiceMemoryTTLDays:     "记忆保留天数",
+	voiceEmbeddingEndpoint: "Embedding 端点", voiceEmbeddingModel: "Embedding 模型",
+	voiceEmbeddingAPIKey: "Embedding API Key",
 }
 
 func init() {
@@ -168,6 +211,22 @@ func (s *VoiceAgentService) Get(ctx context.Context) (*response.VoiceAgentConfig
 
 		PipecatEndpoint: values[voicePipecatEndpoint],
 		PipecatToken:    maskIfSecret(voicePipecatToken, values[voicePipecatToken], secrets[voicePipecatToken]),
+
+		WSEnabled:      parseBoolOr(values[voiceWSEnabled], true),
+		WSPath:         firstNonEmpty(values[voiceWSPath], "/ws/voice"),
+		DeviceWakeWord: values[voiceDeviceWakeWord],
+		FastAckText:    firstNonEmpty(values[voiceFastAckText], "我在"),
+
+		MCPEnabled:       parseBoolOr(values[voiceMCPEnabled], true),
+		MCPServerURL:     values[voiceMCPServerURL],
+		InternalMCPToken: maskIfSecret(voiceInternalMCPToken, values[voiceInternalMCPToken], secrets[voiceInternalMCPToken]),
+
+		MemoryEnabled:     parseBoolOr(values[voiceMemoryEnabled], true),
+		MemoryTopK:        parseIntOr(values[voiceMemoryTopK], 6),
+		MemoryTTLDays:     parseIntOr(values[voiceMemoryTTLDays], 180),
+		EmbeddingEndpoint: values[voiceEmbeddingEndpoint],
+		EmbeddingModel:    values[voiceEmbeddingModel],
+		EmbeddingAPIKey:   maskIfSecret(voiceEmbeddingAPIKey, values[voiceEmbeddingAPIKey], secrets[voiceEmbeddingAPIKey]),
 
 		ExtraParams: collectVoiceExtras(values, secrets),
 	}, nil
@@ -255,6 +314,23 @@ func (s *VoiceAgentService) Update(ctx context.Context, req *request.UpdateVoice
 
 	addStr(voicePipecatEndpoint, req.PipecatEndpoint)
 	addStr(voicePipecatToken, req.PipecatToken)
+
+	// v0.6.0 WebSocket / MCP / 记忆
+	addBool(voiceWSEnabled, req.WSEnabled)
+	addStr(voiceWSPath, req.WSPath)
+	addStr(voiceDeviceWakeWord, req.DeviceWakeWord)
+	addStr(voiceFastAckText, req.FastAckText)
+
+	addBool(voiceMCPEnabled, req.MCPEnabled)
+	addStr(voiceMCPServerURL, req.MCPServerURL)
+	addStr(voiceInternalMCPToken, req.InternalMCPToken)
+
+	addBool(voiceMemoryEnabled, req.MemoryEnabled)
+	addInt(voiceMemoryTopK, req.MemoryTopK)
+	addInt(voiceMemoryTTLDays, req.MemoryTTLDays)
+	addStr(voiceEmbeddingEndpoint, req.EmbeddingEndpoint)
+	addStr(voiceEmbeddingModel, req.EmbeddingModel)
+	addStr(voiceEmbeddingAPIKey, req.EmbeddingAPIKey)
 
 	// 扩展参数：原样落库，仅加 param_ 前缀避免与固定键冲突。
 	//
@@ -433,7 +509,7 @@ func (s *VoiceAgentService) Apply(ctx context.Context) error {
 	// 下发的 payload 排除控制面自身的连接信息，避免把 token 再回传给对端。
 	payload := make(map[string]string, len(values))
 	for k, v := range values {
-		if k == voicePipecatEndpoint || k == voicePipecatToken {
+		if applyExcludedKeys[k] {
 			continue
 		}
 		// 扩展参数落库时加了 param_ 前缀；下发给 Pipecat 时还原为原始键，

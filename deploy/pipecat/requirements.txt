@@ -11,7 +11,9 @@ uvicorn[standard]>=0.30,<1.0
 pydantic>=2.9,<3.0
 
 # 语音管线框架（核心）
-pipecat-ai[anthropic]==1.13.0
+#   websocket extra：/ws/voice 使用 FastAPIWebsocketTransport（比已弃用的
+#   WebsocketServerTransport 更合适；fastapi/starlette 已经是本服务依赖）。
+pipecat-ai[anthropic,websocket]==1.13.0
 anthropic>=0.49,<2.0
 openai>=1.74,<4.0
 
@@ -23,6 +25,8 @@ edge-tts>=6.1,<8.0
 # 未安装时控制面照常启动：上行仍能收，audio_bridge 会明确报 degraded，
 # 不会假装「设备能听到声音」。
 aiortc>=1.9,<2.0
+# av 同时提供 WebRTC 所需的音频帧与 /ws/voice 的 Opus 编解码
+# （ESP32 上行/下行裸 Opus 帧，见 audio/opus_codec.py）。
 av>=12,<16
 
 # 默认本地 STT（设计 §8.2：local_whisper / faster-whisper）

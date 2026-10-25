@@ -363,6 +363,23 @@ type UpdateVoiceAgentReq struct {
 	PipecatEndpoint *string `json:"pipecat_endpoint"`
 	PipecatToken    *string `json:"pipecat_token"`
 
+	// ── v0.6.0 WebSocket / MCP / 记忆 ──────────────────────────
+	WSEnabled      *bool   `json:"ws_enabled"`
+	WSPath         *string `json:"ws_path"`
+	DeviceWakeWord *string `json:"device_wake_word"`
+	FastAckText    *string `json:"fast_ack_text"`
+
+	MCPEnabled       *bool   `json:"mcp_enabled"`
+	MCPServerURL     *string `json:"mcp_server_url"`
+	InternalMCPToken *string `json:"internal_mcp_token"`
+
+	MemoryEnabled     *bool   `json:"memory_enabled"`
+	MemoryTopK        *int    `json:"memory_top_k"`
+	MemoryTTLDays     *int    `json:"memory_ttl_days"`
+	EmbeddingEndpoint *string `json:"embedding_endpoint"`
+	EmbeddingModel    *string `json:"embedding_model"`
+	EmbeddingAPIKey   *string `json:"embedding_api_key"`
+
 	// ExtraParams provider param_schema 中没有固定键的扩展参数（如 TTS 的 model、
 	// Azure 的 region）。键为原始参数名（前端不带前缀），服务端统一加 `param_`
 	// 前缀落库，避免与上面的固定键冲突；nil 表示不修改。

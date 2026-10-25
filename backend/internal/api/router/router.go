@@ -56,6 +56,9 @@ func SetupRouter() *gin.Engine {
 	// 注册移动端路由
 	registerAppRoutes(r)
 
+	// 注册语音 WebSocket 网关与内部 MCP/记忆接口
+	registerVoiceRoutes(r)
+
 	// 注册内部服务间 RPC（MQTT broker 鉴权等）：独立鉴权，不走 JWT/Casbin
 	registerRpcRoutes(r)
 

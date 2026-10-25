@@ -1,9 +1,40 @@
 # AI Camera 变更日志 (CHANGE LOG)
 
 > 项目: AI Camera 智能监控平台
-> 当前版本: v0.5.1
+> 当前版本: v0.6.0
 > 当前开发: v0.6.0 智能语音聊天 / v0.2.0 真机验收
 > 最后更新: 2026-10-25
+
+---
+
+## v0.6.0 — 智能语音聊天（Pipecat + WebSocket）
+
+> 状态: **开发完成** · 设计与协议: [v0.6.0 智能语音聊天/00-设计与协议.md](v0.6.0%20智能语音聊天/00-设计与协议.md) ·
+> 实现说明: [01-实现说明.md](v0.6.0%20智能语音聊天/01-实现说明.md)
+
+**范围**：
+
+| # | 内容 | 状态 |
+|:--:|:--|:--|
+| 1 | Pipecat `/ws/voice`，与 GB28181 RTP 并存 | ✅ |
+| 2 | 小智兼容协议（hello/listen/detect/abort/tts/mcp） | ✅ |
+| 3 | PCM16（App/Web）与 Opus（ESP32）协商 | ✅ |
+| 4 | 半双工 + 服务端 VAD + 快速应答 | ✅ |
+| 5 | Go WS ticket 与 Web/App/设备 WS 网关 | ✅ |
+| 6 | 服务端 MCP（6 工具、权限、审计） | ✅ |
+| 7 | 设备端 MCP bridge | ✅ |
+| 8 | 短期上下文 + pgvector 长期记忆 | ✅ |
+| 9 | Flutter App 语音聊天页 | ✅ |
+| 10 | Web 语音 Agent 配置/MCP/记忆页 | ✅ |
+
+**关键设计**：
+- Pipecat 仅内网可达；生产由 Go 网关统一鉴权并注入签名上下文。
+- ticket 60s 一次性；设备用产品×AIChat 凭据 HTTP Basic。
+- 服务端 MCP 用 JSON-RPC over HTTP；设备 MCP 复用同一 WS 的 `type=mcp`。
+- 长期记忆默认 BGE-M3 1024 维 + HNSW；未配置 embedding 时降级为时间/关键词检索。
+- 默认半双工，`barge_in` 预留未启用；设备端唤醒主路径。
+
+**已知限制**：见 [01-实现说明.md §3](v0.6.0%20智能语音聊天/01-实现说明.md)。
 
 ---
 

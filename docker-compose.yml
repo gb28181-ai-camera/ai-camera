@@ -111,6 +111,15 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:-aicamera_redis}
       JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET，参考 .env.example}
+      # ── 智能语音聊天（v0.6.0）──
+      PIPECAT_ENDPOINT: ${PIPECAT_ENDPOINT:-http://pipecat:8090}
+      PIPECAT_TOKEN: ${PIPECAT_TOKEN:-}
+      PIPECAT_CONTEXT_SECRET: ${PIPECAT_CONTEXT_SECRET:-}
+      INTERNAL_MCP_TOKEN: ${INTERNAL_MCP_TOKEN:-}
+      VOICE_TICKET_SECRET: ${VOICE_TICKET_SECRET:-}
+      VOICE_EMBEDDING_ENDPOINT: ${VOICE_EMBEDDING_ENDPOINT:-}
+      VOICE_EMBEDDING_MODEL: ${VOICE_EMBEDDING_MODEL:-bge-m3}
+      VOICE_EMBEDDING_API_KEY: ${VOICE_EMBEDDING_API_KEY:-}
       # ── GB28181 信令（默认内嵌在 backend 进程内）──
       # ★ 为什么默认内嵌：HTTP 接口触发的播放/云台/回放要靠 control.Default()
       #   调用 SIP 会话状态，而那是**进程内**对象。分容器部署时 API 进程里
@@ -285,7 +294,20 @@ services:
       # `docker compose up -d` 起基础设施都失败」。
       # 真正的 fail-fast 在控制面内部：token 为空时进程拒绝启动（见 main.py）。
       PIPECAT_TOKEN: ${PIPECAT_TOKEN:-}
+      # Go 网关 → Pipecat 的 X-Voice-Context 签名密钥（两端必须一致）
+      PIPECAT_CONTEXT_SECRET: ${PIPECAT_CONTEXT_SECRET:-}
+      # Pipecat → Go /internal/mcp 与 /internal/voice/memory/* 的内部 token
+      INTERNAL_MCP_TOKEN: ${INTERNAL_MCP_TOKEN:-}
+      # compose full 用 backend:8080；宿主机后端用 host.docker.internal:8080
+      PIPECAT_BACKEND_URL: ${PIPECAT_BACKEND_URL:-http://backend:8080}
       TZ: Asia/Shanghai
+    # Linux 宿主上 host.docker.internal 默认不存在，需显式映射到网关
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # 宿主机后端联调需要访问 Pipecat；生产走 Go 网关时可将此端口映射移除，
+    # 只保留 expose，让 Pipecat 仅在内网可达。
+    ports:
+      - "${PIPECAT_PORT:-8090}:8090"
     expose:
       - "8090"
     networks: [ai-camera]

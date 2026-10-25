@@ -284,6 +284,27 @@ var contractAppIotRoutes = []string{
 	"GET /app/rtc/ice-servers",
 }
 
+// contractVoiceRoutes v0.6.0「智能语音聊天」端点。
+//
+// WS 网关（/web|app|device/voice/ws）与 /internal/* 不挂 JWT/Casbin，
+// 但同样属于需要守门的对外契约，一并登记；ticket 端点挂在认证组内。
+var contractVoiceRoutes = []string{
+	"POST /web/voice/ws-ticket",
+	"GET /web/voice/ws",
+	"POST /app/voice/ws-ticket",
+	"GET /app/voice/ws",
+	"GET /device/voice/ws",
+	"GET /web/voice/memories",
+	"GET /web/voice/memories/export",
+	"DELETE /web/voice/memories/:id",
+	"GET /web/voice/mcp/tools",
+	"PUT /web/voice/mcp/tools/:id",
+	"GET /web/voice/mcp/logs",
+	"POST /internal/mcp",
+	"POST /internal/voice/memory/retrieve",
+	"POST /internal/voice/memory/write",
+}
+
 // contractRoutes 契约 §3 列出的全部端点，格式 "METHOD /path"。
 var contractRoutes = []string{
 	// ── §3.1 公开接口 ──
@@ -625,8 +646,13 @@ func TestRouteTable_MatchesContract(t *testing.T) {
 		}
 	})
 
-	want := make(map[string]bool, len(contractRoutes)+len(contractGbRoutes)+len(contractIotRoutes)+len(contractAppIotRoutes))
-	for _, key := range append(append(append(append([]string{}, contractRoutes...), contractGbRoutes...), contractIotRoutes...), contractAppIotRoutes...) {
+	want := make(map[string]bool, len(contractRoutes)+len(contractGbRoutes)+len(contractIotRoutes)+len(contractAppIotRoutes)+len(contractVoiceRoutes))
+	all := append([]string{}, contractRoutes...)
+	all = append(all, contractGbRoutes...)
+	all = append(all, contractIotRoutes...)
+	all = append(all, contractAppIotRoutes...)
+	all = append(all, contractVoiceRoutes...)
+	for _, key := range all {
 		if want[key] {
 			t.Errorf("契约期望表内重复条目: %s", key)
 			continue

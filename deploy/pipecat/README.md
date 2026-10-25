@@ -45,12 +45,25 @@ Pipecat 是**库**不是服务。本目录在 Docker 里包一层薄 FastAPI 控
 
 | 文件 | 作用 |
 |:--|:--|
-| `main.py` | FastAPI 控制面：鉴权、配置、会话、测试端点；`/session/start` 真正启动音频桥 |
+| `main.py` | FastAPI 控制面：鉴权、配置、会话、测试端点、`/ws/voice`；`/session/start` 真正启动音频桥 |
 | `factory.py` | provider 字符串 → Pipecat Service 的映射；可选导入探测 |
-| `pipeline.py` | VAD → STT → LLM → TTS 装配、参数映射、`AudioPipelineRunner` |
-| `transport.py` | `RTPAudioReceiver`、`WebRTCPCMAPusher`、RTP 解析/排序、G.711 ↔ PCM16、重采样 |
+| `pipeline.py` | VAD → STT → LLM → TTS 装配、参数映射、`AudioPipelineRunner`；`build_ws_pipeline` 与按句流式 Edge TTS |
+| `transport.py` | `RTPAudioReceiver`、WebRTCPCMAPusher、RTP 解析/排序、G.711 ↔ PCM16、重采样 |
 | `config_store.py` | 线程安全配置快照，原子替换与脱敏 |
-| `requirements.txt` | 依赖（`pipecat-ai==1.13.0`、`aiortc`、`edge-tts` …） |
+| `ws/protocol.py` | 小智兼容协议子集：hello/listen/abort/stt/llm/tts/mcp/tool/error/wake |
+| `ws/auth.py` | `PIPECAT_TOKEN` + `X-Voice-Context` HMAC-SHA256 验签 |
+| `ws/serializer.py` | Pipecat `FrameSerializer`：PCM16/Opus 协商、半双工闸门 |
+| `ws/session.py` | 单连接会话编排、快速应答、MCP/记忆、看门狗、`/health` 统计 |
+| `ws/ack.py` | 「我在」预合成缓存（PCM，跨会话复用） |
+| `audio/opus_codec.py` | PyAV/libopus 裸帧编解码（ESP32 上/下行） |
+| `voice_mcp/server_client.py` | Go `/internal/mcp` JSON-RPC 客户端 |
+| `voice_mcp/device_bridge.py` | 同一 WS 上的设备端 MCP bridge（initialize/tools/list/tools/call） |
+| `voice_memory/client.py` | Go 记忆检索/写入 HTTP 客户端 |
+| `voice_memory/short_term.py` | 长期记忆注入 system prompt + 会话结束摘要 |
+| `internal_http.py` | 标准库 urllib JSON POST（不打印正文/密钥） |
+| `tests/` | 协议/鉴权/半双工/MCP/记忆/快速应答单测（89 个） |
+| `requirements.txt` | 依赖（`pipecat-ai[anthropic,websocket]==1.13.0`、`aiortc`、`edge-tts` …） |
+| `requirements-dev.txt` | 仅测试用：`pytest` / `pytest-asyncio` |
 | `Dockerfile` | `python:3.11-slim` + ffmpeg + curl |
 
 ---
@@ -359,3 +372,158 @@ docker compose --profile voice exec pipecat curl -s http://127.0.0.1:8090/health
 3. `startSendRtp` 与 WebRTC push 流注册之间的竞态窗口（已加 5×200ms 重试）；
 4. faster-whisper / Anthropic / Edge TTS 的真实延迟与打断行为；
 5. 设备喇叭侧的回声时延，以及 300ms 静音尾巴是否足够。
+
+---
+
+## 10. WebSocket 语音 `/ws/voice`（v0.6.0）
+
+同一个 Pipecat 进程同时支持：
+
+- **RTP 桥**（GB28181，`/session/start`）——行为与 v0.2.0 完全一致；
+- **WebSocket 语音**（App/Web/ESP32，`/ws/voice`）——本节。
+
+### 10.1 连接与鉴权
+
+```http
+GET /ws/voice
+Authorization: Bearer <PIPECAT_TOKEN>
+X-Voice-Context: <base64url(payload)>.<base64url(HMAC-SHA256(secret, base64url(payload)))>
+```
+
+- `PIPECAT_TOKEN`：与控制面共享 token（环境变量，必填）。
+- `X-Voice-Context`：Go 网关签名的上下文，密钥 `PIPECAT_CONTEXT_SECRET`：
+
+  ```json
+  {"session_id":"s1","user_id":"u1","device_id":"d1","dept_id":"10",
+   "scopes":["voice"],"exp":1760000000}
+  ```
+
+- Pipecat **只信任签名内容**；未配置 `PIPECAT_CONTEXT_SECRET` 时，带上下文的
+  连接会被拒绝，只允许 token-only（仅本地调试，日志会告警）。
+- 兼容 `v1.payload.sig` 前缀格式；默认签名覆盖 base64url(payload) 字符串，
+  同时兼容 Go 直接对原始 JSON 字节签名的实现。
+
+### 10.2 协议（小智兼容子集）
+
+客户端首帧 `hello`：
+
+```json
+{"type":"hello","version":1,"transport":"websocket",
+ "features":{"mcp":true},
+ "audio_params":{"format":"pcm16","sample_rate":16000,"channels":1,"frame_duration":20},
+ "client":{"kind":"app","client_id":"...","device_id":"..."}}
+```
+
+| 方向 | type | 说明 |
+|:--|:--|:--|
+| C→S | `listen` | `state=detect\|start\|stop`，`mode=auto\|manual`（可省略） |
+| C→S | `abort` | 立即停止 LLM/TTS、清空输出队列 |
+| C→S | `mcp` | `payload`：JSON-RPC 2.0（设备端 MCP） |
+| C→S | `ping` | 服务端回 `pong` |
+| S→C | `hello` | 下行格式/采样率（24000）与 capabilities |
+| S→C | `wake` / `stt` / `llm` / `tts` / `tool` / `mcp` / `error` | 见 `ws/protocol.py` |
+
+音频：
+
+| 客户端 | 上行 | 下行 | 说明 |
+|:--|:--|:--|:--|
+| App/Web | PCM16 s16le 16k | PCM16 s16le 24k | 8k 上行也接受并重采样 |
+| ESP32 | Opus 裸帧 16k | Opus 裸帧 24k | 每个二进制 WS 消息 = 一个 Opus 包（v1） |
+
+内部统一 PCM16 16k（STT）/ 24k（TTS）。
+
+### 10.3 半双工与快速应答
+
+- `listen/detect` 或 `listen/start` 后立即下发快速应答（默认「我在」，
+  由 Go 配置 `fast_ack_text` 覆盖）的 `tts` 文本 + 预合成音频
+  （进程级缓存，首次会后台合成；未命中时最多等 `voice_ack_timeout`，
+  超时只发文字）。
+- TTS 播放期间丢弃上行；静音窗口按**实际写出的音频时长 + 300ms 尾巴**
+  延长（`ws/serializer.py::HalfDuplexGate`）。
+- `abort`：推进 generation、清空输出编码缓冲、`tts stop`，上行立即可用。
+- `barge_in` 默认关闭，协议 capability 会如实返回。
+
+### 10.4 MCP
+
+- **服务端 MCP**：`POST {PIPECAT_BACKEND_URL}/internal/mcp`，
+  `Authorization: Bearer <INTERNAL_MCP_TOKEN>`，实现
+  `initialize / tools/list（cursor）/ tools/call`；工具名中的 `.` 映射为 `_`。
+  `mcp_enabled=false` 时不注册服务端工具（设备端 MCP 仍可用）。
+- **设备端 MCP**：管线启动后后台执行
+  `initialize → tools/list → tools/call`；工具名含 `.` 时映射为
+  `device_...`（`screen.capture` → `device_screen_capture`），调用时还原
+  `wire_name`。超时/断线只让该次工具失败，不影响音频。
+- 工具结果通过 `params.result_callback(text)` 回给 LLM；同时向客户端发
+  `tool` 的 `calling/result/error` 状态。
+
+### 10.5 记忆
+
+- 会话开始：`POST {PIPECAT_BACKEND_URL}/internal/voice/memory/retrieve`
+  取 top-k（Go 配置 `memory_top_k`，默认 5），拼进 system prompt 的
+  `[长期记忆]` 块；`memory_enabled=false` 时跳过。
+  请求体与 Go `MemoryRetrieveReq` 对齐：
+  `{"owner_keys":["user:1","dept:10","global"],"query":"","top_k":5}`
+  （owner key 来自签名上下文，格式 `user:<id>` / `device:<id>` /
+  `dept:<id>` / `global`）。
+- 会话内：`LLMContext` + `LLMContextSummarizer`
+  （`enable_auto_context_summarization=True`）。
+- 会话结束：`POST /internal/voice/memory/write` 写确定性摘要。
+  请求体与 Go `MemoryWriteReq` 对齐：
+  `{"owner_type":"user","owner_id":1,"kind":"summary","content":"...",
+    "importance":3,"source_session_id":"s1"}`，owner 按 用户 > 设备 >
+  部门 > global 选择（有登录用户时写 user，纯设备会话写 device）。
+  `turns`/`message_count` 作为扩展字段附带。
+  不存原始音频。
+
+### 10.6 环境变量
+
+| 变量 | 必填 | 作用 |
+|:--|:--:|:--|
+| `PIPECAT_TOKEN` | 是 | 控制面/WS 共享 token（未配置进程拒绝启动） |
+| `PIPECAT_CONTEXT_SECRET` | 生产必填 | `X-Voice-Context` HMAC 密钥 |
+| `INTERNAL_MCP_TOKEN` | 否 | Go 内部 MCP/记忆接口 token |
+| `PIPECAT_BACKEND_URL` | 否 | compose 注入的 Go 后端地址，如 `http://backend:8080`（也支持 `GO_INTERNAL_BASE_URL` / `/config` 的 `go_internal_base_url`） |
+| `PIPECAT_ACK_TEXT` | 否 | 快速应答文本，默认「我在」 |
+| `PIPECAT_ALLOW_QUERY_TOKEN` | 否 | `true` 时允许 `?token=`（仅调试） |
+| `PIPECAT_ALLOWED_ORIGINS` | 否 | 逗号分隔的 Origin 白名单 |
+
+Go `Apply` 下发的 v0.6.0 键会被 Pipecat 使用：`fast_ack_text`（快速应答）、
+`memory_enabled`、`memory_top_k`、`mcp_enabled`、`barge_in`。
+Pipecat 额外可选键：`go_internal_base_url`、`voice_ack_timeout`、
+`voice_mcp_timeout`、`ws_max_sessions`、`ws_hello_timeout`、
+`ws_idle_timeout`、`ws_max_session_sec`（后两者默认 0 = WS 不因空闲/时长
+自动断开；RTP 的 `session_idle_timeout` / `max_session_sec` 语义不变）。
+`ws_path` 必须是 `/ws/voice`（Pipecat 路由固定），不一致会打告警。
+
+### 10.7 `/health` 与 `/sessions`
+
+`/health` 新增（旧字段保持不变，`sessions` 仍是 RTP 会话数）：
+
+```json
+{"transports":{"rtp":{"sessions":0,"audio_bridge":"not_connected"},
+               "ws":{"sessions":1,"total_started":3,"total_closed":2,
+                     "input_formats":{"pcm16":3},"listen_modes":{"auto":3}}},
+ "sessions_rtp":0,"sessions_ws":1,"sessions_total":1}
+```
+
+`/sessions` 的 `sessions`/`count` 仍只含 RTP；WS 会话在 `ws_sessions` /
+`ws_count`，并新增 `total_count` 与 `transports`。
+
+### 10.8 测试
+
+```bash
+cd deploy/pipecat
+pip install -r requirements-dev.txt
+
+# 89 个纯 Python 单测（协议/鉴权/半双工/MCP/记忆/快速应答；Opus 需要 av）
+python -m pytest tests -q
+
+# 语法检查（本机无 Python 时用容器）
+MSYS_NO_PATHCONV=1 docker run --rm \
+  -v "D:/work2026/ai-camera/deploy/pipecat:/app" -w /app python:3.11-slim \
+  sh -c "find . -name '*.py' | xargs python -m py_compile"
+```
+
+> **包名说明**：设备端 MCP 与记忆包分别叫 `voice_mcp/`、`voice_memory/`，
+> 而不是 `mcp/`、`memory/`。生产镜像以后可能安装官方 `mcp` SDK，顶层
+> 同名目录会把它遮蔽。

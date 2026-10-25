@@ -507,6 +507,18 @@ type VoiceSession struct {
 	Status    string `gorm:"column:status;size:20;default:active;index;comment:状态 active/stopped/failed" json:"status"`
 	EndReason string `gorm:"column:end_reason;size:500;comment:结束原因" json:"end_reason"`
 
+	// ── v0.6.0 智能语音聊天扩展 ─────────────────────────────────
+	// 与 GB28181 广播/对讲共用本表：transport 区分 RTP 与 WebSocket，
+	// client_id 标识 App/Web/设备的连接，turn_count 便于统计对话轮次。
+	Transport    string     `gorm:"column:transport;size:20;default:rtp;comment:传输方式 rtp/websocket" json:"transport"`
+	ClientID     string     `gorm:"column:client_id;size:100;comment:客户端标识(App/Web/设备)" json:"client_id"`
+	AgentCode    string     `gorm:"column:agent_code;size:100;comment:语音Agent编码" json:"agent_code"`
+	InputFormat  string     `gorm:"column:input_format;size:20;comment:上行音频格式 pcm16/opus" json:"input_format"`
+	OutputFormat string     `gorm:"column:output_format;size:20;comment:下行音频格式 pcm16/opus" json:"output_format"`
+	LastSeenDT   *time.Time `gorm:"column:last_seen_at;comment:最近活跃时间" json:"last_seen_at"`
+	TurnCount    int        `gorm:"column:turn_count;default:0;comment:对话轮次" json:"turn_count"`
+	CloseCode    int        `gorm:"column:close_code;default:0;comment:WebSocket关闭码" json:"close_code"`
+
 	DeptID *int64 `gorm:"column:dept_id;index;comment:所属部门(数据权限)" json:"dept_id"`
 
 	Device  *Device    `gorm:"foreignKey:DeviceID;references:ID" json:"device,omitempty"`
