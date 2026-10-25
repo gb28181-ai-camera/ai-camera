@@ -33,7 +33,7 @@ test.describe('13 WVP 功能对齐', () => {
     await gotoAdmin(page, '/gb/ops/platform-info')
     await expect(page.locator('.e2e-gb-platform-info')).toBeVisible()
     expect((await resp).status()).toBe(200)
-    await expect(page.getByText('v0.4.0').first()).toBeVisible()
+    await expect(page.getByText('v0.5.0').first()).toBeVisible()
     await expect(page.getByText('SIP 信令')).toBeVisible()
     await expect(page.getByText('默认媒体节点')).toBeVisible()
   })

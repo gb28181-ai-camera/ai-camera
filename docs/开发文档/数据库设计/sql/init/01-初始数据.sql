@@ -2966,3 +2966,216 @@ SELECT setval(pg_get_serial_sequence('ac_role_menu_rel', 'id'), COALESCE((SELECT
 SELECT setval(pg_get_serial_sequence('ac_gb_ptz_preset', 'id'), COALESCE((SELECT MAX(id) FROM ac_gb_ptz_preset), 1));
 SELECT setval(pg_get_serial_sequence('ac_gb_share_token', 'id'), COALESCE((SELECT MAX(id) FROM ac_gb_share_token), 1));
 SELECT setval(pg_get_serial_sequence('ac_gb_record_merge_task', 'id'), COALESCE((SELECT MAX(id) FROM ac_gb_record_merge_task), 1));
+
+-- ════════════════════════════════════════════════════════════════
+-- 14. v0.5.0 运营后台信息架构重组
+--
+--     一级目录：
+--       首页 / 系统管理 / 物联网管理 / 国标视频 / 实时音视频 / 智能语音聊天 / AI 智能分析
+--     原则：
+--       - 系统管理只保留账号与配置；
+--       - 物联网管理承载产品、服务组、设备、设备资源、升级与设备监控；
+--       - 国标视频只保留 GB28181 能力（对讲等按钮仍在实时播放页）；
+--       - 实时音视频 / 智能语音聊天按产品绑定的 WebRTC / AIChat 服务组过滤设备；
+--       - AI 业务统一归入 AI 智能分析。
+-- ════════════════════════════════════════════════════════════════
+
+-- ── 14.1 一级目录 ────────────────────────────────────────────
+UPDATE ac_menu SET name = '系统管理', sequence = 2 WHERE id = 8;
+UPDATE ac_menu SET name = '物联网管理', sequence = 3 WHERE id = 15;
+UPDATE ac_menu SET sequence = 4 WHERE id = 12;
+UPDATE ac_menu SET sequence = 1 WHERE id = 1;
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 17, NULL, 1, '实时音视频', '/av', 'VideoCameraOutlined', '', 'directory', 'pc', 'av:view', '目录', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'av:view');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 18, NULL, 1, '智能语音聊天', '/voice', 'AudioOutlined', '', 'directory', 'pc', 'voice-chat:view', '目录', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'voice-chat:view');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 16, NULL, 1, 'AI 智能分析', '/ai', 'BulbOutlined', '', 'directory', 'pc', 'ai:view', '目录', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'ai:view');
+
+-- ── 14.2 新增二级菜单 ────────────────────────────────────────
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 154, 15, 2, '设备监控', '/iot/monitor', 'DashboardOutlined', '', 'directory', 'pc', 'iot:monitor-dir:view', '目录', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'iot:monitor-dir:view');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 191, 17, 2, '设备管理', '/av/device', 'DesktopOutlined', 'av/WebRtcDeviceList', 'menu', 'pc', 'av:device:list', '菜单', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'av:device:list');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 192, 17, 2, '服务设置', '/av/service', 'SettingOutlined', 'av/WebRtcServiceSettings', 'menu', 'pc', 'av:service:view', '菜单', 2, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'av:service:view');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 201, 18, 2, '设备管理', '/voice/device', 'DesktopOutlined', 'voice/AiChatDeviceList', 'menu', 'pc', 'voice-chat:device:list', '菜单', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'voice-chat:device:list');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 202, 18, 2, '服务设置', '/voice/service', 'SettingOutlined', 'voice/AiChatServiceSettings', 'menu', 'pc', 'voice-chat:service:view', '菜单', 2, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'voice-chat:service:view');
+
+-- 语音 Agent 移到智能语音聊天（AIChat 走独立 WebSocket，不属于国标服务组）。
+UPDATE ac_menu
+SET parent_id = 18, level = 2, path = '/voice/agent', sequence = 3, name = '语音 Agent'
+WHERE id = 1263;
+
+-- ── 14.3 移动现有菜单 ────────────────────────────────────────
+-- AI 智能分析
+UPDATE ac_menu SET parent_id = 16, level = 2, sequence = 1 WHERE id = 2;   -- 实时监控
+UPDATE ac_menu SET parent_id = 16, level = 2, sequence = 2 WHERE id = 3;   -- AI风险
+UPDATE ac_menu SET parent_id = 16, level = 2, sequence = 3 WHERE id = 4;   -- AI监控
+UPDATE ac_menu SET parent_id = 16, level = 2, sequence = 4 WHERE id = 51;  -- 风险监控
+UPDATE ac_menu SET parent_id = 16, level = 2, sequence = 5 WHERE id = 6;   -- 巡检中心
+UPDATE ac_menu SET parent_id = 16, level = 2, sequence = 6 WHERE id = 7;   -- 统计分析
+
+-- 风险统计目录已清空，隐藏不再渲染（子项已分别移走）。
+UPDATE ac_menu SET active = FALSE WHERE id = 5;
+
+-- 物联网管理：产品 / 服务组 / 设备 / 设备资源 / 升级 / 设备监控
+UPDATE ac_menu SET parent_id = 15, level = 2, sequence = 4 WHERE id = 81;  -- 资源管理
+UPDATE ac_menu SET parent_id = 15, level = 2, sequence = 5 WHERE id = 83;  -- 升级管理
+UPDATE ac_menu SET parent_id = 154, level = 3, sequence = 1 WHERE id = 52; -- 设备监控
+UPDATE ac_menu SET parent_id = 154, level = 3, sequence = 2 WHERE id = 53; -- GIS查看
+UPDATE ac_menu SET parent_id = 154, level = 3, sequence = 3 WHERE id = 54; -- 设备历史记录
+UPDATE ac_menu SET parent_id = 154, level = 3, sequence = 4 WHERE id = 55; -- 设备告警
+UPDATE ac_menu SET parent_id = 154, level = 3, sequence = 5 WHERE id = 56; -- 物联网卡监控
+
+-- 系统管理：只保留账号与配置
+-- 86 原名为「系统管理」，与一级目录重名，改为「账号与权限」避免歧义。
+UPDATE ac_menu SET parent_id = 8, level = 2, sequence = 1, name = '账号与权限' WHERE id = 86;
+UPDATE ac_menu SET parent_id = 8, level = 2, sequence = 2 WHERE id = 84;   -- 基础信息管理
+UPDATE ac_menu SET parent_id = 8, level = 2, sequence = 3 WHERE id = 82;   -- 告警设置
+UPDATE ac_menu SET parent_id = 8, level = 2, sequence = 4 WHERE id = 85;   -- 第三方平台管理
+
+-- 81 资源管理移入物联网管理后与 153「设备管理」易混淆：
+-- 81 → 设备资源，811 → 设备档案。
+UPDATE ac_menu SET name = '设备资源' WHERE id = 81;
+UPDATE ac_menu SET name = '设备档案' WHERE id = 811;
+
+-- 国标视频：组织与语音 → 组织管理（业务分组保留；语音 Agent 已移走）
+UPDATE ac_menu SET name = '组织管理', sequence = 6 WHERE id = 126;
+
+-- 15 的二级顺序
+UPDATE ac_menu SET sequence = 1 WHERE id = 151;
+UPDATE ac_menu SET sequence = 2 WHERE id = 152;
+UPDATE ac_menu SET sequence = 3 WHERE id = 153;
+
+-- ── 14.4 新菜单的接口绑定（复用 IOT 设备/服务组接口）──────────
+-- 设备管理页（191/201）：从 IOT 设备菜单 153 复制一份；
+-- 产品下拉使用 151 的 /web/iot/products。
+INSERT INTO ac_menu_api (menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 191, a.method, a.path, a.description, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_menu_api a
+WHERE a.menu_id = 153
+  AND a.deleted_at IS NULL
+  AND a.path IN (
+    '/web/iot/devices', '/web/iot/devices/:id',
+    '/web/iot/devices/:id/accounts', '/web/iot/devices/:id/accounts/:accountId',
+    '/web/iot/devices/:id/activate', '/web/iot/devices/:id/reset-secret',
+    '/web/iot/devices/:id/product', '/web/iot/devices/:id/qr',
+    '/web/iot/devices/:id/share-token', '/web/iot/devices/:id/unbind'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM ac_menu_api x
+    WHERE x.menu_id = 191 AND x.method = a.method AND x.path = a.path AND x.deleted_at IS NULL
+  );
+
+INSERT INTO ac_menu_api (menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 191, a.method, a.path, a.description, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_menu_api a
+WHERE a.menu_id = 151
+  AND a.deleted_at IS NULL
+  AND a.path IN ('/web/iot/products', '/web/iot/products/:id')
+  AND NOT EXISTS (
+    SELECT 1 FROM ac_menu_api x
+    WHERE x.menu_id = 191 AND x.method = a.method AND x.path = a.path AND x.deleted_at IS NULL
+  );
+
+INSERT INTO ac_menu_api (menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 201, a.method, a.path, a.description, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_menu_api a
+WHERE a.menu_id = 153
+  AND a.deleted_at IS NULL
+  AND a.path IN (
+    '/web/iot/devices', '/web/iot/devices/:id',
+    '/web/iot/devices/:id/accounts', '/web/iot/devices/:id/accounts/:accountId',
+    '/web/iot/devices/:id/activate', '/web/iot/devices/:id/reset-secret',
+    '/web/iot/devices/:id/product', '/web/iot/devices/:id/qr',
+    '/web/iot/devices/:id/share-token', '/web/iot/devices/:id/unbind'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM ac_menu_api x
+    WHERE x.menu_id = 201 AND x.method = a.method AND x.path = a.path AND x.deleted_at IS NULL
+  );
+
+INSERT INTO ac_menu_api (menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 201, a.method, a.path, a.description, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_menu_api a
+WHERE a.menu_id = 151
+  AND a.deleted_at IS NULL
+  AND a.path IN ('/web/iot/products', '/web/iot/products/:id')
+  AND NOT EXISTS (
+    SELECT 1 FROM ac_menu_api x
+    WHERE x.menu_id = 201 AND x.method = a.method AND x.path = a.path AND x.deleted_at IS NULL
+  );
+
+-- 服务设置页（192/202）：从服务组菜单 152 复制。
+INSERT INTO ac_menu_api (menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 192, a.method, a.path, a.description, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_menu_api a
+WHERE a.menu_id = 152
+  AND a.deleted_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM ac_menu_api x
+    WHERE x.menu_id = 192 AND x.method = a.method AND x.path = a.path AND x.deleted_at IS NULL
+  );
+
+INSERT INTO ac_menu_api (menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 202, a.method, a.path, a.description, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM ac_menu_api a
+WHERE a.menu_id = 152
+  AND a.deleted_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM ac_menu_api x
+    WHERE x.menu_id = 202 AND x.method = a.method AND x.path = a.path AND x.deleted_at IS NULL
+  );
+
+-- ── 14.5 授权与祖先补齐 ──────────────────────────────────────
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT 1, m.id FROM ac_menu m
+WHERE m.permission_code IN ('ai:view', 'av:view', 'voice-chat:view', 'iot:monitor-dir:view',
+                            'av:device:list', 'av:service:view', 'voice-chat:device:list', 'voice-chat:service:view')
+  AND NOT EXISTS (SELECT 1 FROM ac_role_menu_rel r WHERE r.role_id = 1 AND r.menu_id = m.id);
+
+-- 给所有已有子菜单授权的角色补齐祖先目录，避免侧边栏只授权子项时父目录不渲染。
+WITH RECURSIVE ancestors(role_id, menu_id) AS (
+    SELECT r.role_id, c.parent_id
+    FROM ac_role_menu_rel r
+    JOIN ac_menu c ON c.id = r.menu_id
+    WHERE c.parent_id IS NOT NULL
+  UNION
+    SELECT a.role_id, c.parent_id
+    FROM ancestors a
+    JOIN ac_menu c ON c.id = a.menu_id
+    WHERE c.parent_id IS NOT NULL
+)
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT a.role_id, a.menu_id
+FROM ancestors a
+WHERE NOT EXISTS (
+  SELECT 1 FROM ac_role_menu_rel r WHERE r.role_id = a.role_id AND r.menu_id = a.menu_id
+);
+
+-- ── 14.6 重建 super_admin 的 Casbin p 策略 + 序列对齐 ────────
+DELETE FROM casbin_rule WHERE p_type = 'p' AND v0 = 'super_admin';
+INSERT INTO casbin_rule (p_type, v0, v1, v2)
+SELECT DISTINCT 'p', 'super_admin', path, method FROM ac_menu_api WHERE deleted_at IS NULL;
+
+SELECT setval(pg_get_serial_sequence('ac_menu', 'id'), COALESCE((SELECT MAX(id) FROM ac_menu), 1));
+SELECT setval(pg_get_serial_sequence('ac_menu_api', 'id'), COALESCE((SELECT MAX(id) FROM ac_menu_api), 1));
+SELECT setval(pg_get_serial_sequence('ac_role_menu_rel', 'id'), COALESCE((SELECT MAX(id) FROM ac_role_menu_rel), 1));

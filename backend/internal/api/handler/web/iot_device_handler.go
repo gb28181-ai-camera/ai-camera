@@ -39,6 +39,7 @@ func NewIotDeviceHandler() *IotDeviceHandler {
 // @Param        keyword     query     string  false  "关键字(设备名称/编号/位置)"
 // @Param        product_id  query     int     false  "产品ID"
 // @Param        status      query     string  false  "运行状态 online/offline"
+// @Param        service_group_type query string false "服务组类型 gb28181/webrtc/aichat（按产品绑定关系过滤）"
 // @Success      200  {object}  response.RPageIotDevice
 // @Failure      400  {object}  response.BaseResponse
 // @Router       /web/iot/devices [get]

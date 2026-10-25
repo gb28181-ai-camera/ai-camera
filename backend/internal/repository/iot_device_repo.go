@@ -45,6 +45,19 @@ func (r *IotDeviceRepo) Page(ctx context.Context, req *request.PageIotDeviceReq)
 	if s := strings.TrimSpace(req.Status); s != "" {
 		q = q.Where("d.status = ?", s)
 	}
+	// 按产品绑定的服务组类型过滤：设备 → 产品 → 产品-服务组 → 服务组。
+	// 未绑定产品/未绑定服务组的设备不会出现在 WebRTC / AIChat 专用页。
+	if t := strings.TrimSpace(req.ServiceGroupType); t != "" {
+		q = q.Where(`EXISTS (
+			SELECT 1
+			FROM ac_iot_product_service_group psg
+			JOIN ac_iot_service_group sg ON sg.id = psg.service_group_id
+			WHERE psg.product_id = d.product_id
+			  AND psg.deleted_at IS NULL
+			  AND sg.deleted_at IS NULL
+			  AND sg.type = ?
+		)`, t)
+	}
 
 	var total int64
 	if err := q.Session(&gorm.Session{}).Count(&total).Error; err != nil {

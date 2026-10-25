@@ -39,8 +39,8 @@ export class IOTController {
 
     static pageIotDevicesPath: string = "/web/iot/devices";
     /// IOT设备分页列表
-    static async pageIotDevices(page?: number, page_size?: number, keyword?: string, product_id?: number, status?: string, headers?: any): Promise<RPageIotDevice> {
-      return request(`/web/iot/devices?page=${page ?? "" }&page_size=${page_size ?? "" }&keyword=${keyword ?? "" }&product_id=${product_id ?? "" }&status=${status ?? "" }`, {
+    static async pageIotDevices(page?: number, page_size?: number, keyword?: string, product_id?: number, status?: string, service_group_type?: string, headers?: any): Promise<RPageIotDevice> {
+      return request(`/web/iot/devices?page=${page ?? "" }&page_size=${page_size ?? "" }&keyword=${keyword ?? "" }&product_id=${product_id ?? "" }&status=${status ?? "" }&service_group_type=${service_group_type ?? "" }`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "GET",
         headers,
