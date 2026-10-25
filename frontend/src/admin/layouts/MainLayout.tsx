@@ -220,6 +220,13 @@ export default function MainLayout() {
           selectedKeys={selectedKeys}
           openKeys={collapsed ? undefined : openKeys}
           onOpenChange={(keys) => setOpenKeys(keys as string[])}
+          onClick={({ key }) => {
+            // 叶子菜单的 key 就是 ac_menu.path（如 /gb/ops/logs）；
+            // 目录 key 为 dir_<id>，点击只展开/收起，不跳转。
+            if (typeof key === 'string' && key.startsWith('/')) {
+              navigate(key)
+            }
+          }}
         />
       </Sider>
 
