@@ -32,6 +32,11 @@ type UpdateMenuReq struct {
 	Hidden         *bool  `json:"hidden" example:"false"`
 }
 
+// AssignMenuRolesReq 覆盖式设置菜单的授权角色。IDs 为空表示清空该菜单的全部角色授权。
+type AssignMenuRolesReq struct {
+	IDs []int64 `json:"ids" example:"[1,2]"`
+}
+
 // CreateMenuAPIReq 新增菜单接口请求。菜单接口是 Casbin p 策略的唯一来源，
 // 新增后会自动为拥有该菜单的角色重建策略。
 type CreateMenuAPIReq struct {

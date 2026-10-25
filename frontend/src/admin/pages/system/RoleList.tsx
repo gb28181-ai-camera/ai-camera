@@ -30,6 +30,7 @@ interface RoleFormValues {
   name: string
   code: string
   sequence: number
+  data_permission: string
   description?: string
 }
 
@@ -40,6 +41,8 @@ const DATA_PERM_LABELS: Record<string, string> = {
   dept: '本部门',
   personal: '仅个人',
 }
+
+const DATA_PERM_OPTIONS = Object.entries(DATA_PERM_LABELS).map(([value, label]) => ({ value, label }))
 
 /**
  * 角色管理：分页列表 + 增删改 + 四类授权（菜单 / 部门 / 岗位 / 用户）+ 数据权限设置。
@@ -145,7 +148,7 @@ export default function RoleList() {
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ sequence: 10 })
+    form.setFieldsValue({ sequence: 10, data_permission: 'all' })
     setModalOpen(true)
   }
 
@@ -155,6 +158,7 @@ export default function RoleList() {
       name: record.name,
       code: record.code,
       sequence: record.sequence ?? 10,
+      data_permission: record.data_permission || 'all',
       description: record.description,
     })
     setModalOpen(true)
@@ -169,7 +173,11 @@ export default function RoleList() {
           name: values.name,
           code: values.code,
           sequence: values.sequence,
+          data_permission: values.data_permission,
+          // 后端无条件覆盖 Description/CrossDeptIDs，未带入会导致既有值被清空
+          cross_dept_ids: editing.cross_dept_ids ?? '',
           description: values.description,
+          active: editing.active !== false,
         })
         if (res.code === 200) {
           message.success('更新成功')
@@ -184,7 +192,8 @@ export default function RoleList() {
           code: values.code,
           sequence: values.sequence,
           description: values.description,
-          data_permission: 'all',
+          data_permission: values.data_permission || 'all',
+          active: true,
         })
         if (res.code === 200 || res.code === 201) {
           message.success('创建成功')
@@ -198,6 +207,29 @@ export default function RoleList() {
       message.error('保存失败，请检查网络后重试')
     } finally {
       setSaving(false)
+    }
+  }
+
+  /** 行内启停：UpdateRoleReq 的字符串字段为空表示不修改，但 Description/CrossDeptIDs 会被覆盖，需带当前值 */
+  const handleToggleActive = async (record: Role, checked: boolean) => {
+    try {
+      const res = await RoleController.updateRole(String(record.id), {
+        name: record.name,
+        code: record.code,
+        sequence: record.sequence,
+        description: record.description,
+        data_permission: record.data_permission || 'all',
+        cross_dept_ids: record.cross_dept_ids ?? '',
+        active: checked,
+      })
+      if (res.code === 200) {
+        message.success(checked ? '已启用' : '已停用')
+      } else {
+        message.error(res.message || '操作失败')
+      }
+      fetchData()
+    } catch {
+      message.error('操作失败')
     }
   }
 
@@ -396,8 +428,18 @@ export default function RoleList() {
       render: (value: string) => DATA_PERM_LABELS[value] ?? value ?? '-',
     },
     {
-      title: '状态', key: 'active', width: 90,
-      render: (_, record) => (record.active === false ? <Tag>停用</Tag> : <Tag color="green">启用</Tag>),
+      title: '状态', key: 'active', width: 100,
+      render: (_, record) => (
+        <Switch
+          className="e2e-role-active-switch"
+          size="small"
+          checked={record.active !== false}
+          checkedChildren="启用"
+          unCheckedChildren="停用"
+          disabled={!canUpdate}
+          onChange={(checked) => handleToggleActive(record, checked)}
+        />
+      ),
     },
     {
       title: '创建时间', dataIndex: 'created_dt', key: 'created_dt', width: 170,
@@ -510,6 +552,16 @@ export default function RoleList() {
             <Col span={12}>
               <Form.Item name="sequence" label="显示顺序" rules={[{ required: true, message: '请输入显示顺序' }]}>
                 <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="data_permission"
+                label="数据权限"
+                rules={[{ required: true, message: '请选择数据权限' }]}
+                extra="跨部门的具体部门可在「数据权限」操作中设置"
+              >
+                <Select options={DATA_PERM_OPTIONS} />
               </Form.Item>
             </Col>
             <Col span={24}>

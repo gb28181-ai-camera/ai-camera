@@ -65,7 +65,7 @@ test.describe('12a IOT 产品管理', () => {
   test('列表渲染：列定义与两个种子产品', async ({ page }) => {
     await expectColumns(page, [
       '产品名称', '产品编码', '分类', '自动联网（4G）', '配网方式',
-      '允许分享', '绑定服务组数', '启用状态', '操作',
+      '允许分享', '服务组', '启用状态', '操作',
     ])
 
     const security = tableRow(page, 'security_camera')
@@ -115,7 +115,8 @@ test.describe('12a IOT 产品管理', () => {
       await expect(row).toContainText('E2E分类')
       await expect(row).toContainText('AP')
       await expect(row).toContainText('是')
-      await expect(row.locator('td').nth(6)).toHaveText('1')
+      // 服务组列直接展示服务组标签（不再显示数量）
+      await expect(row.locator('td').nth(6)).toContainText('WebRTC')
 
       // 编辑：名称变更后重新检索
       await row.getByRole('button', { name: /编\s*辑/ }).click()
@@ -183,7 +184,7 @@ test.describe('12a IOT 产品管理', () => {
     await closeIotModal(page, CRED_MODAL)
   })
 
-  test('新建产品时选择服务组，绑定数变为 1', async ({ page }) => {
+  test('新建产品时选择服务组，列表展示服务组标签', async ({ page }) => {
     const productName = uniqName('E2E-IOT绑定产品')
     const productCode = `E2E_IOT_BIND_P_${Date.now()}`
     let productId: number | undefined
@@ -205,7 +206,7 @@ test.describe('12a IOT 产品管理', () => {
 
       productId = await iotIdByName(page, LIST_API, productCode, 'code')
       await searchTable(page, HINT, productCode, LIST_API)
-      await expect(tableRow(page, productCode).locator('td').nth(6)).toHaveText('1')
+      await expect(tableRow(page, productCode).locator('td').nth(6)).toContainText('WebRTC')
 
       const bound = await expectApiOk(
         await apiCall(page, 'GET', `${LIST_API}/${productId}/service-groups`)

@@ -56,6 +56,12 @@ type GbDeviceItem struct {
 	Remark    string    `json:"remark"`
 	CreatedDT time.Time `json:"created_dt"`
 	UpdatedDT time.Time `json:"updated_dt"`
+
+	// ── IOT 归属（同一台设备可同时属于 GB28181 + AIChat 等多个服务组）──
+	ProductID     *int64                       `json:"product_id"`
+	ProductCode   string                       `json:"product_code"`
+	ProductName   string                       `json:"product_name"`
+	ServiceGroups []model.IotServiceGroupBrief `json:"service_groups,omitempty"`
 }
 
 // PageGbDeviceResp 国标设备分页载荷。

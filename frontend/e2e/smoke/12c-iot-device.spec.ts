@@ -95,7 +95,7 @@ test.describe('12c IOT 设备管理', () => {
 
   test('列表渲染：种子设备与所属产品列', async ({ page }) => {
     await expectColumns(page, [
-      '设备名称', '设备编号', '所属产品', '在线状态', '激活状态', '主账号', '启用', '操作',
+      '设备名称', '设备编号', '所属产品', '服务组', '在线状态', '激活状态', '主账号', '启用', '操作',
     ])
     const seed = tableRow(page, 'CAM_001')
     await expect(seed).toHaveCount(1)
@@ -112,6 +112,8 @@ test.describe('12c IOT 设备管理', () => {
       await expect(row).toHaveCount(1)
       await expect(row).toContainText(fixture.productName)
       await expect(row).toContainText(fixture.productCode)
+      // 服务组标签由产品绑定关系批量带出，无需逐行请求
+      await expect(row.locator('.e2e-iot-device-service-groups')).toContainText('WebRTC')
       await shot(page, '12c-iot-device-filtered')
     } finally {
       await cleanup(page, fixture)

@@ -34,6 +34,7 @@ func (h *ConfigHandler) List(c *gin.Context) {
 
 // Create 新增系统参数
 // @Summary 新增系统参数
+// @Description 支持 active（默认 true）与 schema（JSON Schema）。data_type 支持 string/int/integer/float/bool/boolean/json/select，integer/boolean 归一为 int/bool。
 // @ID createConfig
 // @Tags System
 // @Param body body request.CreateConfigReq true "参数信息"
@@ -56,6 +57,7 @@ func (h *ConfigHandler) Create(c *gin.Context) {
 
 // Update 更新系统参数
 // @Summary 更新系统参数
+// @Description active 为 null/未传时不修改启用状态；其他为空（未传）的字段同样不覆盖原值。
 // @ID updateConfig
 // @Tags System
 // @Param id path int true "参数ID"

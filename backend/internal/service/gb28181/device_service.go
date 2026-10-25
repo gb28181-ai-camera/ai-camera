@@ -63,6 +63,23 @@ func (s *GbDeviceService) Page(ctx context.Context, req *request.PageGbDeviceReq
 		if req.RegionID != nil {
 			q = q.Where("region_id = ?", *req.RegionID)
 		}
+		if req.ProductID != nil {
+			q = q.Where("product_id = ?", *req.ProductID)
+		}
+		if t := trim(req.ServiceGroupType); t != "" {
+			q = q.Where(`EXISTS (
+				SELECT 1
+				FROM ac_iot_product p
+				JOIN ac_iot_product_service_group psg ON psg.product_id = p.id
+				JOIN ac_iot_service_group sg ON sg.id = psg.service_group_id
+				WHERE p.id = ac_device.product_id
+				  AND p.deleted_at IS NULL
+				  AND psg.deleted_at IS NULL
+				  AND sg.deleted_at IS NULL
+				  AND sg.active = TRUE
+				  AND sg.type = ?
+			)`, t)
+		}
 		if ds != nil {
 			q = ds.ApplyToQuery(q, "ac_device.dept_id")
 		}
@@ -75,7 +92,7 @@ func (s *GbDeviceService) Page(ctx context.Context, req *request.PageGbDeviceReq
 	}
 
 	var devices []model.Device
-	if err := build().Preload("Region").
+	if err := build().Preload("Region").Preload("Product").
 		Order("id DESC").
 		Offset(req.Offset()).
 		Limit(req.PageSize).
@@ -84,10 +101,26 @@ func (s *GbDeviceService) Page(ctx context.Context, req *request.PageGbDeviceReq
 	}
 
 	items := make([]response.GbDeviceItem, 0, len(devices))
+	productIDs := make([]int64, 0, len(devices))
+	seen := make(map[int64]struct{}, len(devices))
 	for _, d := range devices {
 		item := toGbDeviceItem(d)
 		applyGbDeviceExtra(&item, d)
 		items = append(items, item)
+		if d.ProductID != nil {
+			if _, ok := seen[*d.ProductID]; !ok {
+				seen[*d.ProductID] = struct{}{}
+				productIDs = append(productIDs, *d.ProductID)
+			}
+		}
+	}
+	if groupsByProduct, err := repository.NewIotProductRepo().
+		ListServiceGroupBriefsByProductIDs(ctx, productIDs); err == nil {
+		for i := range items {
+			if items[i].ProductID != nil {
+				items[i].ServiceGroups = groupsByProduct[*items[i].ProductID]
+			}
+		}
 	}
 
 	return &response.PageGbDeviceResp{
@@ -118,6 +151,12 @@ func (s *GbDeviceService) Get(ctx context.Context, id int64) (*response.GbDevice
 
 	item := toGbDeviceItem(*d)
 	applyGbDeviceExtra(&item, *d)
+	if d.ProductID != nil {
+		if groups, err := repository.NewIotProductRepo().
+			ListServiceGroupBriefsByProductIDs(ctx, []int64{*d.ProductID}); err == nil {
+			item.ServiceGroups = groups[*d.ProductID]
+		}
+	}
 	return &response.GbDeviceDetailResp{
 		GbDeviceItem:    item,
 		MediaServerName: mediaServerName,
@@ -479,7 +518,7 @@ func normalizeGbCharset(s string) (string, bool) {
 func (s *GbDeviceService) getDevice(ctx context.Context, id int64, requireGbID bool) (*model.Device, error) {
 	var d model.Device
 	err := bootstrap.DB().WithContext(ctx).
-		Preload("Region").
+		Preload("Region").Preload("Product").
 		First(&d, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

@@ -106,6 +106,18 @@ const (
 //
 // 产品是设备接入配置的聚合根：联网方式、配网方式、分享策略以及可用的服务组，
 // 都挂在产品上；设备只需要指向产品，OTA 时由产品推导出全部服务配置。
+// IotServiceGroupBrief 服务组摘要（列表展示用）。
+//
+// 产品与设备列表需要在一行里显示「属于哪些服务组」，但不希望带出
+// 完整的服务组/服务/引用计数。该结构是非持久化字段，由 Service 批量填充。
+type IotServiceGroupBrief struct {
+	ID     int64  `json:"id"`
+	Code   string `json:"code"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Active *bool  `json:"active"`
+}
+
 type IotProduct struct {
 	BaseModel
 	Active         *bool  `gorm:"column:active;default:true" json:"active"`
@@ -118,6 +130,9 @@ type IotProduct struct {
 	NetConfigMode  string `gorm:"column:net_config_mode;size:20;default:bluetooth;comment:配网方式 bluetooth/ap/qrcode" json:"net_config_mode"`
 	AllowShare     bool   `gorm:"column:allow_share;default:false;comment:是否允许分享" json:"allow_share"`
 	ShareQRContent string `gorm:"column:share_qr_content;type:text;comment:分享二维码内容(JSON字符串)" json:"share_qr_content"`
+
+	// ServiceGroups 非持久化：产品绑定的服务组摘要，列表页批量填充。
+	ServiceGroups []IotServiceGroupBrief `gorm:"-" json:"service_groups,omitempty"`
 }
 
 func (IotProduct) TableName() string { return "ac_iot_product" }

@@ -44,6 +44,7 @@ test.describe('04b 角色管理', () => {
       '权限字符',
       '显示顺序',
       '数据权限',
+      '状态',
       '创建时间',
       '操作',
     ])
@@ -177,6 +178,8 @@ test.describe('04b 角色管理', () => {
     const code = `e2e_modal_role_${Date.now()}`
     await page.getByRole('button', { name: '新建角色' }).click()
     await expect(page.locator(MODAL)).toBeVisible()
+    // 数据权限已从硬编码 'all' 改为表单下拉，新建时默认全部数据
+    await expect(page.locator(MODAL).locator('label[title="数据权限"]')).toBeVisible()
     await page.locator(MODAL).getByRole('button', { name: OK_BUTTON }).click()
     await expect(page.locator(MODAL).getByText('请输入角色名称')).toBeVisible()
 

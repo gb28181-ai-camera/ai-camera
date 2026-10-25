@@ -14,6 +14,7 @@ export type SystemConfig = Definition & {
 	id?: number;
 	key?: string;
 	name?: string;
+	schema?: string;
 	sequence?: number;
 	updated_by?: string;
 	updated_dt?: string;

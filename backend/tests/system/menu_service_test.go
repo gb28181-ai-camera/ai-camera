@@ -265,7 +265,7 @@ func TestMenuService_Update(t *testing.T) {
 		menus := svc.NewMenuService()
 
 		p1, _ := menus.Create(ctx, &request.CreateMenuReq{Name: "ZZQ-P1", Type: "directory", Platform: "pc", Sequence: 70})
-		p2, _ := menus.Create(ctx, &request.CreateMenuReq{Name: "ZZQ-P2", ParentID: &p1.ID, Type: "menu", Platform: "pc", Sequence: 71})
+		p2, _ := menus.Create(ctx, &request.CreateMenuReq{Name: "ZZQ-P2", ParentID: &p1.ID, Type: "directory", Platform: "pc", Sequence: 71})
 		m, _ := menus.Create(ctx, &request.CreateMenuReq{Name: "ZZQ-被更新", ParentID: &p1.ID, Type: "menu", Platform: "pc", Sequence: 72})
 
 		if err := menus.Update(ctx, m.ID, &request.UpdateMenuReq{

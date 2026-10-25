@@ -341,6 +341,8 @@ var contractRoutes = []string{
 	"GET /web/system/menus/:id/apis",
 	"POST /web/system/menus/:id/apis",
 	"DELETE /web/system/menus/apis/:apiId",
+	"GET /web/system/menus/:id/roles",
+	"PUT /web/system/menus/:id/roles",
 
 	// ── §3.4 系统管理 / 部门 ──
 	"GET /web/system/depts",

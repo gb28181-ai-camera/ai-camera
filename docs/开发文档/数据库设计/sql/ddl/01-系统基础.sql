@@ -355,6 +355,14 @@ CREATE TABLE IF NOT EXISTS ac_system_config (
 
 CREATE INDEX IF NOT EXISTS idx_ac_system_config_deleted_at ON ac_system_config (deleted_at);
 
+-- 增量列：参数值的 JSON Schema（老库由 AutoMigrate / 本 ALTER 补齐）。
+ALTER TABLE ac_system_config ADD COLUMN IF NOT EXISTS schema TEXT;
+
+-- 参数键唯一。使用部分唯一索引（WHERE deleted_at IS NULL）与代码层 ExistsCode 语义一致：
+-- 软删除后的参数键允许重新使用，未删除数据仍禁止重复。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ac_system_config_code
+    ON ac_system_config (code) WHERE deleted_at IS NULL;
+
 COMMENT ON TABLE  ac_system_config             IS '系统参数';
 COMMENT ON COLUMN ac_system_config.id          IS '主键';
 COMMENT ON COLUMN ac_system_config.deleted_at  IS '软删除时间';
@@ -367,7 +375,8 @@ COMMENT ON COLUMN ac_system_config.name        IS '参数名称';
 COMMENT ON COLUMN ac_system_config.code        IS '参数键';
 COMMENT ON COLUMN ac_system_config."value"     IS '参数值';
 COMMENT ON COLUMN ac_system_config.group_name  IS '分组';
-COMMENT ON COLUMN ac_system_config.data_type   IS 'string/int/bool/json';
+COMMENT ON COLUMN ac_system_config.data_type   IS 'string/int/float/bool/json/select（integer/boolean 归一为 int/bool）';
+COMMENT ON COLUMN ac_system_config.schema      IS 'JSON Schema（参数值的结构约束）';
 COMMENT ON COLUMN ac_system_config.sequence    IS '排序';
 COMMENT ON COLUMN ac_system_config.description IS '说明';
 

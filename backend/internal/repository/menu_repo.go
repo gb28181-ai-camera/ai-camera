@@ -17,13 +17,21 @@ type MenuRepo struct{}
 // NewMenuRepo 构造菜单仓储。
 func NewMenuRepo() *MenuRepo { return &MenuRepo{} }
 
-// ListByPlatform 查询指定平台的启用菜单（扁平结构，按层级与顺序升序）。
-func (r *MenuRepo) ListByPlatform(ctx context.Context, platform string) ([]model.Menu, error) {
+// ListByPlatform 查询指定平台的菜单（扁平结构，按层级与顺序升序）。
+//
+// platform 为 "all" 或空时不过滤平台；includeInactive=false 时只返回启用菜单
+// （角色授权树保持该默认行为），管理页传 true 可看到停用菜单以便重新启用。
+func (r *MenuRepo) ListByPlatform(ctx context.Context, platform string, includeInactive bool) ([]model.Menu, error) {
+	q := bootstrap.DB().WithContext(ctx).Model(&model.Menu{})
+	if platform != "" && platform != "all" {
+		q = q.Where("platform = ?", platform)
+	}
+	if !includeInactive {
+		q = q.Where("active = ?", true)
+	}
+
 	var list []model.Menu
-	err := bootstrap.DB().WithContext(ctx).
-		Where("platform = ? AND active = ?", platform, true).
-		Order("level ASC, sequence ASC, id ASC").
-		Find(&list).Error
+	err := q.Order("level ASC, sequence ASC, id ASC").Find(&list).Error
 	return list, err
 }
 
@@ -118,6 +126,26 @@ func (r *MenuRepo) ListRolesByMenuID(ctx context.Context, menuID int64) ([]model
 		Order("ac_role.id ASC").
 		Find(&roles).Error
 	return roles, err
+}
+
+// SetRoleIDsForMenu 覆盖式写入菜单的角色授权（ac_role_menu_rel）。
+//
+// 先删除该菜单的全部角色关系，再按 roleIDs 重建；roleIDs 由 Service 层去重与校验。
+func (r *MenuRepo) SetRoleIDsForMenu(ctx context.Context, menuID int64, roleIDs []int64) error {
+	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("menu_id = ?", menuID).Delete(&model.RoleMenuRel{}).Error; err != nil {
+			return err
+		}
+		for _, roleID := range roleIDs {
+			if roleID <= 0 {
+				continue
+			}
+			if err := tx.Create(&model.RoleMenuRel{RoleID: roleID, MenuID: menuID}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // ListMenuIDsByRoleID 查询角色已授权的菜单 ID。

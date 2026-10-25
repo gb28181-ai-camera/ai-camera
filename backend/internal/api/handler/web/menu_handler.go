@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
+	"github.com/boticz/ai-camera-backend/internal/dto/response"
 	"github.com/boticz/ai-camera-backend/internal/service/system"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
 	"github.com/gin-gonic/gin"
@@ -57,16 +58,19 @@ func systemPathID(c *gin.Context, name string) (int64, bool) {
 
 // Tree 菜单树列表
 // @Summary 菜单树列表
-// @Description 返回指定平台的启用菜单树，platform 缺省为 pc；children 按 sequence 升序。
+// @Description 返回指定平台的菜单树，platform 缺省为 pc；children 按 sequence 升序。
+// @Description 默认仅返回启用菜单（角色授权树行为）；管理页传 include_inactive=true&platform=all 可看到停用菜单与移动端菜单。
 // @ID treeMenus
 // @Tags System
-// @Param platform query string false "平台 pc/mobile" default(pc)
+// @Param platform query string false "平台 pc/mobile/all" default(pc)
+// @Param include_inactive query bool false "是否包含停用菜单" default(false)
 // @Success 200 {object} response.RMenuList
 // @Router /web/system/menus [get]
 func (h *MenuHandler) Tree(c *gin.Context) {
 	platform := c.DefaultQuery("platform", "pc")
+	includeInactive, _ := strconv.ParseBool(c.DefaultQuery("include_inactive", "false"))
 
-	list, err := system.NewMenuService().Tree(c.Request.Context(), platform)
+	list, err := system.NewMenuService().TreeWithOptions(c.Request.Context(), platform, includeInactive)
 	if err != nil {
 		systemRespondErr(c, err, "")
 		return
@@ -165,6 +169,60 @@ func (h *MenuHandler) Delete(c *gin.Context) {
 	}
 
 	if err := system.NewMenuService().Delete(c.Request.Context(), id); err != nil {
+		systemRespondErr(c, err, "菜单不存在")
+		return
+	}
+	utils.Success(c, nil)
+}
+
+// GetRoles 菜单角色列表
+// @Summary 菜单角色列表
+// @Description 返回已授权该菜单的角色（id/code/name）。需要权限码 system:menu:role。
+// @ID getMenuRoles
+// @Tags System
+// @Param id path int true "菜单ID"
+// @Success 200 {object} response.RMenuRoleList
+// @Router /web/system/menus/{id}/roles [get]
+func (h *MenuHandler) GetRoles(c *gin.Context) {
+	id, ok := systemPathID(c, "id")
+	if !ok {
+		return
+	}
+
+	roles, err := system.NewMenuService().GetRoles(c.Request.Context(), id)
+	if err != nil {
+		systemRespondErr(c, err, "菜单不存在")
+		return
+	}
+
+	list := make([]response.MenuRoleBrief, 0, len(roles))
+	for _, r := range roles {
+		list = append(list, response.MenuRoleBrief{ID: r.ID, Code: r.Code, Name: r.Name})
+	}
+	utils.Success(c, list)
+}
+
+// AssignRoles 分配菜单角色
+// @Summary 分配菜单角色
+// @Description 覆盖式写入 ac_role_menu_rel，并为受影响角色重建 Casbin p 策略。需要权限码 system:menu:role。
+// @ID assignMenuRoles
+// @Tags System
+// @Param id path int true "菜单ID"
+// @Param body body request.AssignMenuRolesReq true "角色ID列表（为空表示清空授权）"
+// @Success 200 {object} response.BaseResponse
+// @Router /web/system/menus/{id}/roles [put]
+func (h *MenuHandler) AssignRoles(c *gin.Context) {
+	id, ok := systemPathID(c, "id")
+	if !ok {
+		return
+	}
+	var req request.AssignMenuRolesReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	if err := system.NewMenuService().AssignRoles(c.Request.Context(), id, req.IDs); err != nil {
 		systemRespondErr(c, err, "菜单不存在")
 		return
 	}

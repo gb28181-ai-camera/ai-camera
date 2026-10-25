@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Key } from 'react'
 import {
   Button, Card, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Space, Switch,
@@ -32,6 +32,31 @@ interface DeptFormValues {
   leader_id?: number
   active?: boolean
   description?: string
+}
+
+/** 在部门树中按 ID 查找节点 */
+function findDeptNode(nodes: Dept[], id: number): Dept | null {
+  for (const node of nodes) {
+    if (node.id === id) return node
+    if (node.children && node.children.length > 0) {
+      const hit = findDeptNode(node.children, id)
+      if (hit) return hit
+    }
+  }
+  return null
+}
+
+/** 收集指定部门自身及全部子孙的 ID，编辑上级部门时需整体排除（防环） */
+function collectDeptSubtreeIds(nodes: Dept[], rootId: number): Set<number> {
+  const ids = new Set<number>()
+  const root = findDeptNode(nodes, rootId)
+  if (!root) return ids
+  const walk = (node: Dept) => {
+    if (typeof node.id === 'number') ids.add(node.id)
+    node.children?.forEach(walk)
+  }
+  walk(root)
+  return ids
 }
 
 /**
@@ -88,28 +113,22 @@ export default function DeptTree() {
     })
   }, [])
 
-  /** 在树中按 ID 查找部门 */
-  const findDept = (nodes: Dept[], id: number): Dept | null => {
-    for (const node of nodes) {
-      if (node.id === id) return node
-      if (node.children && node.children.length > 0) {
-        const hit = findDept(node.children, id)
-        if (hit) return hit
-      }
-    }
-    return null
-  }
-
   const handleSelect = (keys: Key[]) => {
     const id = keys.length > 0 ? Number(keys[0]) : undefined
     setSelectedId(id)
-    setSelectedDept(id ? findDept(deptTree, id) : null)
+    setSelectedDept(id ? findDeptNode(deptTree, id) : null)
   }
 
-  /** 树节点 → TreeSelect 数据（排除自身及其子孙，避免把父级选成自己） */
-  const toTreeSelectData = (nodes: Dept[], excludeId?: number): DeptTreeSelectNode[] =>
+  /** 编辑时需排除的部门：自身及全部子孙，避免把上级选成自己/后代 */
+  const excludedDeptIds = useMemo(
+    () => (editing?.id ? collectDeptSubtreeIds(deptTree, editing.id) : new Set<number>()),
+    [deptTree, editing],
+  )
+
+  /** 树节点 → TreeSelect 数据（排除自身及其子孙，避免成环） */
+  const toTreeSelectData = (nodes: Dept[]): DeptTreeSelectNode[] =>
     nodes
-      .filter((node) => node.id !== excludeId)
+      .filter((node) => typeof node.id !== 'number' || !excludedDeptIds.has(node.id))
       .map((node) => ({
         key: node.id ?? 0,
         value: node.id ?? 0,
@@ -145,6 +164,18 @@ export default function DeptTree() {
                 openCreate(node)
               }}
             />
+          )}
+          {canUpdate && (
+            <span onClick={(event) => event.stopPropagation()}>
+              <Switch
+                className="e2e-dept-active-switch"
+                size="small"
+                checked={node.active !== false}
+                checkedChildren="启用"
+                unCheckedChildren="停用"
+                onChange={(checked) => handleToggleActive(node, checked)}
+              />
+            </span>
           )}
           {canDelete && (
             <Popconfirm title="确定删除?" onConfirm={() => handleDelete(node)}>
@@ -235,6 +266,22 @@ export default function DeptTree() {
     }
   }
 
+  /** 树节点启停快捷开关：只提交 active，后端其余字段保持不变 */
+  const handleToggleActive = async (record: Dept, checked: boolean) => {
+    if (!record.id) return
+    try {
+      const res = await DeptController.updateDept(String(record.id), { active: checked })
+      if (res.code === 200) {
+        message.success(checked ? '已启用' : '已停用')
+      } else {
+        message.error(res.message || '操作失败')
+      }
+      fetchData()
+    } catch {
+      message.error('操作失败')
+    }
+  }
+
   const columns: ColumnsType<Dept> = [
     { title: '部门名称', dataIndex: 'name', key: 'name', width: 200 },
     {
@@ -270,8 +317,9 @@ export default function DeptTree() {
     },
   ]
 
-  // 右侧表格数据：选中节点时展示其下级，否则展示顶级部门
-  const tableData = selectedDept?.children && selectedDept.children.length > 0 ? selectedDept.children : deptTree
+  // 右侧表格数据：选中节点时只展示其下级（叶子部门为空态），未选中时展示顶级部门。
+  // 不能回退到 deptTree —— 否则点叶子部门会误显示全部顶级部门。
+  const tableData = selectedDept ? (selectedDept.children ?? []) : deptTree
 
   return (
     <PageContainer
@@ -325,6 +373,7 @@ export default function DeptTree() {
               dataSource={tableData}
               loading={loading}
               pagination={false}
+              locale={{ emptyText: selectedDept ? '该部门暂无下级部门' : '暂无部门' }}
             />
           </Card>
         </Col>
@@ -356,7 +405,7 @@ export default function DeptTree() {
                 <TreeSelect
                   allowClear
                   placeholder="不选则为顶级部门"
-                  treeData={toTreeSelectData(deptTree, editing?.id)}
+                  treeData={toTreeSelectData(deptTree)}
                   treeDefaultExpandAll
                 />
               </Form.Item>

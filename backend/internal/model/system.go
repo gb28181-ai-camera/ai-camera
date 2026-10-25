@@ -174,7 +174,8 @@ type SystemConfig struct {
 	Code        string `gorm:"column:code;size:100;not null;comment:参数键" json:"key"`
 	Value       string `gorm:"column:value;type:text;comment:参数值" json:"value"`
 	GroupName   string `gorm:"column:group_name;size:50;comment:分组" json:"group_name"`
-	DataType    string `gorm:"column:data_type;size:20;default:string;comment:string/int/bool/json" json:"data_type"`
+	DataType    string `gorm:"column:data_type;size:20;default:string;comment:string/int/float/bool/json/select" json:"data_type"`
+	Schema      string `gorm:"column:schema;type:text;comment:JSON Schema(参数值的结构约束)" json:"schema"`
 	Sequence    int    `gorm:"column:sequence;default:10" json:"sequence"`
 	Description string `gorm:"column:description;type:text;comment:说明" json:"description"`
 }

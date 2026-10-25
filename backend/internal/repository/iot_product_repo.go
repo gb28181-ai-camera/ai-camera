@@ -111,6 +111,43 @@ func (r *IotProductRepo) ListServiceGroups(ctx context.Context, productID int64)
 	return items, nil
 }
 
+// ListServiceGroupBriefsByProductIDs 批量查询多个产品绑定的服务组摘要。
+//
+// 列表页一次查完，避免逐行调用 ListServiceGroups 造成 N+1。
+func (r *IotProductRepo) ListServiceGroupBriefsByProductIDs(
+	ctx context.Context, productIDs []int64,
+) (map[int64][]model.IotServiceGroupBrief, error) {
+	out := make(map[int64][]model.IotServiceGroupBrief)
+	if len(productIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		ProductID int64
+		ID        int64
+		Code      string
+		Name      string
+		Type      string
+		Active    *bool
+	}
+	err := bootstrap.DB().WithContext(ctx).
+		Table("ac_iot_product_service_group AS psg").
+		Select("psg.product_id, sg.id, sg.code, sg.name, sg.type, sg.active").
+		Joins("JOIN ac_iot_service_group AS sg ON sg.id = psg.service_group_id").
+		Where("psg.product_id IN ?", productIDs).
+		Where("psg.deleted_at IS NULL AND sg.deleted_at IS NULL").
+		Order("psg.product_id ASC, sg.id ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.ProductID] = append(out[row.ProductID], model.IotServiceGroupBrief{
+			ID: row.ID, Code: row.Code, Name: row.Name, Type: row.Type, Active: row.Active,
+		})
+	}
+	return out, nil
+}
+
 // ReplaceServiceGroups 整体替换产品绑定的服务组。
 //
 // 采用**硬删除**后重建：关联表上有 (product_id, service_group_id)
