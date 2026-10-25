@@ -50,8 +50,31 @@ func (s *CredentialsService) ProductCredentials(ctx context.Context, productID i
 }
 
 // ProductCredentialsForApp 返回 App 端所需的服务信息（同样含明文，App 已完成 JWT + 绑定校验）。
+//
+// 与 ProductCredentials 的差异：App 只应拿到**产品实际绑定**的 TURN 接入点。
+// 管理端产品凭据页展示全局 TURN 配置是合理的；App 若在产品没有 TURN 服务时
+// 也收到 TURN，会误以为该产品支持 TURN 中继。
 func (s *CredentialsService) ProductCredentialsForApp(ctx context.Context, productID int64) (*response.IotCredentials, error) {
-	return s.productCredentials(ctx, productID)
+	out, err := s.productCredentials(ctx, productID)
+	if err != nil {
+		return nil, err
+	}
+	hasTurnService := false
+	for _, g := range out.Groups {
+		for _, svc := range g.Services {
+			if strings.EqualFold(svc.Protocol, model.IotProtocolTURN) {
+				hasTurnService = true
+				break
+			}
+		}
+		if hasTurnService {
+			break
+		}
+	}
+	if !hasTurnService {
+		out.Turn = nil
+	}
+	return out, nil
 }
 
 func (s *CredentialsService) productCredentials(ctx context.Context, productID int64) (*response.IotCredentials, error) {

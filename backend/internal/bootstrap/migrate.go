@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"log"
+	"strings"
 
 	"github.com/boticz/ai-camera-backend/internal/model"
 )
@@ -116,4 +117,45 @@ func AutoMigrate() {
 	if err := globalDB.AutoMigrate(models...); err != nil {
 		log.Fatalf("数据库迁移失败: %v", err)
 	}
+
+	fixGbDeviceIDUniqueIndex()
+}
+
+// fixGbDeviceIDUniqueIndex 修正 gb_device_id 的部分唯一索引。
+//
+// 早期 DDL 的条件是 `gb_device_id IS NOT NULL`，但 Go 的 string 字段在未赋值时
+// 会写入空串而不是 NULL。于是「多台未配置国标的设备」在 gb_device_id='' 上互相
+// 冲突（duplicate key），新建第二台非国标设备就会失败。
+//
+// 正确语义：只有非空国标编码才需要唯一。这里检测旧索引并在缺失 `<> ''` 条件时重建；
+// 索引已正确时直接返回，避免每次启动都 drop/create 大表索引。
+func fixGbDeviceIDUniqueIndex() {
+	const indexName = "idx_ac_device_gb_device_id"
+
+	var def string
+	if err := globalDB.Raw(
+		"SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = ?",
+		indexName,
+	).Scan(&def).Error; err != nil {
+		log.Printf("⚠️ 读取 %s 定义失败，跳过索引修正: %v", indexName, err)
+		return
+	}
+	// 没有索引（例如首次建库尚未执行 DDL）时由 DDL 创建，不在这里处理。
+	if def == "" || strings.Contains(def, "<> ''") {
+		return
+	}
+
+	if err := globalDB.Exec("DROP INDEX IF EXISTS " + indexName).Error; err != nil {
+		log.Printf("⚠️ 删除旧索引 %s 失败: %v", indexName, err)
+		return
+	}
+	if err := globalDB.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS ` + indexName + `
+		ON ac_device (gb_device_id)
+		WHERE gb_device_id IS NOT NULL AND gb_device_id <> '' AND deleted_at IS NULL
+	`).Error; err != nil {
+		log.Printf("⚠️ 重建索引 %s 失败: %v", indexName, err)
+		return
+	}
+	log.Printf("✅ 已修正 %s：排除空串，允许多台未配置国标的设备", indexName)
 }

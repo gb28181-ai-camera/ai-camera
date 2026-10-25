@@ -641,3 +641,28 @@ type GbPlatformRegion struct {
 }
 
 func (GbPlatformRegion) TableName() string { return "ac_gb_platform_region" }
+
+// ════════════════════════════════════════════════════════════════
+// 第 7 节：平台侧云台预置位名称
+// ════════════════════════════════════════════════════════════════
+
+// GbPtzPreset 平台侧的预置位名称。表 ac_gb_ptz_preset。
+//
+// 为什么需要这张表：国标预置位的**位置**以设备为准（PTZCmd 0x81/0x82/0x83），
+// 但设备侧名称通常不可读、且 PresetQuery 的异步应答平台并未消费。WVP 等实现
+// 都在平台侧保存一份「编号 → 名称」的映射，否则预置位列表只能显示 1/2/3。
+//
+// 与设备的关系：预置位属于通道（ac_gb_channel.id），不是设备；同一设备的不同
+// 通道可以有相同编号的不同预置位。唯一键 (channel_id, preset_id)。
+//
+// 本表由 model 自注册（RegisterModel），不修改 bootstrap/migrate.go。
+type GbPtzPreset struct {
+	BaseModel
+	ChannelID int64  `gorm:"column:channel_id;not null;uniqueIndex:uk_ac_gb_ptz_preset_channel_preset,priority:1;comment:归属通道(ac_gb_channel.id)" json:"channel_id"`
+	PresetID  int    `gorm:"column:preset_id;not null;uniqueIndex:uk_ac_gb_ptz_preset_channel_preset,priority:2;comment:预置位编号1-255" json:"preset_id"`
+	Name      string `gorm:"column:name;size:255;comment:平台侧预置位名称" json:"name"`
+}
+
+func (GbPtzPreset) TableName() string { return "ac_gb_ptz_preset" }
+
+func init() { RegisterModel(&GbPtzPreset{}) }

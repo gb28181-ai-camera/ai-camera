@@ -3,13 +3,24 @@ package gb28181
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
 	"github.com/boticz/ai-camera-backend/internal/dto/response"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/charset"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/control"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/mediaserver"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/play"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/protocol/manscdp"
+	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/internal/repository"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
 	"gorm.io/gorm"
 )
+
+// ErrGbNoActiveStream 通道当前没有在线播放会话（或 ZLM 查不到该流）。
+var ErrGbNoActiveStream = errors.New("通道当前没有在线播放流")
 
 // ════════════════════════════════════════════════════════════════
 // 国标通道
@@ -42,7 +53,9 @@ func (s *GbChannelService) Page(ctx context.Context, req *request.PageGbChannelR
 	}
 	out := make([]response.GbChannelItem, 0, len(items))
 	for _, c := range items {
-		out = append(out, toGbChannelItem(c))
+		item := toGbChannelItem(c)
+		applyGbChannelExtra(&item, c)
+		out = append(out, item)
 	}
 	return &response.PageGbChannelResp{
 		Items:    out,
@@ -61,8 +74,10 @@ func (s *GbChannelService) Get(ctx context.Context, id int64) (*response.GbChann
 		}
 		return nil, err
 	}
+	item := toGbChannelItem(*c)
+	applyGbChannelExtra(&item, *c)
 	return &response.GbChannelDetailResp{
-		GbChannelItem: toGbChannelItem(*c),
+		GbChannelItem: item,
 		Password:      utils.MaskSecret(c.Password),
 	}, nil
 }
@@ -127,6 +142,56 @@ func (s *GbChannelService) Update(ctx context.Context, id int64, req *request.Up
 	}
 	if req.Active != nil {
 		fields["active"] = *req.Active
+	}
+
+	// 设备参数扩展：经纬度做范围校验，其余枚举按 0 起算的非负整数透传。
+	if req.Longitude != nil {
+		if *req.Longitude < -180 || *req.Longitude > 180 {
+			return errors.New("经度必须在 -180 到 180 之间")
+		}
+		fields["longitude"] = *req.Longitude
+	}
+	if req.Latitude != nil {
+		if *req.Latitude < -90 || *req.Latitude > 90 {
+			return errors.New("纬度必须在 -90 到 90 之间")
+		}
+		fields["latitude"] = *req.Latitude
+	}
+	if req.DirectionType != nil {
+		if *req.DirectionType < 0 || *req.DirectionType > 8 {
+			return errors.New("监视方位必须在 0-8 之间")
+		}
+		fields["direction_type"] = *req.DirectionType
+	}
+	if req.PositionType != nil {
+		if *req.PositionType < 0 {
+			return errors.New("位置类型不能为负数")
+		}
+		fields["position_type"] = *req.PositionType
+	}
+	if req.RoomType != nil {
+		if *req.RoomType < 0 {
+			return errors.New("房间类型不能为负数")
+		}
+		fields["room_type"] = *req.RoomType
+	}
+	if req.UseType != nil {
+		if *req.UseType < 0 {
+			return errors.New("用途类型不能为负数")
+		}
+		fields["use_type"] = *req.UseType
+	}
+	if req.SupplyLightType != nil {
+		if *req.SupplyLightType < 0 {
+			return errors.New("补光类型不能为负数")
+		}
+		fields["supply_light_type"] = *req.SupplyLightType
+	}
+	if req.Secrecy != nil {
+		if *req.Secrecy < 0 {
+			return errors.New("保密属性不能为负数")
+		}
+		fields["secrecy"] = *req.Secrecy
 	}
 
 	if req.RegionID != nil {
@@ -242,6 +307,123 @@ func (s *GbChannelService) Options(ctx context.Context, ds *utils.DataScope) ([]
 		out = append(out, response.OptionItem{ID: c.ID, Name: c.Name, Code: c.GbChannelID})
 	}
 	return out, nil
+}
+
+// RecordControl 设备侧录像控制（MANSCDP DeviceControl / RecordCmd）。
+//
+// 与云端录像（ZLM mp4）是两回事：本指令让**设备**开始/停止本地录像。
+func (s *GbChannelService) RecordControl(ctx context.Context, channelID int64, action string) error {
+	start := false
+	switch strings.ToLower(trim(action)) {
+	case "start":
+		start = true
+	case "stop":
+		start = false
+	default:
+		return ErrGbRecordActionInvalid
+	}
+
+	ch, dev, err := loadLiveChannelAndDevice(ctx, s.repo, channelID)
+	if err != nil {
+		return err
+	}
+	ctl := control.Default()
+	if ctl == nil {
+		return ErrSipServiceUnavailable
+	}
+
+	c := manscdp.NewRecordControl(ch.GbChannelID, int(ptzSN.Add(1)), start)
+	body, err := manscdp.MarshalString(c, charset.UTF8)
+	if err != nil {
+		return fmt.Errorf("录像控制报文编码失败：%w", err)
+	}
+	if err := ctl.SendMessage(ctx, dev, body); err != nil {
+		return fmt.Errorf("录像控制下发失败：%w", err)
+	}
+	return nil
+}
+
+// MediaInfo 查询通道当前在线流的媒体信息。
+//
+// 语义：
+//   - 没有播放会话 / ZLM 查不到流 → ErrGbNoActiveStream（Handler 映射 404）；
+//   - 有会话但 ZLM 不可达 → 返回底层错误（500/400 由 Handler 兜底，日志可查）。
+//
+// 数据来自 ZLM getMediaInfo：codec/width/height/fps/reader 数/alive 秒数。
+// 平台不解析 PS，这是唯一可信的「实际编码」来源。
+func (s *GbChannelService) MediaInfo(ctx context.Context, channelID int64) (*response.GbMediaInfoResp, error) {
+	if _, err := s.repo.GetByID(ctx, channelID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrGbChannelNotFound
+		}
+		return nil, err
+	}
+
+	st, ok := play.DefaultOrchestrator().Registry().GetByChannel(channelID)
+	if !ok || strings.TrimSpace(st.App) == "" || strings.TrimSpace(st.Stream) == "" {
+		return nil, ErrGbNoActiveStream
+	}
+
+	var client *mediaserver.Client
+	if st.MediaServer != nil {
+		client = mediaserver.FromModel(st.MediaServer)
+	} else {
+		c, _, err := play.ResolveMediaServer(ctx, &model.Device{MediaServerID: st.MediaServerID})
+		if err != nil {
+			return nil, mapLivePlayErr(err)
+		}
+		client = c
+	}
+
+	info, err := client.GetMediaInfo(ctx, st.App, st.Stream, "", "")
+	if err != nil {
+		return nil, fmt.Errorf("查询流媒体信息失败：%w", err)
+	}
+	if info == nil {
+		return nil, ErrGbNoActiveStream
+	}
+
+	resp := &response.GbMediaInfoResp{
+		App:              st.App,
+		Stream:           st.Stream,
+		Schema:           info.Schema,
+		Bitrate:          info.BytesSpeed * 8,
+		ReaderCount:      info.ReaderCount,
+		TotalReaderCount: info.TotalReader,
+		AliveSecond:      info.AliveSecond,
+		MediaServerID:    st.MediaServerID,
+		StreamID:         st.SessionID,
+	}
+	for _, tr := range info.Tracks {
+		name := normalizeCodecName(tr.CodecIDName)
+		switch tr.CodecType {
+		case 0: // 视频
+			if resp.Codec == "" {
+				resp.Codec = name
+				resp.Width = tr.Width
+				resp.Height = tr.Height
+				resp.FPS = tr.FPS
+			}
+		case 1: // 音频
+			if resp.AudioCodec == "" {
+				resp.AudioCodec = name
+			}
+		}
+	}
+	resp.HasAudio = resp.AudioCodec != ""
+	return resp, nil
+}
+
+// applyGbChannelExtra 补充 common.go 的 toGbChannelItem 未覆盖的设备参数扩展字段。
+func applyGbChannelExtra(item *response.GbChannelItem, c model.GbChannel) {
+	item.Longitude = c.Longitude
+	item.Latitude = c.Latitude
+	item.DirectionType = c.DirectionType
+	item.PositionType = c.PositionType
+	item.RoomType = c.RoomType
+	item.UseType = c.UseType
+	item.SupplyLightType = c.SupplyLightType
+	item.Secrecy = c.Secrecy
 }
 
 // ── 内部工具 ──────────────────────────────────────────────────

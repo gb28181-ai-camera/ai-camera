@@ -30,10 +30,16 @@ func registerGbLiveRoutes(wAuth *gin.RouterGroup) {
 		gb.POST("/ptz/:channelId", ptzH.Control)
 		gb.GET("/ptz/:channelId/presets", ptzH.ListPresets)
 		gb.POST("/ptz/:channelId/presets", ptzH.AddPreset)
+		gb.PUT("/ptz/:channelId/presets/:presetId", ptzH.RenamePreset)
 		gb.DELETE("/ptz/:channelId/presets/:presetId", ptzH.DeletePreset)
 		gb.POST("/ptz/:channelId/presets/:presetId/goto", ptzH.GotoPreset)
 		gb.POST("/ptz/:channelId/cruise", ptzH.Cruise)
 		gb.POST("/ptz/:channelId/scan", ptzH.Scan)
+		// 巡航点 CRUD（标准 0x84/0x85/0x86/0x87）与扫描边界（0x89/0x8A）
+		gb.POST("/ptz/:channelId/cruise-points", ptzH.AddCruisePoint)
+		gb.PUT("/ptz/:channelId/cruise-points", ptzH.SetCruisePoint)
+		gb.DELETE("/ptz/:channelId/cruise-points", ptzH.DeleteCruisePoint)
+		gb.PUT("/ptz/:channelId/scan/bounds", ptzH.SetScanBounds)
 		gb.POST("/ptz/:channelId/wiper", ptzH.Wiper)
 
 		// ── 云台 2022 扩展（同步等待设备业务应答，最长 5 秒）──

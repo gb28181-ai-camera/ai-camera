@@ -3,9 +3,10 @@
 Go 后端服务：Gin + GORM + PostgreSQL + Casbin，按 `Handler → Service → Repository → Model`
 四层架构实现 AI Camera 智能监控平台的全部业务能力；v0.2.0 增加 GB/T 28181 信令入口
 （`cmd/sipsvc`）与 ZLMediaKit 媒体适配；v0.3.0 增加 IOT 产品/服务组/设备接入、
-MQTT 鉴权与 WebRTC 信令、TURN/STUN 凭据签发。
+MQTT 鉴权与 WebRTC 信令、TURN/STUN 凭据签发；v0.4.0 对齐 WVP-GB28181-Pro 的
+设备配置/控制、媒体指标与流会话、日志 SSE、分享播放、录像合并等运维能力。
 
-> 当前版本: **v0.3.0** | 最后更新: 2026-10-24
+> 当前版本: **v0.4.0** | 最后更新: 2026-10-25
 
 ---
 
@@ -284,18 +285,19 @@ cd backend && bash scripts/gen-swagger.sh
 
 ## API 路由总览
 
-后端 Swagger 共收录 **386 个端点**（v0.3.0 实测）：
+后端 Swagger 共收录 **418 个端点**（v0.4.0 实测：Web 377 + App 41）：
 
 | 分组 | 数量 | 说明 |
 |:---|:---:|:---|
-| `/web/*` | 335 | 管理后台 + 官网；含国标与 IOT 接口 |
+| `/web/*` | 377 | 管理后台 + 官网；含国标与 IOT 接口 |
 | `/app/*` | 41 | 移动端；含 `/app/gb/*` 与 `/app/iot/*` |
 | `/media/hook/*` | 10 | ZLM 回调（独立中间件组） |
 
 另有未纳入 Swagger 的 **设备端 `/iot/*`（2 条）**、**内部 RPC `/rpc/*`（3 条）** 与 `/health`。
 
 其中 v0.1.0 的端点以 `docs/开发文档/后端开发/00-接口契约.md` 第 3 节为准，
-v0.2.0 的国标端点以第 10 节为准，v0.3.0 的 IOT 端点以 §10.14–§10.16 为准。
+v0.2.0 的国标端点以第 10 节为准，v0.3.0 的 IOT 端点以 §10.14–§10.16 为准，
+v0.4.0 的 WVP 对齐端点以 §17 为准。
 
 入口文件：[`internal/api/router/web.go`](internal/api/router/web.go)、[`internal/api/router/app.go`](internal/api/router/app.go)、
 [`internal/api/router/gb_live.go`](internal/api/router/gb_live.go)、[`internal/api/router/gb_ops.go`](internal/api/router/gb_ops.go)、
@@ -802,6 +804,36 @@ IOT 模块共 **39 条路由**（Web 29 + App 8 + 设备端 2），另有内部 
 
 > 设计依据：`docs/敏捷开发/v0.3.0 IOT与多协议接入/00-新增需求与设计.md`；
 > 契约见 `docs/开发文档/后端开发/00-接口契约.md` §10.14–§10.16。
+
+### 17. WVP 功能对齐（v0.4.0）
+
+除 JT/T 1078 外，WVP-GB28181-Pro 的运维能力在本期补齐。新增 **32 条路由**
+（其中 2 条为匿名分享播放），集中在：
+
+| 分组 | 新增能力 |
+|:---|:---|
+| 设备控制 | 编辑 SIP/媒体/位置、目录同步进度、重启、布防撤防、报警复位、心跳/注册时间统计 |
+| 通道控制 | 摄像机配置字段、手动录像、ZLM 媒体信息 |
+| 云台 | 预置位重命名与名称持久化、巡航点 CRUD、扫描边界（标准 0x84–0x8A） |
+| 媒体节点 | 本机 CPU/内存/磁盘/网络指标与 24h 历史、当前流会话 |
+| 运维 | 平台信息、日志检索、日志/报警 SSE |
+| 流媒体 | 拉流代理/推流播放地址、推流 CSV/TSV 导入 |
+| 云端录像 | 多段 ffmpeg 合并任务 |
+| 分享 | 免登录分享令牌与匿名播放 |
+
+关键实现：
+
+- **模型自注册**：新增模型在 `model` 包 `init()` 调用 `RegisterModel(&X{})`，
+  `bootstrap.AutoMigrate` 自动追加，避免集中修改 `migrate.go`。
+- **媒体指标**：gopsutil 采集后端所在主机（与 WVP 的 oshi 一致），5s 采样、24h ring。
+- **日志 SSE**：zap core tee 到 5000 条内存 ring；慢客户端丢弃，不阻塞业务日志。
+- **报警 SSE**：按 `ac_gb_alarm.id` 游标轮询，不改信令进程状态。
+- **分享令牌**：库中只存 SHA-256，匿名路由不挂 authMW/casbinMW。
+- **云端合并**：ffmpeg `concat -c copy`；镜像已安装 ffmpeg，失败原因落库。
+- **索引修正**：`gb_device_id` 部分唯一索引排除空串，允许多台非国标设备。
+
+> 契约见 `docs/开发文档/后端开发/00-接口契约.md` §17；
+> 设计说明见 `docs/敏捷开发/v0.4.0 WVP功能对齐/00-实施说明.md`。
 
 ### 路由分组与中间件
 

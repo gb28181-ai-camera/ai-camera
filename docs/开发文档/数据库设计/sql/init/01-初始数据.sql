@@ -2726,3 +2726,243 @@ SELECT setval(pg_get_serial_sequence('ac_menu_api', 'id'),       COALESCE((SELEC
 SELECT setval(pg_get_serial_sequence('ac_role_menu_rel', 'id'),  COALESCE((SELECT MAX(id) FROM ac_role_menu_rel), 1));
 SELECT setval(pg_get_serial_sequence('ac_voice_provider', 'id'), COALESCE((SELECT MAX(id) FROM ac_voice_provider), 1));
 SELECT setval(pg_get_serial_sequence('ac_gb_media_server', 'id'), COALESCE((SELECT MAX(id) FROM ac_gb_media_server), 1));
+
+-- ════════════════════════════════════════════════════════════════
+-- 13. v0.4.0 WVP 功能对齐：新增页面/按钮/接口权限
+--
+--     设计依据：docs/敏捷开发/v0.4.0 WVP功能对齐/00-实施说明.md
+--     规则：新增路由必须同时登记 ac_menu_api，否则 Casbin p 策略缺失，
+--           超管之外的角色以及重建策略后的超管都会被 403 拒绝。
+-- ════════════════════════════════════════════════════════════════
+
+-- ── 13.1 新增页面菜单 ────────────────────────────────────────
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 1245, '124', 3, '平台信息', '/gb/ops/platform-info', 'InfoCircleOutlined', 'gb/PlatformInfo', 'menu', 'pc', 'gb:platform-info:view', '菜单', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:platform-info:view');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 1246, '124', 3, '实时日志', '/gb/ops/logs', 'FileTextOutlined', 'gb/GbLogList', 'menu', 'pc', 'gb:log:view', '菜单', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:log:view');
+
+-- ── 13.2 国标设备（1211）按钮 ────────────────────────────────
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12711, '1211', 4, '编辑设备', '', '', '', 'button', 'pc', 'gb:device:update', '按钮', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:device:update');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12712, '1211', 4, '同步进度', '', '', '', 'button', 'pc', 'gb:device:sync-status', '按钮', 8, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:device:sync-status');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12713, '1211', 4, '设备重启', '', '', '', 'button', 'pc', 'gb:device:reboot', '按钮', 9, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:device:reboot');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12714, '1211', 4, '布防撤防', '', '', '', 'button', 'pc', 'gb:device:guard', '按钮', 10, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:device:guard');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12715, '1211', 4, '报警复位', '', '', '', 'button', 'pc', 'gb:device:alarm-reset', '按钮', 11, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:device:alarm-reset');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12716, '1211', 4, '时间统计', '', '', '', 'button', 'pc', 'gb:device:time-statistics', '按钮', 12, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:device:time-statistics');
+
+-- ── 13.3 国标通道（1212）按钮 ────────────────────────────────
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12721, '1212', 4, '手动录像', '', '', '', 'button', 'pc', 'gb:channel:record-control', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:channel:record-control');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12722, '1212', 4, '媒体信息', '', '', '', 'button', 'pc', 'gb:channel:media-info', '按钮', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:channel:media-info');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12738, '1212', 4, '分享列表', '', '', '', 'button', 'pc', 'gb:share:list', '按钮', 8, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:share:list');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12739, '1212', 4, '生成分享', '', '', '', 'button', 'pc', 'gb:share:create', '按钮', 9, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:share:create');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12740, '1212', 4, '吊销分享', '', '', '', 'button', 'pc', 'gb:share:revoke', '按钮', 10, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:share:revoke');
+
+-- ── 13.4 实时播放（1221）云台按钮 ────────────────────────────
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12723, '1221', 4, '预置位重命名', '', '', '', 'button', 'pc', 'gb:ptz:preset-update', '按钮', 11, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:ptz:preset-update');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12724, '1221', 4, '新增巡航点', '', '', '', 'button', 'pc', 'gb:ptz:cruise-point:create', '按钮', 12, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:ptz:cruise-point:create');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12725, '1221', 4, '修改巡航点', '', '', '', 'button', 'pc', 'gb:ptz:cruise-point:update', '按钮', 13, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:ptz:cruise-point:update');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12726, '1221', 4, '删除巡航点', '', '', '', 'button', 'pc', 'gb:ptz:cruise-point:delete', '按钮', 14, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:ptz:cruise-point:delete');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12727, '1221', 4, '扫描边界', '', '', '', 'button', 'pc', 'gb:ptz:scan-bounds', '按钮', 15, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:ptz:scan-bounds');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12728, '1221', 4, '雨刷控制', '', '', '', 'button', 'pc', 'gb:ptz:wiper', '按钮', 16, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:ptz:wiper');
+
+-- 雨刷接口已有 ac_menu_api 行（绑定 12211），改绑到独立按钮，便于单独授权。
+UPDATE ac_menu_api SET menu_id = 12728
+WHERE method = 'POST' AND path = '/web/gb/ptz/:channelId/wiper'
+  AND EXISTS (SELECT 1 FROM ac_menu WHERE id = 12728);
+
+-- ── 13.5 媒体节点/代理/推流/云端录像/日志/报警按钮 ───────────
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12731, '1241', 4, '节点指标', '', '', '', 'button', 'pc', 'gb:media-server:metrics', '按钮', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:media-server:metrics');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12732, '1241', 4, '流会话', '', '', '', 'button', 'pc', 'gb:media-server:streams', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:media-server:streams');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12733, '1242', 4, '代理播放', '', '', '', 'button', 'pc', 'gb:stream-proxy:play', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:stream-proxy:play');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12734, '1243', 4, '推流播放', '', '', '', 'button', 'pc', 'gb:stream-push:play', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:stream-push:play');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12735, '1243', 4, '通道导入', '', '', '', 'button', 'pc', 'gb:stream-push:import', '按钮', 7, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:stream-push:import');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12736, '1224', 4, '录像合并', '', '', '', 'button', 'pc', 'gb:cloud-record:merge', '按钮', 5, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:cloud-record:merge');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12737, '1224', 4, '合并下载', '', '', '', 'button', 'pc', 'gb:cloud-record:merge-download', '按钮', 6, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:cloud-record:merge-download');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12741, '1246', 4, '实时日志流', '', '', '', 'button', 'pc', 'gb:log:stream', '按钮', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:log:stream');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 12742, '1231', 4, '报警实时推送', '', '', '', 'button', 'pc', 'gb:alarm:stream', '按钮', 4, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'gb:alarm:stream');
+
+-- ── 13.6 新接口 → 菜单绑定（ac_menu_api）────────────────────
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9001, 12711, 'PUT', '/web/gb/devices/:id', '编辑国标设备', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'PUT' AND path = '/web/gb/devices/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9002, 12712, 'GET', '/web/gb/devices/:id/sync-status', '查询目录同步进度', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/devices/:id/sync-status');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9003, 12716, 'GET', '/web/gb/devices/:id/time-statistics', '查询设备时间统计', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/devices/:id/time-statistics');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9004, 12713, 'POST', '/web/gb/devices/:id/reboot', '重启国标设备', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/devices/:id/reboot');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9005, 12714, 'POST', '/web/gb/devices/:id/guard', '设备布防撤防', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/devices/:id/guard');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9006, 12715, 'POST', '/web/gb/devices/:id/alarm-reset', '设备报警复位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/devices/:id/alarm-reset');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9007, 12721, 'POST', '/web/gb/channels/:id/record-control', '通道手动录像控制', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/channels/:id/record-control');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9008, 12722, 'GET', '/web/gb/channels/:id/media-info', '查询通道媒体信息', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/channels/:id/media-info');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9009, 12723, 'PUT', '/web/gb/ptz/:channelId/presets/:presetId', '重命名云台预置位', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'PUT' AND path = '/web/gb/ptz/:channelId/presets/:presetId');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9010, 12724, 'POST', '/web/gb/ptz/:channelId/cruise-points', '新增巡航点', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/ptz/:channelId/cruise-points');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9011, 12725, 'PUT', '/web/gb/ptz/:channelId/cruise-points', '修改巡航点', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'PUT' AND path = '/web/gb/ptz/:channelId/cruise-points');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9012, 12726, 'DELETE', '/web/gb/ptz/:channelId/cruise-points', '删除巡航点', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'DELETE' AND path = '/web/gb/ptz/:channelId/cruise-points');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9013, 12727, 'PUT', '/web/gb/ptz/:channelId/scan/bounds', '设置扫描边界', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'PUT' AND path = '/web/gb/ptz/:channelId/scan/bounds');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9014, 12731, 'GET', '/web/gb/media-servers/:id/metrics', '媒体节点当前指标', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/media-servers/:id/metrics');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9015, 12731, 'GET', '/web/gb/media-servers/:id/metrics/history', '媒体节点指标历史', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/media-servers/:id/metrics/history');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9016, 12732, 'GET', '/web/gb/media-servers/:id/streams', '媒体节点流会话', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/media-servers/:id/streams');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9017, 1245, 'GET', '/web/gb/platform-info', '平台信息', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/platform-info');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9018, 1246, 'GET', '/web/gb/logs', '分页查询平台日志', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/logs');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9019, 12741, 'GET', '/web/gb/logs/stream', '实时日志 SSE', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/logs/stream');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9020, 12742, 'GET', '/web/gb/alarms/stream', '报警实时推送 SSE', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/alarms/stream');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9021, 12733, 'GET', '/web/gb/stream-proxies/:id/play', '拉流代理播放地址', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/stream-proxies/:id/play');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9022, 12734, 'GET', '/web/gb/stream-pushes/:id/play', '推流播放地址', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/stream-pushes/:id/play');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9023, 12735, 'POST', '/web/gb/stream-pushes/import', '推流通道导入', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/stream-pushes/import');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9024, 12736, 'POST', '/web/gb/cloud-records/merge-tasks', '创建录像合并任务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/cloud-records/merge-tasks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9025, 12736, 'GET', '/web/gb/cloud-records/merge-tasks', '分页查询合并任务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/cloud-records/merge-tasks');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9026, 12736, 'GET', '/web/gb/cloud-records/merge-tasks/:id', '合并任务详情', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/cloud-records/merge-tasks/:id');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9027, 12737, 'GET', '/web/gb/cloud-records/merge-tasks/:id/download', '下载合并文件', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/cloud-records/merge-tasks/:id/download');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9028, 12738, 'GET', '/web/gb/channels/:id/share-tokens', '查询分享令牌', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/gb/channels/:id/share-tokens');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9029, 12739, 'POST', '/web/gb/channels/:id/share-tokens', '生成分享令牌', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'POST' AND path = '/web/gb/channels/:id/share-tokens');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9030, 12740, 'DELETE', '/web/gb/channels/:id/share-tokens/:tokenId', '吊销分享令牌', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'DELETE' AND path = '/web/gb/channels/:id/share-tokens/:tokenId');
+
+-- ── 13.7 授权 super_admin + 重建 Casbin p 策略 ───────────────
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT 1, m.id FROM ac_menu m
+WHERE m.permission_code LIKE 'gb:%'
+  AND NOT EXISTS (SELECT 1 FROM ac_role_menu_rel r WHERE r.role_id = 1 AND r.menu_id = m.id);
+
+DELETE FROM casbin_rule WHERE p_type = 'p' AND v0 = 'super_admin';
+INSERT INTO casbin_rule (p_type, v0, v1, v2)
+SELECT DISTINCT 'p', 'super_admin', path, method FROM ac_menu_api WHERE deleted_at IS NULL;
+
+-- ── 13.8 序列对齐 ────────────────────────────────────────────
+SELECT setval(pg_get_serial_sequence('ac_menu', 'id'), COALESCE((SELECT MAX(id) FROM ac_menu), 1));
+SELECT setval(pg_get_serial_sequence('ac_menu_api', 'id'), COALESCE((SELECT MAX(id) FROM ac_menu_api), 1));
+SELECT setval(pg_get_serial_sequence('ac_role_menu_rel', 'id'), COALESCE((SELECT MAX(id) FROM ac_role_menu_rel), 1));
+SELECT setval(pg_get_serial_sequence('ac_gb_ptz_preset', 'id'), COALESCE((SELECT MAX(id) FROM ac_gb_ptz_preset), 1));
+SELECT setval(pg_get_serial_sequence('ac_gb_share_token', 'id'), COALESCE((SELECT MAX(id) FROM ac_gb_share_token), 1));
+SELECT setval(pg_get_serial_sequence('ac_gb_record_merge_task', 'id'), COALESCE((SELECT MAX(id) FROM ac_gb_record_merge_task), 1));

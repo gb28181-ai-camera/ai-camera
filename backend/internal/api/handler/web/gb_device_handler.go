@@ -115,6 +115,37 @@ func (h *GbDeviceHandler) Get(c *gin.Context) {
 	utils.Success(c, resp)
 }
 
+// Update 编辑国标设备档案
+//
+// @Summary      编辑国标设备
+// @Description  增量更新设备名称、SIP 域/realm、传输协议、字符集、媒体节点、流模式、local_ip/sdp_ip、安装位置、经纬度、备注、国标协议版本等；字段为指针语义，未传不修改。设备在线时不允许修改国标编码
+// @Tags         GbDevice
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                       true  "设备ID"
+// @Param        body  body      request.UpdateGbDeviceReq  true  "设备档案"
+// @Success      200   {object}  response.BaseResponse
+// @Failure      400   {object}  response.BaseResponse
+// @Failure      404   {object}  response.BaseResponse
+// @Router       /web/gb/devices/{id} [put]
+// @ID           updateGbDevice
+func (h *GbDeviceHandler) Update(c *gin.Context) {
+	id, ok := gbPathID(c, "设备")
+	if !ok {
+		return
+	}
+	var req request.UpdateGbDeviceReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	if err := h.svc.Update(c.Request.Context(), id, &req); err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbDeviceNotFound)
+		return
+	}
+	utils.Success(c, nil)
+}
+
 // SyncChannel 同步设备目录
 //
 // @Summary      同步设备目录

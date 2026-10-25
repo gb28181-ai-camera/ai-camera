@@ -108,6 +108,118 @@ type catalogAccum struct {
 	last  time.Time
 }
 
+// CatalogSyncState 是「设备目录同步」的进程内快照。
+//
+// 为什么是进程级而不是 Manager 字段：HTTP 业务进程与信令进程可能不在同一进程，
+// 但 WVP 对齐接口 GET /web/gb/devices/:id/sync-status 需要读取它。放包级状态后，
+// 单进程（embedded）部署天然可用；分进程部署时 HTTP 进程返回 idle —— 这是
+// 明确接受的行为（同步进度本来就是运维辅助信息，不落库）。
+type CatalogSyncState struct {
+	Status     string    // syncing / success / failed
+	Total      int       // 设备声明的总条数（SumNum；未知时为当前已收条数）
+	Current    int       // 已接收条数
+	Error      string    // 失败原因
+	StartedAt  time.Time // 本轮开始时间
+	FinishedAt time.Time // 本轮结束时间（未结束为零值）
+}
+
+// 目录同步状态取值。
+const (
+	CatalogSyncStatusSyncing = "syncing"
+	CatalogSyncStatusSuccess = "success"
+	CatalogSyncStatusFailed  = "failed"
+)
+
+type catalogSyncStore struct {
+	mu    sync.RWMutex
+	items map[string]CatalogSyncState
+}
+
+var catalogSyncStates = &catalogSyncStore{items: map[string]CatalogSyncState{}}
+
+// CatalogSyncStatusOf 返回设备最近一次目录同步的状态快照。
+// 第二个返回值为 false 表示本进程还没有任何同步记录。
+func CatalogSyncStatusOf(gbDeviceID string) (CatalogSyncState, bool) {
+	if gbDeviceID == "" {
+		return CatalogSyncState{}, false
+	}
+	catalogSyncStates.mu.RLock()
+	defer catalogSyncStates.mu.RUnlock()
+	st, ok := catalogSyncStates.items[gbDeviceID]
+	return st, ok
+}
+
+// MarkCatalogSyncRequested 标记「平台已下发 Catalog 查询、等待设备响应」。
+//
+// HTTP 层触发同步时调用：如果不先标记，前端在设备响应第一个分片之前
+// 只会看到上一轮的 success/idle，误以为本次同步没有开始。
+func MarkCatalogSyncRequested(gbDeviceID string, now time.Time) {
+	if gbDeviceID == "" {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	catalogSyncStates.mu.Lock()
+	defer catalogSyncStates.mu.Unlock()
+	catalogSyncStates.items[gbDeviceID] = CatalogSyncState{
+		Status:    CatalogSyncStatusSyncing,
+		StartedAt: now,
+	}
+}
+
+// MarkCatalogSyncFailed 记录一次在「下发阶段」就失败的同步。
+func MarkCatalogSyncFailed(gbDeviceID, reason string, now time.Time) {
+	if gbDeviceID == "" {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	catalogSyncStates.mu.Lock()
+	defer catalogSyncStates.mu.Unlock()
+	st := catalogSyncStates.items[gbDeviceID]
+	if st.StartedAt.IsZero() {
+		st.StartedAt = now
+	}
+	st.Status = CatalogSyncStatusFailed
+	st.Error = reason
+	st.FinishedAt = now
+	catalogSyncStates.items[gbDeviceID] = st
+}
+
+// markCatalogSyncing 标记同步开始/进度。首次调用或上一轮已结束时重置开始时间。
+func markCatalogSyncing(gbDeviceID string, total, current int, now time.Time) {
+	catalogSyncStates.mu.Lock()
+	defer catalogSyncStates.mu.Unlock()
+	st, ok := catalogSyncStates.items[gbDeviceID]
+	if !ok || st.Status != CatalogSyncStatusSyncing {
+		st = CatalogSyncState{StartedAt: now}
+	}
+	st.Status = CatalogSyncStatusSyncing
+	st.Total = total
+	st.Current = current
+	st.Error = ""
+	st.FinishedAt = time.Time{}
+	catalogSyncStates.items[gbDeviceID] = st
+}
+
+// markCatalogFinished 标记同步结束（成功或失败）。
+func markCatalogFinished(gbDeviceID, status, reason string, total, current int, now time.Time) {
+	catalogSyncStates.mu.Lock()
+	defer catalogSyncStates.mu.Unlock()
+	st := catalogSyncStates.items[gbDeviceID]
+	if st.StartedAt.IsZero() {
+		st.StartedAt = now
+	}
+	st.Status = status
+	st.Total = total
+	st.Current = current
+	st.Error = reason
+	st.FinishedAt = now
+	catalogSyncStates.items[gbDeviceID] = st
+}
+
 // NewManager 构造设备管理器。
 func NewManager(store Store, cfg Config, logger *slog.Logger) *Manager {
 	if logger == nil {
@@ -359,6 +471,13 @@ func (m *Manager) OnCatalogResponse(ctx context.Context, dev *model.Device, resp
 	acc.items = append(acc.items, resp.DeviceList.Items...)
 	acc.last = now
 
+	// 同步进度：每个分片都刷新，前端轮询 sync-status 能看到「20/32」。
+	syncTotal := acc.sum
+	if syncTotal <= 0 {
+		syncTotal = len(acc.items)
+	}
+	markCatalogSyncing(dev.GbDeviceID, syncTotal, len(acc.items), now)
+
 	complete := false
 	switch {
 	case acc.sum > 0:
@@ -374,12 +493,18 @@ func (m *Manager) OnCatalogResponse(ctx context.Context, dev *model.Device, resp
 		return false, nil
 	}
 	items := acc.items
+	total := acc.sum
+	if total <= 0 {
+		total = len(items)
+	}
 	delete(m.catalogs, key)
 	m.mu.Unlock()
 
 	if err := m.persistCatalog(ctx, dev, items); err != nil {
+		markCatalogFinished(dev.GbDeviceID, CatalogSyncStatusFailed, err.Error(), total, len(items), m.now())
 		return true, err
 	}
+	markCatalogFinished(dev.GbDeviceID, CatalogSyncStatusSuccess, "", total, len(items), m.now())
 	return true, nil
 }
 
@@ -734,6 +859,16 @@ func (m *Manager) dropStaleCatalogs() {
 		if now.Sub(acc.last) > m.cfg.CatalogTimeout {
 			m.log.Warn("目录分片超时未收齐，已丢弃",
 				"key", key, "received", len(acc.items), "expected", acc.sum)
+			// key 形如 "<gbDeviceID>#<SN>"；超时同样要落到 sync-status，
+			// 否则前端会一直显示 syncing。
+			if idx := strings.LastIndex(key, "#"); idx > 0 {
+				total := acc.sum
+				if total <= 0 {
+					total = len(acc.items)
+				}
+				markCatalogFinished(key[:idx], CatalogSyncStatusFailed,
+					"目录分片超时未收齐", total, len(acc.items), now)
+			}
 			delete(m.catalogs, key)
 		}
 	}

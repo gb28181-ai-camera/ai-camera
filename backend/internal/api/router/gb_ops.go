@@ -22,6 +22,10 @@ func registerGbOpsRoutes(wAuth *gin.RouterGroup) {
 	gbStreamPushH := handler.NewGbStreamPushHandler()
 	gbPlatformH := handler.NewGbPlatformHandler()
 	voiceAgentH := handler.NewVoiceAgentHandler()
+	opsExtraH := handler.NewGbOpsExtraHandler()
+	streamImportH := handler.NewGbStreamImportHandler()
+	cloudMergeH := handler.NewGbCloudMergeHandler()
+	shareH := handler.NewGbShareHandler()
 
 	gb := wAuth.Group("/gb")
 	{
@@ -44,6 +48,11 @@ func registerGbOpsRoutes(wAuth *gin.RouterGroup) {
 		gb.GET("/cloud-records", gbCloudRecordH.Page)
 		gb.DELETE("/cloud-records", gbCloudRecordH.Delete)
 		gb.PUT("/cloud-records/collect", gbCloudRecordH.Collect)
+		// 多段合并任务：静态段 merge-tasks 必须在 /:id/... 之前。
+		gb.GET("/cloud-records/merge-tasks", cloudMergeH.PageMergeTasks)
+		gb.POST("/cloud-records/merge-tasks", cloudMergeH.CreateMergeTask)
+		gb.GET("/cloud-records/merge-tasks/:id", cloudMergeH.GetMergeTask)
+		gb.GET("/cloud-records/merge-tasks/:id/download", cloudMergeH.DownloadMergeTask)
 		gb.GET("/cloud-records/:id/play", gbCloudRecordH.PlayPath)
 		gb.GET("/cloud-records/:id/download", gbCloudRecordH.Download)
 
@@ -57,6 +66,8 @@ func registerGbOpsRoutes(wAuth *gin.RouterGroup) {
 
 		// ── 国标报警与移动位置（§10.5）──
 		gb.GET("/alarms", gbAlarmH.Page)
+		// SSE 实时报警：静态段必须写在 /:id 之前。
+		gb.GET("/alarms/stream", opsExtraH.AlarmsStream)
 		gb.GET("/alarms/:id", gbAlarmH.Get)
 		gb.POST("/alarms/:id/snapshot", gbAlarmH.Snapshot)
 		gb.PUT("/alarms/:id/handle", gbAlarmH.Handle)
@@ -74,13 +85,18 @@ func registerGbOpsRoutes(wAuth *gin.RouterGroup) {
 		gb.DELETE("/stream-proxies/:id", gbStreamProxyH.Delete)
 		gb.POST("/stream-proxies/:id/start", gbStreamProxyH.Start)
 		gb.POST("/stream-proxies/:id/stop", gbStreamProxyH.Stop)
+		// 播放地址：仅当流确实存在于媒体节点时才返回，否则 409。
+		gb.GET("/stream-proxies/:id/play", opsExtraH.PlayStreamProxy)
 
 		gb.GET("/stream-pushes", gbStreamPushH.Page)
 		gb.POST("/stream-pushes", gbStreamPushH.Create)
+		// 批量导入：静态段必须写在 /:id 之前。
+		gb.POST("/stream-pushes/import", streamImportH.ImportStreamPushes)
 		gb.PUT("/stream-pushes/:id", gbStreamPushH.Update)
 		gb.DELETE("/stream-pushes/:id", gbStreamPushH.Delete)
 		gb.POST("/stream-pushes/:id/start", gbStreamPushH.Start)
 		gb.POST("/stream-pushes/:id/stop", gbStreamPushH.Stop)
+		gb.GET("/stream-pushes/:id/play", opsExtraH.PlayStreamPush)
 
 		// ── 国标级联（§10.7）──
 		// 运行时动作放在静态段，必须在 /:id 之前注册（gin 支持静态与参数同级，
@@ -101,6 +117,25 @@ func registerGbOpsRoutes(wAuth *gin.RouterGroup) {
 		gb.PUT("/platforms/:id/groups", gbPlatformH.SetGroups)
 		gb.PUT("/platforms/:id/regions", gbPlatformH.SetRegions)
 		gb.POST("/platforms/:id/catalog-push", gbPlatformH.PushCatalog)
+
+		// ── 媒体节点监控（WVP 对齐）──
+		// 挂在既有 /media-servers/:id 之下，与 check/info 同级。
+		gb.GET("/media-servers/:id/metrics", opsExtraH.Metrics)
+		gb.GET("/media-servers/:id/metrics/history", opsExtraH.MetricsHistory)
+		gb.GET("/media-servers/:id/streams", opsExtraH.Streams)
+
+		// ── 平台信息 / 日志 ──
+		gb.GET("/platform-info", opsExtraH.PlatformInfo)
+		gb.GET("/logs", opsExtraH.Logs)
+		// SSE 实时日志：静态段与 /logs 同级，无冲突。
+		gb.GET("/logs/stream", opsExtraH.LogsStream)
+
+		// ── 通道免登录分享（管理端）──
+		// 匿名端在 /public/gb/shares/:token，由 registerGbPublicRoutes 注册，
+		// 不经过 authMW / casbinMW。
+		gb.GET("/channels/:id/share-tokens", shareH.ListShareTokens)
+		gb.POST("/channels/:id/share-tokens", shareH.CreateShareToken)
+		gb.DELETE("/channels/:id/share-tokens/:tokenId", shareH.RevokeShareToken)
 	}
 
 	// ── 语音 Agent 配置（§10.9）──
@@ -112,5 +147,19 @@ func registerGbOpsRoutes(wAuth *gin.RouterGroup) {
 		wa.GET("/providers", voiceAgentH.ListProviders)
 		wa.POST("/test", voiceAgentH.Test)
 		wa.POST("/apply", voiceAgentH.Apply)
+	}
+}
+
+// registerGbPublicRoutes 注册国标免登录分享的匿名路由。
+//
+// ★ 刻意不挂 authMW / casbinMW：分享链接给没有平台账号的人使用，
+// 令牌本身即凭证。安全边界全部由 GbShareService 的 hash 校验、过期与
+// 吊销、协议白名单、双层限频承担。该路由由 SetupRouter 在根引擎上注册。
+func registerGbPublicRoutes(r *gin.Engine) {
+	shareH := handler.NewGbShareHandler()
+	public := r.Group("/public/gb")
+	{
+		public.GET("/shares/:token", shareH.PublicShareInfo)
+		public.POST("/shares/:token/play", shareH.PublicSharePlay)
 	}
 }

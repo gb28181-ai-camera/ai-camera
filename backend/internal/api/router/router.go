@@ -50,6 +50,9 @@ func SetupRouter() *gin.Engine {
 	// 注册管理后台（含官网同源接口）路由
 	registerWebRoutes(r)
 
+	// 注册国标免登录分享的匿名路由（/public/gb/shares/*，不挂 JWT/Casbin）
+	registerGbPublicRoutes(r)
+
 	// 注册移动端路由
 	registerAppRoutes(r)
 

@@ -8,7 +8,7 @@
 
 对标产品：AI摄像头操作手册（见 [docs/需求文档/](docs/需求文档/)），本仓库按该手册的功能结构实现。
 
-当前版本 **v0.3.0（IOT 管理与多协议接入）**，v0.2.0（设备接入与国标视频）已完成主体开发、等待真机验收；v0.1.0 为基础功能开发基线，未进入敏捷开发。开发必须严格按照 `docs/` 中的设计文档进行。设计总览参考 [docs/00-系统设计总览.md](docs/00-系统设计总览.md)，进度参考 [docs/敏捷开发/CHANGE_LOG.md](docs/敏捷开发/CHANGE_LOG.md)。
+当前版本 **v0.4.0（WVP 功能对齐）**，v0.3.0（IOT 管理与多协议接入）已完成开发，v0.2.0（设备接入与国标视频）已完成主体开发、等待真机验收；v0.1.0 为基础功能开发基线，未进入敏捷开发。开发必须严格按照 `docs/` 中的设计文档进行。设计总览参考 [docs/00-系统设计总览.md](docs/00-系统设计总览.md)，进度参考 [docs/敏捷开发/CHANGE_LOG.md](docs/敏捷开发/CHANGE_LOG.md)。
 
 ## 仓库布局
 
@@ -281,7 +281,7 @@ config/                     # Viper 配置加载 + config.yaml（gitignored）
   - 错误示例：`page.locator('.ant-modal').last()`、`page.locator('.ant-modal-footer button.ant-btn-primary')`
 - **新增 Modal 必须添加 e2e class**：任何新建的 Ant Design `<Modal>` 组件，必须添加 `className="e2e-xxx-modal"` 属性，用于 E2E 测试定位。
 - **SelectorModal 已支持 className 传递**：`<SelectorModal className="e2e-xxx">` 会将 class 应用到 Modal（`.e2e-xxx`）和触发按钮（`.e2e-xxx-btn`），测试中可分别使用。
-- **现有 e2e class 清单**（以 `frontend/src/admin/` 源码实测为准，共 **131** 个：非国标 83 个 + 国标 48 个，不含模板占位 `e2e-xxx`；下表列出主要项，国标/IOT 为全量）：
+- **现有 e2e class 清单**（以 `frontend/src/admin/` 源码实测为准，共 **258** 个：非国标 101 个 + 国标 157 个，不含模板占位 `e2e-xxx`；下表列出主要项，国标/IOT 为全量）：
   - 基础信息：`e2e-region-modal`、`e2e-risk-type-modal`、`e2e-alarm-type-modal`
   - 资源管理：`e2e-device-modal`、`e2e-device-mode-modal`、`e2e-device-mode-switch-modal`、`e2e-iot-card-modal`、`e2e-iot-card-replace-modal`、`e2e-iot-card-replace-device-btn`、`e2e-voice-config-modal`、`e2e-voice-preview-modal`
   - IOT 管理（20 个）：`e2e-iot-product-table`、`e2e-iot-product-modal`、`e2e-iot-product-share-modal`、`e2e-iot-product-groups-select`、`e2e-iot-credentials-modal`、`e2e-iot-credentials-services-table`、`e2e-iot-service-group-table`、`e2e-iot-service-group-modal`、`e2e-iot-service-group-items-modal`、`e2e-iot-device-table`、`e2e-iot-device-product-modal`、`e2e-iot-device-account-modal`、`e2e-iot-device-account-table`、`e2e-iot-device-account-form-modal`、`e2e-iot-device-account-credential-modal`、`e2e-iot-device-services-modal`、`e2e-iot-device-services-table`、`e2e-iot-device-secret-modal`、`e2e-iot-device-qr-modal`、`e2e-iot-share-qr-modal`，以及设备选择器复用 `e2e-device-select*`
@@ -296,7 +296,15 @@ config/                     # Viper 配置加载 + config.yaml（gitignored）
   - 国标视频（35 个）：`e2e-gb-device-table`、`e2e-gb-device-detail-modal`、`e2e-gb-device-subscribe-modal`、`e2e-gb-device-activation-modal`、`e2e-gb-channel-table`、`e2e-gb-channel-edit-modal`、`e2e-gb-channel-region-modal`、`e2e-gb-channel-group-modal`、`e2e-gb-activation-table`、`e2e-gb-activation-modal`、`e2e-gb-subscribe-table`、`e2e-gb-subscribe-create-modal`、`e2e-gb-channel-tree`、`e2e-gb-snapshot-modal`、`e2e-gb-cloud-play-modal`、`e2e-gb-download-modal`、`e2e-gb-record-plan-modal`、`e2e-gb-record-plan-bind-modal`、`e2e-gb-alarm-detail-modal`、`e2e-gb-alarm-handle-modal`、`e2e-gb-alarm-snap-modal`、`e2e-gb-position-subscribe-modal`、`e2e-gb-media-server-modal`、`e2e-gb-media-server-check-modal`、`e2e-gb-media-server-info-modal`、`e2e-gb-stream-proxy-modal`、`e2e-gb-stream-push-modal`、`e2e-gb-sip-log-drawer`、`e2e-gb-platform-modal`、`e2e-gb-platform-groups-modal`、`e2e-gb-platform-regions-modal`、`e2e-gb-platform-channel-add-modal`、`e2e-gb-platform-channel-modal`、`e2e-gb-group-tree`、`e2e-gb-group-modal`
 
 > **说明**：上表由 `grep -rhoE "e2e-[a-z0-9-]+" frontend/src/admin/ | sort -u` 实测得出
-> （2026-10-24：总计 131 个；其中国标 48 个，可用 `grep -rhoE "e2e-gb-[a-z0-9-]+" ...` 单独核对）。
+> （2026-10-25：总计 258 个；其中国标 157 个，可用 `grep -rhoE "e2e-gb-[a-z0-9-]+" ...` 单独核对）。
+>
+> v0.4.0 新增的主要 class：播放器 `e2e-live-player-tabs`、`e2e-player-tab-*`、
+> `e2e-h265web-player`；运维 `e2e-gb-platform-info`、`e2e-gb-log-page`、
+> `e2e-gb-media-server-detail-modal`、`e2e-gb-merge-task-modal`、`e2e-gb-share-modal`、
+> `e2e-gb-share-play-page`、`e2e-dashboard-streams-card`；设备/通道/云台
+> `e2e-gb-device-edit-modal`、`e2e-gb-device-sync-modal`、`e2e-gb-device-ops`、
+> `e2e-gb-device-time-statistics-modal`、`e2e-gb-channel-media-modal`、
+> `e2e-gb-ptz-advanced-modal`、`e2e-ptz-wiper`。
 > 其中 `e2e-dept-tree`、`e2e-menu-api-table` 为表格/树容器类，`e2e-device-select` 为下拉框类，
 > `e2e-device-select-btn`、`e2e-iot-card-replace-device-btn` 为触发按钮类，非 Modal 本体的 class。
 > 「第三方平台」下的个推（`GetuiConfig`）与短信（`SmsConfig`）页面为**单卡片表单，不含 Modal**，

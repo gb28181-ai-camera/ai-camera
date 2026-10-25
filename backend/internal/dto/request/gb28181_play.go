@@ -35,8 +35,8 @@ type GbPtzReq struct {
 
 // GbPresetReq 预置位请求（契约 §15.2）。
 //
-// 本期只支持 Action=set（AddPreset）与路径删除（DeletePreset）。
-// Name 暂存不落库：预置位名称由设备侧维护，平台侧没有独立表。
+// Action=set（AddPreset）与路径删除（DeletePreset）。Name 是平台侧展示名，
+// 持久化到 ac_gb_ptz_preset（表见 model.GbPtzPreset），不写入设备。
 type GbPresetReq struct {
 	PresetID int    `json:"preset_id" example:"1"`
 	Name     string `json:"name" example:"大门"`

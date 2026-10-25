@@ -211,6 +211,101 @@ type UpdateGbChannelReq struct {
 	Password        string `json:"password"`
 	Active          *bool  `json:"active"`
 	Remark          string `json:"remark"`
+
+	// 设备参数扩展（WVP 对齐）：经纬度、监视方位、位置/房间/用途/补光类型、保密属性。
+	// 全部使用指针：0 是合法取值，必须能区分「未传」与「传了 0」。
+	Longitude       *float64 `json:"longitude" example:"116.397128"`
+	Latitude        *float64 `json:"latitude" example:"39.916527"`
+	DirectionType   *int64   `json:"direction_type" example:"1"`
+	PositionType    *int64   `json:"position_type" example:"1"`
+	RoomType        *int64   `json:"room_type" example:"1"`
+	UseType         *int64   `json:"use_type" example:"1"`
+	SupplyLightType *int64   `json:"supply_light_type" example:"1"`
+	Secrecy         *int64   `json:"secrecy" example:"0"`
+}
+
+// UpdateGbDeviceReq 编辑国标设备档案。
+//
+// 增量语义：指针非 nil 才覆盖；字符串指针传空串表示清空该字段（name 除外，
+// 设备名称不允许为空）。gb_device_id 变更会同步通道冗余列，设备在线时拒绝修改。
+type UpdateGbDeviceReq struct {
+	Name     *string `json:"name" example:"东门球机"`
+	Location *string `json:"location" example:"园区东门"`
+	Remark   *string `json:"remark"`
+
+	GbDeviceID    *string `json:"gb_device_id" example:"34020000001320000001"`
+	SipRealm      *string `json:"sip_realm" example:"3402000000"`
+	SipTransport  *string `json:"sip_transport" example:"UDP"`
+	StreamMode    *string `json:"stream_mode" example:"UDP"`
+	Charset       *string `json:"charset" example:"GB2312"`
+	GbVersion     *string `json:"gb_version" example:"2016"`
+	MediaServerID *string `json:"media_server_id" example:"auto"`
+	LocalIP       *string `json:"local_ip" example:"192.168.1.10"`
+	SDPIP         *string `json:"sdp_ip" example:"192.168.1.10"`
+
+	// Latitude / Longitude 沿用 ac_device 的 varchar 列，格式校验在 service 层。
+	Latitude  *string `json:"latitude" example:"39.916527"`
+	Longitude *string `json:"longitude" example:"116.397128"`
+
+	Active *bool `json:"active"`
+}
+
+// GbDeviceGuardReq 布防/撤防控制。
+type GbDeviceGuardReq struct {
+	// Cmd 仅支持 SetGuard（布防）/ ResetGuard（撤防）。
+	Cmd string `json:"cmd" binding:"required" example:"SetGuard"`
+}
+
+// GbAlarmResetReq 报警复位。
+type GbAlarmResetReq struct {
+	// ChannelID 可选：传通道主键时 DeviceID 用通道国标编码，否则用设备国标编码。
+	ChannelID *int64 `json:"channel_id"`
+}
+
+// GbRecordControlReq 设备侧录像控制。
+type GbRecordControlReq struct {
+	// Action start | stop。
+	Action string `json:"action" binding:"required" example:"start"`
+}
+
+// GbPresetRenameReq 预置位重命名（平台侧名称）。
+type GbPresetRenameReq struct {
+	Name string `json:"name" binding:"required" example:"大门"`
+}
+
+// GbCruisePointReq 巡航点新增。
+type GbCruisePointReq struct {
+	// GroupID 巡航组号 1–255。
+	GroupID int `json:"group_id" binding:"required" example:"1"`
+	// PresetID 预置位编号 1–255。
+	PresetID int `json:"preset_id" binding:"required" example:"5"`
+}
+
+// GbCruisePointSetReq 巡航参数设置（速度/停留时间）。
+//
+// Speed 与 StayTime 至少传一个；0 视为未传（标准取值范围为 1–4095）。
+type GbCruisePointSetReq struct {
+	GroupID int `json:"group_id" binding:"required" example:"1"`
+	// Speed 巡航速度，标准 12 bit 量纲（1–4095）。
+	Speed int `json:"speed" example:"5"`
+	// StayTime 巡航点停留时间（秒），标准 12 bit 量纲（1–4095）。
+	StayTime int `json:"stay_time" example:"10"`
+}
+
+// GbScanBoundsReq 扫描边界设置。
+//
+// 标准扫描指令为 0x89：字节5=扫描组号，字节6=1 左边界 / 2 右边界。
+// ★ 边界**不带角度值** —— 标准语义是「把云台当前位置记为左/右边界」，
+// 因此调用前需先把云台转到目标位置。速度使用 0x8A（12 bit）。
+type GbScanBoundsReq struct {
+	// GroupID 扫描组号 1–255。
+	GroupID int `json:"group_id" binding:"required" example:"1"`
+	// SetLeft 把当前位置设为左边界。
+	SetLeft *bool `json:"set_left" example:"true"`
+	// SetRight 把当前位置设为右边界。
+	SetRight *bool `json:"set_right" example:"true"`
+	// Speed 扫描速度 1–4095。
+	Speed *int `json:"speed" example:"5"`
 }
 
 // CreateGbGroupReq 新增国标业务分组。

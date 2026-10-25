@@ -78,6 +78,7 @@ func registerWebRoutes(r *gin.Engine) {
 
 	// 国标视频（GB/T 28181）业务 CRUD 层
 	gbDeviceH := handler.NewGbDeviceHandler()
+	gbDeviceCtlH := handler.NewGbDeviceControlHandler()
 	gbChannelH := handler.NewGbChannelHandler()
 	gbMediaServerH := handler.NewGbMediaServerHandler()
 	gbGroupH := handler.NewGbGroupHandler()
@@ -395,7 +396,15 @@ func registerWebRoutes(r *gin.Engine) {
 			// 国标设备
 			gb.GET("/devices", gbDeviceH.Page)
 			gb.GET("/devices/:id", gbDeviceH.Get)
+			gb.PUT("/devices/:id", gbDeviceH.Update)
 			gb.POST("/devices/:id/sync-channel", gbDeviceH.SyncChannel)
+			// 目录同步进度 / 心跳注册时间统计（WVP 对齐）
+			gb.GET("/devices/:id/sync-status", gbDeviceCtlH.SyncStatus)
+			gb.GET("/devices/:id/time-statistics", gbDeviceCtlH.TimeStatistics)
+			// 设备控制（带外 MANSCDP DeviceControl）
+			gb.POST("/devices/:id/reboot", gbDeviceCtlH.Reboot)
+			gb.POST("/devices/:id/guard", gbDeviceCtlH.Guard)
+			gb.POST("/devices/:id/alarm-reset", gbDeviceCtlH.AlarmReset)
 			// 可达性 / NAT 诊断：只读 + 一条标准 DeviceInfo 查询，不修改设备状态。
 			gb.POST("/devices/:id/diagnose", gbDeviceH.Diagnose)
 			gb.POST("/devices/:id/subscribe", gbDeviceH.Subscribe)
@@ -412,6 +421,9 @@ func registerWebRoutes(r *gin.Engine) {
 			gb.PUT("/channels/:id/region", gbChannelH.UpdateRegion)
 			gb.PUT("/channels/:id/group", gbChannelH.UpdateGroup)
 			gb.POST("/channels/:id/reset", gbChannelH.Reset)
+			// 设备侧录像控制 / 当前在线流媒体信息（WVP 对齐）
+			gb.POST("/channels/:id/record-control", gbChannelH.RecordControl)
+			gb.GET("/channels/:id/media-info", gbChannelH.MediaInfo)
 
 			// 媒体节点（简单列表，非分页）
 			gb.GET("/media-servers", gbMediaServerH.List)
