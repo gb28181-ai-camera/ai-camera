@@ -29,6 +29,10 @@
 | 11 | 本地 Embedding（BGE-M3/ONNX）+ 向量真实落库 + 历史补向量 | ✅ |
 | 12 | 实时音视频：MQTT 房间信令 + `/av/preview` 设备画面 + 设备模拟器 | ✅ |
 | 13 | AI风险台账 / 风险监控处置 的职责区分与总览指标 | ✅ |
+| 14 | 设备↔App 通话：invite/agree/reject/hangup、App WS、离线个推 | ✅ |
+| 15 | MQTT 上报：告警/电量/位置/心跳 + `ac_iot_device_position` | ✅ |
+| 16 | 国标告警/位置模拟：gbsim `--alarm-interval/--position-interval` | ✅ |
+| 17 | 适老化内置告警类型 fall/sos；App 通话页与设备列表入口 | ✅ |
 
 **关键设计**：
 - Pipecat 仅内网可达；生产由 Go 网关统一鉴权并注入签名上下文。
@@ -47,6 +51,12 @@
   转写成功（zh, prob=1.0）；Pipecat `/test` stt/tts/vad 全 ok，LLM 缺 key。
 - 实时预览：Node WS 握手拿到 5022 字节 offer；Playwright(Edge) 真实视频首帧
   `videoWidth>0`、`connection=connected`。
+- 设备↔App：Web/App 两个 WS 均完成 invite → 设备 agree；设备 invite → App
+  invite/agree 链路通过；无 App 连接时触发离线推送回调。
+- MQTT 上报：模拟器上报后 `ac_device` 电量/经纬度刷新、`ac_iot_device_position`
+  连续写入、`ac_alarm_record` 出现 `fall` 告警（需先对齐序列）。
+- 国标：gbsim 新增 `--alarm-interval/--position-interval`，后端既有
+  `OnAlarm/OnMobilePosition` 落库链路可直接回归。
 
 **已知限制**：见 [01-实现说明.md §3](v0.6.0%20智能语音聊天/01-实现说明.md)。
 

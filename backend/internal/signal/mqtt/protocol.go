@@ -31,6 +31,11 @@ const (
 	BackendTopicFilter = "iot/+/signal/backend"
 	// backendTopicLevels 是 iot/<group>/signal/backend 的层级数。
 	backendTopicLevels = 4
+
+	// ReportTopicFilter 是设备业务上报的通配符：
+	// iot/<group_code>/device/<device_code>/report（告警/电量/位置/心跳）。
+	ReportTopicFilter = "iot/+/device/+/report"
+	reportTopicLevels = 5
 )
 
 // 内部账号。密码来自环境变量 MQTT_RPC_TOKEN（见 service/iot 的鉴权分支）。
@@ -163,6 +168,31 @@ func ParseBackendTopic(topic string) (string, bool) {
 		return "", false
 	}
 	return group, true
+}
+
+// ParseReportTopic 从 iot/<group>/device/<device>/report 提取组与设备编码。
+func ParseReportTopic(topic string) (group, deviceCode string, ok bool) {
+	parts := strings.Split(strings.TrimSpace(topic), "/")
+	if len(parts) != reportTopicLevels {
+		return "", "", false
+	}
+	if parts[0] != "iot" || parts[2] != "device" || parts[4] != "report" {
+		return "", "", false
+	}
+	group = strings.TrimSpace(parts[1])
+	deviceCode = strings.TrimSpace(parts[3])
+	if group == "" || len(group) > maxGroupLen || !isSafeTopicLevel(group) {
+		return "", "", false
+	}
+	if deviceCode == "" || len(deviceCode) > maxStreamLen || !isSafeTopicLevel(deviceCode) {
+		return "", "", false
+	}
+	return group, deviceCode, true
+}
+
+// ReportTopic 返回设备上报话题。
+func ReportTopic(group, deviceCode string) string {
+	return "iot/" + group + "/device/" + deviceCode + "/report"
 }
 
 // BackendSignalTopic 返回某个组的后端订阅话题。

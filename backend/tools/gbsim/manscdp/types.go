@@ -143,6 +143,20 @@ type Alarm struct {
 	Latitude         float64  `xml:"Latitude,omitempty"`
 }
 
+// MobilePosition 是移动位置上报（Notify/MobilePosition）。
+type MobilePosition struct {
+	XMLName   xml.Name `xml:"Notify"`
+	CmdType   string   `xml:"CmdType"`
+	SN        int      `xml:"SN"`
+	DeviceID  string   `xml:"DeviceID"`
+	Time      string   `xml:"Time,omitempty"`
+	Longitude float64  `xml:"Longitude"`
+	Latitude  float64  `xml:"Latitude"`
+	Speed     float64  `xml:"Speed,omitempty"`
+	Direction float64  `xml:"Direction,omitempty"`
+	Altitude  float64  `xml:"Altitude,omitempty"`
+}
+
 // ────────────────────────────────────────────────────────────────
 // GB/T 28181-2022 查询应答
 //

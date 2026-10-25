@@ -17,6 +17,7 @@ type AvViewerTicketResp struct {
 	DeviceCode   string      `json:"device_code" example:"CAM_001"`
 	DeviceName   string      `json:"device_name" example:"东门摄像头"`
 	ClientID     string      `json:"client_id" example:"viewer-1a2b3c4d"`
+	Role         string      `json:"role" example:"viewer"`
 	GroupCode    string      `json:"group_code" example:"webrtc"`
 	DeviceOnline bool        `json:"device_online" example:"false"`
 	IceServers   []IceServer `json:"ice_servers"`

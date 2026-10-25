@@ -33,9 +33,11 @@ type TicketClaims struct {
 	DeviceID     int64  `json:"dev,omitempty"`
 	ClientID     string `json:"cid,omitempty"`
 	Kind         string `json:"kind"`
-	AgentCode    string `json:"agent,omitempty"`
-	ExpiresAt    int64  `json:"exp"`
-	JTI          string `json:"jti"`
+	// Role 用于实时音视频：viewer（Web 预览）/ app（移动端通话）。
+	Role      string `json:"role,omitempty"`
+	AgentCode string `json:"agent,omitempty"`
+	ExpiresAt int64  `json:"exp"`
+	JTI       string `json:"jti"`
 }
 
 type ticketPayload struct {
@@ -48,6 +50,7 @@ type ticketPayload struct {
 	DevID int64  `json:"dev,omitempty"`
 	CID   string `json:"cid,omitempty"`
 	Kind  string `json:"kind"`
+	Role  string `json:"role,omitempty"`
 	Agent string `json:"agent,omitempty"`
 	Exp   int64  `json:"exp"`
 	JTI   string `json:"jti"`
@@ -108,7 +111,7 @@ func (s *TicketService) Issue(c TicketClaims) (string, *TicketClaims, error) {
 	p := ticketPayload{
 		UID: c.UserID, UN: c.UserName, RC: c.RoleCode, DID: c.DeptID,
 		DP: c.DataPerm, CD: c.CrossDeptIDs, DevID: c.DeviceID, CID: c.ClientID,
-		Kind: c.Kind, Agent: c.AgentCode, Exp: exp, JTI: jti,
+		Kind: c.Kind, Role: c.Role, Agent: c.AgentCode, Exp: exp, JTI: jti,
 	}
 	raw, err := json.Marshal(p)
 	if err != nil {
@@ -160,7 +163,7 @@ func (s *TicketService) Verify(kind, token string) (*TicketClaims, error) {
 	return &TicketClaims{
 		UserID: p.UID, UserName: p.UN, RoleCode: p.RC, DeptID: p.DID,
 		DataPerm: p.DP, CrossDeptIDs: p.CD, DeviceID: p.DevID, ClientID: p.CID,
-		Kind: p.Kind, AgentCode: p.Agent, ExpiresAt: p.Exp, JTI: p.JTI,
+		Kind: p.Kind, Role: p.Role, AgentCode: p.Agent, ExpiresAt: p.Exp, JTI: p.JTI,
 	}, nil
 }
 

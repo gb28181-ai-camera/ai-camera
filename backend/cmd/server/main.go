@@ -18,8 +18,10 @@ import (
 	"github.com/boticz/ai-camera-backend/internal/gb28181/sipserver"
 	whep "github.com/boticz/ai-camera-backend/internal/gb28181/webrtc"
 	"github.com/boticz/ai-camera-backend/internal/mqttrpc"
+	"github.com/boticz/ai-camera-backend/internal/repository"
 	gbsvc "github.com/boticz/ai-camera-backend/internal/service/gb28181"
 	"github.com/boticz/ai-camera-backend/internal/service/iot"
+	"github.com/boticz/ai-camera-backend/internal/service/push"
 	mqttsignal "github.com/boticz/ai-camera-backend/internal/signal/mqtt"
 	signalroom "github.com/boticz/ai-camera-backend/internal/signal/room"
 )
@@ -34,6 +36,67 @@ import (
 
 // @license.name  Apache 2.0
 // @license.url   http://www.apache.org/licenses/LICENSE-2.0.html
+
+// wireInviteOfflinePush 在设备呼叫 App、但房间内没有在线 App 时发送离线推送。
+//
+// 在线判断由 room.Hub 负责（房间内是否有 role=app 的 WebSocket）；
+// 这里只做「找绑定用户 → 查 CID → 个推」。未配置个推时 PushToUsers 返回
+// ErrNotConfigured，仅记录日志，不影响呼叫本身（设备仍会等待同意/拒绝）。
+func wireInviteOfflinePush(hub *signalroom.Hub) {
+	pushSvc := push.NewService()
+	devices := repository.NewDeviceRepo()
+	accounts := repository.NewIotDeviceRepo()
+
+	hub.InviteOffline = func(room *signalroom.Room, msg *signalroom.Message) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		deviceID := room.DeviceID
+		if deviceID == 0 {
+			if dev, err := devices.GetByCode(ctx, room.DeviceCode); err == nil {
+				deviceID = dev.ID
+			}
+		}
+		if deviceID == 0 {
+			log.Printf("离线来电推送跳过：无法解析设备 %s", room.DeviceCode)
+			return
+		}
+
+		var userIDs []int64
+		if strings.HasPrefix(msg.To, "user:") {
+			if uid, err := strconv.ParseInt(strings.TrimPrefix(msg.To, "user:"), 10, 64); err == nil && uid > 0 {
+				userIDs = []int64{uid}
+			}
+		}
+		if len(userIDs) == 0 {
+			ids, err := accounts.ListPlatformUserIDsByDevice(ctx, deviceID)
+			if err != nil {
+				log.Printf("离线来电推送跳过：查询绑定用户失败 device_id=%d err=%v", deviceID, err)
+				return
+			}
+			userIDs = ids
+		}
+		if len(userIDs) == 0 {
+			log.Printf("离线来电推送跳过：设备 %s 没有绑定用户", room.DeviceCode)
+			return
+		}
+
+		pushed, err := pushSvc.PushToUsers(ctx, userIDs, "设备来电",
+			fmt.Sprintf("设备 %s 发起视频通话", room.DeviceCode),
+			map[string]interface{}{
+				"type": "av_invite", "room_id": room.ID,
+				"device_code": room.DeviceCode, "call_id": msg.CallID,
+				"media_type": msg.MediaType,
+			})
+		if err != nil {
+			log.Printf("离线来电推送失败 device=%s users=%v pushed=%d err=%v",
+				room.DeviceCode, userIDs, pushed, err)
+			return
+		}
+		log.Printf("离线来电推送已发送 device=%s users=%v cids=%d", room.DeviceCode, userIDs, pushed)
+	}
+}
+
 func main() {
 	// 配置、数据库、JWT、Casbin 均在 bootstrap 包 init() 时完成装配
 	r := router.SetupRouter()
@@ -90,7 +153,19 @@ func main() {
 	if sigCfg, err := mqttsignal.ConfigFromEnv(); err != nil {
 		log.Fatalf("MQTT 信令配置非法: %v", err)
 	} else if sigCfg.Enabled {
+		reportSvc := iot.NewDeviceReportService()
 		signalClient, err = mqttsignal.NewClient(sigCfg, func(topic string, payload []byte) {
+			// 设备业务上报（告警/电量/位置/心跳）：独立话题，异步落库。
+			if group, _, ok := mqttsignal.ParseReportTopic(topic); ok {
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := reportSvc.Handle(ctx, group, payload); err != nil {
+						log.Printf("MQTT 设备上报处理失败: group=%s err=%v", group, err)
+					}
+				}()
+				return
+			}
 			// 同一个 broker 话题承载两条链路：房间信令优先，其余交给 WHEP 桥。
 			// 消息在 Start 之后才可能到达；判空防止初始化顺序导致 nil panic。
 			if signalHub != nil && signalHub.HandleDevice(topic, payload) {
@@ -106,6 +181,7 @@ func main() {
 		signalBridge = mqttsignal.NewBridge(signalClient, whep.NewDefaultClient(), play.DefaultRegistry())
 		signalHub = signalroom.NewHub(signalClient)
 		signalroom.SetDefaultHub(signalHub)
+		wireInviteOfflinePush(signalHub)
 		if err := signalClient.Start(appCtx); err != nil {
 			log.Printf("MQTT 信令启动异常（HTTP 服务继续运行）: %v", err)
 		}

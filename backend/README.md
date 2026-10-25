@@ -874,7 +874,24 @@ WebRTC 服务组设备的房间信令与画面查看。后端只中继信令，�
 - 平台账号 ACL 新增 publish `iot/+/device/+/signal`。
 - 实现：`internal/signal/room`、`internal/service/avroom`；
   UI：`/av/preview`；模拟器：`tools/webrtcsim`（Pion + H.264）。
+- 设备↔App 通话：`invite/agree/reject/hangup`；App ticket
+  `POST /app/av/devices/:id/call-ticket`（role=app，需绑定设备）；
+  App WS `GET /app/av/ws`；
+- 离线推送：`POST /app/push-tokens` 注册个推 CID；设备 invite 时房间内无
+  App 连接 → `internal/service/push` 按绑定用户单推。
 - 页面/接口文档：`docs/开发文档/页面功能和接口/16-实时音视频实时预览页面与接口.md`。
+
+### 20. 设备 MQTT 上报（v0.6.0）
+
+| 方向 | 话题 | 说明 |
+|:--|:--|:--|
+| 设备 → 后端 | `iot/<group>/device/<device_code>/report` | 告警/电量/位置/心跳 |
+| 后端订阅 | `iot/+/device/+/report` | 平台账号 ACL 已放行 |
+
+- 实现：`internal/service/iot/device_report_service.go`、`internal/model/iot_report.go`；
+- 落库：`ac_alarm_record`、`ac_device_history`、`ac_iot_device_position`，
+  最新电量/经纬度同步 `ac_device`；
+- 文档：`docs/开发文档/页面功能和接口/17-设备MQTT上报与国标告警位置.md`。
 
 ### 路由分组与中间件
 

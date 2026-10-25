@@ -2,6 +2,7 @@ package router
 
 import (
 	handler "github.com/boticz/ai-camera-backend/internal/api/handler/app"
+	webhandler "github.com/boticz/ai-camera-backend/internal/api/handler/web"
 	"github.com/boticz/ai-camera-backend/internal/api/middleware"
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,8 @@ func registerAppRoutes(r *gin.Engine) {
 	appGbH := handler.NewAppGbHandler()
 	// IOT 设备认领/绑定与 ICE 凭据：所有读写都以 JWT 的 user_id 为边界。
 	appIotH := handler.NewAppIotHandler()
+	appAvH := webhandler.NewAvRoomHandler()
+	appPushH := handler.NewPushHandler()
 	// 智能语音聊天（v0.6.0）：签发一次性 WS ticket。
 	appVoiceH := handler.NewVoiceWsHandler()
 
@@ -143,5 +146,13 @@ func registerAppRoutes(r *gin.Engine) {
 		// ── 智能语音聊天（v0.6.0）────────────────────────────
 		// ticket 一次性，WS 网关本身在 router/voice.go。
 		aAuth.POST("/voice/ws-ticket", appVoiceH.WsTicket)
+
+		// ── 实时音视频：设备 ↔ App 通话（v0.6.0）──────────────
+		// App 必须已认领/绑定设备；ticket role=app，WS 在 router/voice.go。
+		aAuth.POST("/av/devices/:id/call-ticket", appAvH.AppCallTicket)
+
+		// ── 离线推送令牌（个推 CID）────────────────────────────
+		aAuth.POST("/push-tokens", appPushH.Register)
+		aAuth.DELETE("/push-tokens/:cid", appPushH.Delete)
 	}
 }

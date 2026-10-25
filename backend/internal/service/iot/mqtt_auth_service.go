@@ -25,7 +25,9 @@ const (
 	PlatformGroupCode = "__platform__"
 
 	platformSubscribeTopic = "iot/+/signal/backend"
-	platformPublishTopic   = "iot/+/app/+/signal"
+	// v0.6.0 设备业务上报：告警/电量/位置/心跳。
+	platformReportTopic  = "iot/+/device/+/report"
+	platformPublishTopic = "iot/+/app/+/signal"
 	// v0.6.0 房间信令：后端把查看方的 joinRoom/answer/iceCandidate 下发到设备。
 	platformDevicePublishTopic = "iot/+/device/+/signal"
 )
@@ -184,13 +186,16 @@ func checkPlatformACL(action, topic string) *response.MqttACLResp {
 	topic = strings.TrimSpace(topic)
 	switch action {
 	case "subscribe":
-		if topic == platformSubscribeTopic {
+		if topic == platformSubscribeTopic || topic == platformReportTopic {
 			return &response.MqttACLResp{Allow: true}
 		}
 		if strings.ContainsAny(topic, "+#") {
-			return &response.MqttACLResp{Allow: false, Reason: "内部账号只允许订阅 " + platformSubscribeTopic}
+			return &response.MqttACLResp{
+				Allow:  false,
+				Reason: "内部账号只允许订阅 " + platformSubscribeTopic + " 或 " + platformReportTopic,
+			}
 		}
-		if matchMQTTTopic(platformSubscribeTopic, topic) {
+		if matchMQTTTopic(platformSubscribeTopic, topic) || matchMQTTTopic(platformReportTopic, topic) {
 			return &response.MqttACLResp{Allow: true}
 		}
 	case "publish":

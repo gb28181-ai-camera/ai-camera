@@ -34,12 +34,19 @@ const (
 	TypeLeaveRoom    = "leaveRoom"
 	TypeReady        = "ready"
 	TypeError        = "error"
+
+	// 设备 ↔ App 通话控制（v0.6.0 适老化相机）。
+	TypeInvite = "invite"
+	TypeAgree  = "agree"
+	TypeReject = "reject"
+	TypeHangup = "hangup"
 )
 
 // 角色。
 const (
 	RoleViewer = "viewer"
 	RoleDevice = "device"
+	RoleApp    = "app"
 )
 
 // 字段长度上限（MQTT 单包上限由 broker 决定，这里只做防呆）。
@@ -48,6 +55,7 @@ const (
 	maxDeviceLen    = 128
 	maxClientLen    = 128
 	maxRequestIDLen = 128
+	maxCallIDLen    = 128
 	maxSDPLen       = 1 << 20 // 1 MiB
 	maxCandidateLen = 8192
 )
@@ -84,20 +92,23 @@ type ICECandidate struct {
 // 同一结构承载全部类型，用 type 区分；浏览器与设备共用。
 // `client_id` 恒为发送方标识；`to` 是可选的目标接收方。
 type Message struct {
-	Type         string        `json:"type"`
-	RoomID       string        `json:"room_id,omitempty"`
-	DeviceCode   string        `json:"device_code,omitempty"`
-	ClientID     string        `json:"client_id,omitempty"`
-	To           string        `json:"to,omitempty"`
-	Role         string        `json:"role,omitempty"`
-	SDP          string        `json:"sdp,omitempty"`
-	SDPType      string        `json:"sdp_type,omitempty"`
-	Candidate    *ICECandidate `json:"candidate,omitempty"`
-	RequestID    string        `json:"request_id,omitempty"`
-	Reason       string        `json:"reason,omitempty"`
-	Code         string        `json:"code,omitempty"`
-	ErrorMessage string        `json:"message,omitempty"`
-	Timestamp    int64         `json:"ts,omitempty"`
+	Type       string        `json:"type"`
+	RoomID     string        `json:"room_id,omitempty"`
+	DeviceCode string        `json:"device_code,omitempty"`
+	ClientID   string        `json:"client_id,omitempty"`
+	To         string        `json:"to,omitempty"`
+	Role       string        `json:"role,omitempty"`
+	SDP        string        `json:"sdp,omitempty"`
+	SDPType    string        `json:"sdp_type,omitempty"`
+	Candidate  *ICECandidate `json:"candidate,omitempty"`
+	RequestID  string        `json:"request_id,omitempty"`
+	// CallID 标识一通「设备 ↔ App」呼叫；媒体协商仍复用 offer/answer。
+	CallID       string `json:"call_id,omitempty"`
+	MediaType    string `json:"media_type,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	Code         string `json:"code,omitempty"`
+	ErrorMessage string `json:"message,omitempty"`
+	Timestamp    int64  `json:"ts,omitempty"`
 	// DeviceOnline 只在 ready 消息里出现，供页面提示「设备未在房间」。
 	DeviceOnline bool `json:"device_online,omitempty"`
 }
@@ -150,6 +161,14 @@ func NormalizeType(raw string) string {
 		return TypeOffer
 	case "answer":
 		return TypeAnswer
+	case "invite":
+		return TypeInvite
+	case "agree":
+		return TypeAgree
+	case "reject":
+		return TypeReject
+	case "hangup":
+		return TypeHangup
 	case "ready":
 		return TypeReady
 	case "error":
@@ -192,7 +211,8 @@ func (m *Message) ValidateFromViewer() error {
 		return fmt.Errorf("%w: 消息为空", ErrInvalidMessage)
 	}
 	switch m.Type {
-	case TypeJoinRoom, TypeAnswer, TypeICECandidate, TypeLeaveRoom:
+	case TypeJoinRoom, TypeAnswer, TypeICECandidate, TypeLeaveRoom,
+		TypeInvite, TypeAgree, TypeReject, TypeHangup:
 	default:
 		return fmt.Errorf("%w: 查看方不允许发送 %q", ErrInvalidMessage, m.Type)
 	}
@@ -215,6 +235,10 @@ func (m *Message) ValidateFromViewer() error {
 		if len(m.Candidate.Candidate) > maxCandidateLen {
 			return fmt.Errorf("%w: candidate 过长", ErrInvalidMessage)
 		}
+	case TypeInvite, TypeAgree, TypeReject, TypeHangup:
+		if err := m.validateCall(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -225,7 +249,8 @@ func (m *Message) ValidateFromDevice() error {
 		return fmt.Errorf("%w: 消息为空", ErrInvalidMessage)
 	}
 	switch m.Type {
-	case TypeJoinRoom, TypeOffer, TypeAnswer, TypeICECandidate, TypeLeaveRoom, TypeError:
+	case TypeJoinRoom, TypeOffer, TypeAnswer, TypeICECandidate, TypeLeaveRoom, TypeError,
+		TypeInvite, TypeAgree, TypeReject, TypeHangup:
 	default:
 		return fmt.Errorf("%w: 设备不允许发送 %q", ErrInvalidMessage, m.Type)
 	}
@@ -250,6 +275,27 @@ func (m *Message) ValidateFromDevice() error {
 		if len(m.Candidate.Candidate) > maxCandidateLen {
 			return fmt.Errorf("%w: candidate 过长", ErrInvalidMessage)
 		}
+	case TypeInvite, TypeAgree, TypeReject, TypeHangup:
+		if err := m.validateCall(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateCall 校验通话控制消息。
+func (m *Message) validateCall() error {
+	callID := strings.TrimSpace(m.CallID)
+	if callID == "" {
+		return fmt.Errorf("%w: %s 缺少 call_id", ErrInvalidMessage, m.Type)
+	}
+	if len(callID) > maxCallIDLen || !isSafeTopicLevel(callID) {
+		return fmt.Errorf("%w: call_id 含非法字符", ErrInvalidMessage)
+	}
+	switch strings.ToLower(strings.TrimSpace(m.MediaType)) {
+	case "", "video", "audio":
+	default:
+		return fmt.Errorf("%w: media_type 仅支持 video/audio", ErrInvalidMessage)
 	}
 	return nil
 }

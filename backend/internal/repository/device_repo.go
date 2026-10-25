@@ -114,6 +114,20 @@ func (r *DeviceRepo) GetByID(ctx context.Context, id int64) (*model.Device, erro
 	return &m, nil
 }
 
+// GetByCode 按设备编号查询（不含软删除）。
+//
+// 设备端 MQTT 上报没有用户上下文，只能以 device_code 作为身份的一部分；
+// 调用方仍需校验该设备的产品是否绑定到消息所在服务组。
+func (r *DeviceRepo) GetByCode(ctx context.Context, code string) (*model.Device, error) {
+	var m model.Device
+	if err := bootstrap.DB().WithContext(ctx).
+		Where("device_code = ?", strings.TrimSpace(code)).
+		First(&m).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 // GetByIDScoped 按主键查询设备，并施加行级数据权限。
 //
 // 用于「按 ID 进入一个受控资源」的接口（如 WebRTC 查看）：列表过滤不能替代

@@ -1,9 +1,9 @@
 package router
 
 import (
-	webhandler "github.com/boticz/ai-camera-backend/internal/api/handler/web"
 	iothandler "github.com/boticz/ai-camera-backend/internal/api/handler/iot"
 	rpchandler "github.com/boticz/ai-camera-backend/internal/api/handler/rpc"
+	webhandler "github.com/boticz/ai-camera-backend/internal/api/handler/web"
 	"github.com/boticz/ai-camera-backend/internal/service/voiceagent"
 	"github.com/gin-gonic/gin"
 )
@@ -28,6 +28,7 @@ func registerVoiceRoutes(r *gin.Engine) {
 	// 实时音视频：浏览器 WebSocket 无法带 JWT header，同样使用一次性 ticket。
 	avH := webhandler.NewAvRoomHandler()
 	r.GET("/web/av/ws", avH.ViewerWS)
+	r.GET("/app/av/ws", avH.ViewerWS)
 
 	internalH := rpchandler.NewVoiceHandler()
 	internal := r.Group("/internal")

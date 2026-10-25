@@ -596,6 +596,9 @@
   信息上传间隔、物联网卡卡号、经纬度位置（可跳转地图）。
 - **在线状态标识**：`online` 绿色、`offline` 灰色。
 - **只读**：移动端不提供设备新增/编辑/删除，配置类操作只在管理后台进行。
+- **视频通话**：设备卡片提供「通话」入口（`/iot/call`），进入后申请 role=app
+  的 ticket 并连 `/app/av/ws`；支持呼叫/接听/拒绝/挂断。
+- **离线推送**：App 启动后上报个推 CID；设备来电时若 App 不在线，服务端推送唤醒。
 - **上拉加载更多**。
 
 ### 8.2 接口列表
@@ -604,6 +607,10 @@
 |------|------|------|
 | GET | `/app/devices` | 设备分页列表 |
 | GET | `/app/devices/:id` | 设备详情 |
+| POST | `/app/av/devices/:id/call-ticket` | 通话 ticket（需已绑定设备） |
+| GET | `/app/av/ws?ticket=` | 通话/查看信令 WebSocket |
+| POST | `/app/push-tokens` | 注册个推 CID |
+| DELETE | `/app/push-tokens/:cid` | 注销个推 CID |
 
 ### 8.3 接口数据格式
 

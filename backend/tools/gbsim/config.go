@@ -65,7 +65,13 @@ type Config struct {
 	// —— 行为开关 ——
 	KeepaliveInterval time.Duration // Keepalive 心跳周期
 	RiskInterval      time.Duration // 预留：AI 风险上报周期（本批次未实现）
-	Verbose           bool          // 打印 SIP / MANSCDP 报文级日志
+	// AlarmInterval 国标报警上报周期（Notify/Alarm），0 表示不报。
+	AlarmInterval time.Duration
+	// PositionInterval 国标移动位置上报告周期（Notify/MobilePosition），0 表示不报。
+	PositionInterval time.Duration
+	// AlarmType 报警类型码：1 视频报警 / 2 设备报警 / 5 移动侦测等（GB/T 28181 附录）。
+	AlarmType string
+	Verbose   bool // 打印 SIP / MANSCDP 报文级日志
 
 	// Enable2022 是否应答 GB/T 28181-2022 查询。
 	// 默认 true（--2022=true）；设为 false 可模拟一台 2016 设备 ——
@@ -102,6 +108,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Expires <= 0 {
 		return fmt.Errorf("--expires 必须为正数秒：%d", c.Expires)
+	}
+	if c.AlarmInterval < 0 || c.PositionInterval < 0 {
+		return fmt.Errorf("--alarm-interval / --position-interval 不能为负")
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Transport)) {
 	case "udp":

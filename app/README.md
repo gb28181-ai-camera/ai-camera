@@ -388,6 +388,17 @@ radio = max(414 / 短边, 1)        ← 钳制为 1，即只缩不放
 - 真机 AEC/回声、首包延迟、iOS/Android 音频焦点未验证。
 - App 端只实现 PCM16；ESP32 的 Opus 由设备端与 Pipecat 协商。
 
+## 设备 ↔ App 视频通话（v0.6.0）
+
+- 入口：我的设备 → 通话图标；路由 `/iot/call?deviceId=...`。
+- 链路：`POST /app/av/devices/:id/call-ticket` → `/app/av/ws`；
+  信令 `invite/agree/reject/hangup` + `joinRoom/offer/answer/iceCandidate`。
+- 媒体：flutter_webrtc；设备是 offer 方，App answer；设备 offer 含 audio
+  m-line 时 App 自动接麦克风。
+- 实现：`lib/services/AppAvCallClient.dart`、`lib/pages/iot/app_call_page.dart`。
+- 离线推送：后端 `POST /app/push-tokens` 注册个推 CID；App 需集成个推 SDK
+  才能收到离线来电（当前仓库未打包厂商 SDK，属已知限制）。
+
 ---
 
 ## IOT 设备接入（v0.3.0）

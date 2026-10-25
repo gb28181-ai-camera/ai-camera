@@ -216,6 +216,19 @@ func (r *IotDeviceRepo) ExistsAccountUsername(ctx context.Context, username stri
 	return cnt > 0, nil
 }
 
+// ListPlatformUserIDsByDevice 返回设备绑定的平台用户（owner/shared）。
+//
+// 去重后用于离线推送：设备呼叫 App 时，所有认领过该设备的用户都可能需要通知。
+func (r *IotDeviceRepo) ListPlatformUserIDsByDevice(ctx context.Context, deviceID int64) ([]int64, error) {
+	var ids []int64
+	err := bootstrap.DB().WithContext(ctx).
+		Model(&model.IotDeviceAccount{}).
+		Where("device_id = ? AND platform_user_id IS NOT NULL AND status = ?", deviceID, "active").
+		Distinct().
+		Pluck("platform_user_id", &ids).Error
+	return ids, err
+}
+
 // GetAccountByPlatformUser 查询某平台用户在指定设备上的账号。
 //
 // 不按角色过滤：App 绑定后同一用户在同一设备上只应有一个账号，
@@ -223,7 +236,7 @@ func (r *IotDeviceRepo) ExistsAccountUsername(ctx context.Context, username stri
 func (r *IotDeviceRepo) GetAccountByPlatformUser(ctx context.Context, deviceID, userID int64) (*model.IotDeviceAccount, error) {
 	var m model.IotDeviceAccount
 	if err := bootstrap.DB().WithContext(ctx).
-		Where("device_id = ? AND platform_user_id = ?", deviceID, userID).
+		Where("device_id = ? AND platform_user_id = ? AND status = ?", deviceID, userID, "active").
 		Order("id ASC").
 		First(&m).Error; err != nil {
 		return nil, err

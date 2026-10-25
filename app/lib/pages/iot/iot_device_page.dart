@@ -188,6 +188,7 @@ class _IotDevicePageState extends State<IotDevicePage> {
         device: device,
         opening: _openingId == device.id,
         onTap: () => _openPlay(device),
+        onCall: () => _openCall(device),
         // 只有 owner 能分享（后端以 owner 为边界，shared 调用会 403），
         // 且当前只有适老化产品需要分享给家人；其余情况不渲染按钮。
         onShare: device.canShare ? () => _openShare(device) : null,
@@ -201,6 +202,12 @@ class _IotDevicePageState extends State<IotDevicePage> {
   Future<void> _openShare(IotDevice device) async {
     final String name = Uri.encodeComponent(device.name);
     await context.push<void>('/iot/share?deviceId=${device.id}&name=$name');
+  }
+
+  /// 打开设备 ↔ App 视频通话页。
+  Future<void> _openCall(IotDevice device) async {
+    final String name = Uri.encodeComponent(device.name);
+    await context.push<void>('/iot/call?deviceId=${device.id}&name=$name');
   }
 
   Widget _buildHeader() {
@@ -247,6 +254,7 @@ class IotDeviceCard extends StatelessWidget {
     super.key,
     required this.device,
     required this.onTap,
+    this.onCall,
     this.onShare,
     this.opening = false,
   });
@@ -256,6 +264,9 @@ class IotDeviceCard extends StatelessWidget {
 
   /// 点击卡片（进入实时播放）。
   final VoidCallback onTap;
+
+  /// 发起视频通话；为 null 时不渲染通话按钮。
+  final VoidCallback? onCall;
 
   /// 分享回调；为 null 时不渲染分享按钮。
   final VoidCallback? onShare;
@@ -339,35 +350,40 @@ class IotDeviceCard extends StatelessWidget {
               height: 18.dp,
               child: const CircularProgressIndicator(strokeWidth: 2),
             )
-          else if (onShare != null)
-            Column(
+          else
+            Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                TextButton(
-                  key: Key('iot-device-share-${device.id}'),
-                  style: TextButton.styleFrom(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: AppSpacing.sm,
-                      vertical: 0,
-                    ),
-                    minimumSize: Size(0, 30.dp),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                if (onCall != null)
+                  IconButton(
+                    key: Key('iot-device-call-${device.id}'),
+                    tooltip: '视频通话',
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 20.dp,
+                    color: AppColors.primary,
+                    onPressed: onCall,
+                    icon: const Icon(Icons.call_outlined),
                   ),
-                  onPressed: onShare,
-                  child: const Text('分享'),
-                ),
+                if (onShare != null)
+                  TextButton(
+                    key: Key('iot-device-share-${device.id}'),
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: AppSpacing.sm,
+                        vertical: 0,
+                      ),
+                      minimumSize: Size(0, 30.dp),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: onShare,
+                    child: const Text('分享'),
+                  ),
                 Icon(
                   Icons.play_circle_outline,
                   size: 22.dp,
                   color: AppColors.primary,
                 ),
               ],
-            )
-          else
-            Icon(
-              Icons.play_circle_outline,
-              size: 22.dp,
-              color: AppColors.primary,
             ),
         ],
       ),

@@ -98,12 +98,51 @@ func (h *AvRoomHandler) ViewerTicket(c *gin.Context) {
 		c.GetString("data_perm"),
 		c.GetString("cross_dept_ids"),
 		deviceID,
+		signalroom.RoleViewer,
 	)
 	if err != nil {
 		utils.BadRequest(c, err.Error())
 		return
 	}
 	resp.WsURL = wsURL(c, resp.WsURL)
+	utils.Success(c, resp)
+}
+
+// AppCallTicket App 通话 WS ticket
+//
+// @Summary      App 通话 ticket
+// @Description  App 已绑定设备时签发 role=app 的 60 秒一次性 ticket；用于设备 ↔ App 通话与查看画面
+// @Tags         AvRoom
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "设备ID"
+// @Success      200  {object}  response.RAvViewerTicket
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      401  {object}  response.BaseResponse
+// @Router       /app/av/devices/{id}/call-ticket [post]
+// @ID           createAppCallTicket
+func (h *AvRoomHandler) AppCallTicket(c *gin.Context) {
+	deviceID, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || deviceID <= 0 {
+		utils.BadRequest(c, "设备ID无效")
+		return
+	}
+	resp, err := h.svc.IssueTicket(
+		c.Request.Context(),
+		c.GetInt64("user_id"),
+		c.GetString("user_name"),
+		c.GetString("role_code"),
+		c.GetInt64("dept_id"),
+		c.GetString("data_perm"),
+		c.GetString("cross_dept_ids"),
+		deviceID,
+		signalroom.RoleApp,
+	)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	resp.WsURL = wsURL(c, "/app/av/ws")
 	utils.Success(c, resp)
 }
 
@@ -147,6 +186,10 @@ func (h *AvRoomHandler) ViewerWS(c *gin.Context) {
 		return
 	}
 
+	role := claims.Role
+	if role == "" {
+		role = signalroom.RoleViewer
+	}
 	viewer := &signalroom.Viewer{
 		ID:         claims.ClientID,
 		DeviceID:   info.Device.ID,
@@ -154,6 +197,7 @@ func (h *AvRoomHandler) ViewerWS(c *gin.Context) {
 		DeviceCode: info.Device.DeviceCode,
 		GroupCode:  info.GroupCode,
 		UserID:     claims.UserID,
+		Role:       role,
 	}
 	session := &avViewerSession{
 		conn:   conn,
@@ -182,7 +226,7 @@ func (h *AvRoomHandler) ViewerWS(c *gin.Context) {
 		RoomID:       viewer.RoomID,
 		DeviceCode:   viewer.DeviceCode,
 		ClientID:     viewer.ID,
-		Role:         signalroom.RoleViewer,
+		Role:         viewer.Role,
 		DeviceOnline: hub.DeviceOnline(viewer.RoomID),
 	})
 

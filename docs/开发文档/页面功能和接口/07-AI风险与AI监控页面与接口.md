@@ -48,6 +48,7 @@
 |------|------|------|
 | GET | `/web/risks` | 风险分页列表 |
 | GET | `/web/risks/pending-count` | 未处理风险数 |
+| GET | `/web/risks/summary` | 台账总览：总数/待处理/高风险/未读/准确分布/今日新增 |
 | GET | `/web/risks/:id` | 风险详情 |
 | PUT | `/web/risks/:id/read` | 标记消息通知已读 |
 | PUT | `/web/risks/:id/accurate` | 确认检测是否准确 |

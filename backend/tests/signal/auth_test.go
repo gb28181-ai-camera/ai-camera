@@ -92,6 +92,9 @@ func TestPlatformACL(t *testing.T) {
 	}{
 		{"订阅通配符", "subscribe", "iot/+/signal/backend", true},
 		{"订阅具体组", "subscribe", "iot/iot-webrtc-01/signal/backend", true},
+		{"订阅上报通配符", "subscribe", "iot/+/device/+/report", true},
+		{"订阅具体设备上报", "subscribe", "iot/webrtc/device/CAM_001/report", true},
+		{"订阅上报多一层", "subscribe", "iot/webrtc/device/CAM_001/report/extra", false},
 		{"订阅其他话题", "subscribe", "iot/g1/app/c1/signal", false},
 		{"订阅 #", "subscribe", "iot/#", false},
 		{"发布 answer", "publish", "iot/g1/app/flutter-1/signal", true},

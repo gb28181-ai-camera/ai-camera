@@ -1192,6 +1192,15 @@ INSERT INTO ac_alarm_type (id, active, sequence, name, code, level, description,
 SELECT 3, TRUE, 3, '流量告警', 'traffic', 'medium', '物联网卡流量低于阈值时告警', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_alarm_type WHERE code = 'traffic');
 
+-- 适老化智能相机：跌倒 / 一键呼救（MQTT 上报，v0.6.0）
+INSERT INTO ac_alarm_type (active, sequence, name, code, level, description, created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, 4, '跌倒告警', 'fall', 'high', '设备端跌倒检测触发', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_alarm_type WHERE code = 'fall');
+
+INSERT INTO ac_alarm_type (active, sequence, name, code, level, description, created_by, created_dt, updated_by, updated_dt)
+SELECT TRUE, 5, '一键呼救', 'sos', 'high', '用户按下 SOS 按键', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_alarm_type WHERE code = 'sos');
+
 INSERT INTO ac_device_mode (id, active, sequence, name, code, remark, created_by, created_dt, updated_by, updated_dt)
 SELECT 1, TRUE, 1, '充电模式', 'charging', '设备仅维持心跳与充电，关闭实时视频', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_device_mode WHERE code = 'charging');
@@ -3261,6 +3270,17 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/web/v
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 9709, 12632, 'POST', '/web/voice/memories/backfill', '历史记忆重建向量', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/web/voice/memories/backfill');
+
+-- App 实时音视频通话与离线推送（v0.6.0 适老化相机）
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9710, 109, 'POST', '/app/av/devices/:id/call-ticket', 'App 通话 ticket', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/app/av/devices/:id/call-ticket');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9711, 109, 'POST', '/app/push-tokens', '注册个推 CID', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/app/push-tokens');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9712, 109, 'DELETE', '/app/push-tokens/:cid', '注销个推 CID', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='DELETE' AND path='/app/push-tokens/:cid');
 
 -- AI风险 / 风险监控 的职责区分（页面标题同步）：
 --   AI风险   = 全局台账（含已处理历史 + 总览指标）；

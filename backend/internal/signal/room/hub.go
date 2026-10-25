@@ -2,6 +2,7 @@ package room
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +32,7 @@ type Publisher interface {
 // SendFunc 把消息推给查看方。返回 false 表示连接已关闭。
 type SendFunc func(msg *Message) bool
 
-// Viewer 是一路浏览器查看会话。
+// Viewer 是一路查看方会话（Web 预览或 App 通话）。
 type Viewer struct {
 	ID         string
 	DeviceID   int64
@@ -39,12 +40,15 @@ type Viewer struct {
 	DeviceCode string
 	GroupCode  string
 	UserID     int64
-	Send       SendFunc
+	// Role 取值 viewer（Web 预览）/ app（移动端通话）。
+	Role string
+	Send SendFunc
 }
 
 // Room 是一台设备的信令房间。
 type Room struct {
 	ID         string
+	DeviceID   int64
 	DeviceCode string
 	GroupCode  string
 
@@ -59,6 +63,10 @@ type Room struct {
 type Hub struct {
 	pub        Publisher
 	maxViewers int
+
+	// InviteOffline 在设备呼叫 App、但房间内没有在线 App 连接时调用。
+	// 由 main 注入推送实现；为 nil 时只记录日志。
+	InviteOffline func(room *Room, msg *Message)
 
 	mu      sync.RWMutex
 	rooms   map[string]*Room
@@ -96,11 +104,15 @@ func (h *Hub) Join(v *Viewer) (*Room, error) {
 	if room == nil {
 		room = &Room{
 			ID:         v.RoomID,
+			DeviceID:   v.DeviceID,
 			DeviceCode: v.DeviceCode,
 			GroupCode:  v.GroupCode,
 			viewers:    make(map[string]*Viewer),
 		}
 		h.rooms[v.RoomID] = room
+	}
+	if room.DeviceID == 0 && v.DeviceID > 0 {
+		room.DeviceID = v.DeviceID
 	}
 	if room.DeviceCode != "" && v.DeviceCode != "" && room.DeviceCode != v.DeviceCode {
 		return nil, ErrDeviceMismatch
@@ -140,12 +152,15 @@ func (h *Hub) ForwardFromViewer(viewerID string, msg *Message) error {
 	out.DeviceCode = room.DeviceCode
 	out.ClientID = viewerID
 	out.Role = RoleViewer
+	if h.viewerRole(viewerID) == RoleApp {
+		out.Role = RoleApp
+	}
 	if err := out.ValidateFromViewer(); err != nil {
 		return err
 	}
 
-	// answer / iceCandidate 明确发给设备客户端；joinRoom / leaveRoom 也带上，
-	// 设备端无需再猜发送者。
+	// answer / iceCandidate / 通话控制明确发给设备客户端；joinRoom / leaveRoom
+	// 也带上，设备端无需再猜发送者。
 	out.To = deviceClientID(room.DeviceCode)
 	if out.Type == TypeLeaveRoom && out.Reason == "" {
 		out.Reason = "viewer_left"
@@ -209,11 +224,17 @@ func (h *Hub) HandleDevice(topic string, payload []byte) (handled bool) {
 	room.deviceClientID = msg.ClientID
 	room.lastDeviceSeen = h.now()
 	targets := make([]*Viewer, 0, len(room.viewers))
-	for _, v := range room.viewers {
-		if msg.To != "" && v.ID != msg.To {
-			continue
+	if msg.Type == TypeInvite {
+		// 设备呼叫 App：只投给 App 连接，不投给 Web 预览页。
+		// to 支持："app"（所有在线 App）、"user:<id>"（指定用户）、具体 client_id。
+		targets = inviteTargets(room, msg.To)
+	} else {
+		for _, v := range room.viewers {
+			if msg.To != "" && v.ID != msg.To {
+				continue
+			}
+			targets = append(targets, v)
 		}
-		targets = append(targets, v)
 	}
 	room.mu.Unlock()
 
@@ -221,6 +242,15 @@ func (h *Hub) HandleDevice(topic string, payload []byte) (handled bool) {
 		room.mu.Lock()
 		room.deviceOnline = false
 		room.mu.Unlock()
+	}
+	if msg.Type == TypeInvite && len(targets) == 0 && h.InviteOffline != nil {
+		// 房间内没有 App 连接 → 交给推送实现（App 不在线/后台）。
+		// 传一份只读快照，避免推送 goroutine 与 Join/Leave 并发读写 Room。
+		snapshot := &Room{
+			ID: room.ID, DeviceID: room.DeviceID,
+			DeviceCode: room.DeviceCode, GroupCode: room.GroupCode,
+		}
+		go h.InviteOffline(snapshot, msg)
 	}
 
 	for _, v := range targets {
@@ -327,6 +357,48 @@ func (h *Hub) publishToDevice(room *Room, msg *Message) error {
 		zap.String("type", msg.Type),
 		zap.String("to", msg.To))
 	return nil
+}
+
+// viewerRole 返回查看方角色；未登记时按 Web viewer 处理。
+func (h *Hub) viewerRole(viewerID string) string {
+	h.mu.RLock()
+	room := h.viewers[viewerID]
+	h.mu.RUnlock()
+	if room == nil {
+		return RoleViewer
+	}
+	room.mu.RLock()
+	defer room.mu.RUnlock()
+	if v := room.viewers[viewerID]; v != nil && v.Role != "" {
+		return v.Role
+	}
+	return RoleViewer
+}
+
+// inviteTargets 选出设备呼叫应投递的 App 连接。调用方必须持有 room.mu。
+func inviteTargets(room *Room, to string) []*Viewer {
+	to = strings.TrimSpace(to)
+	if to != "" && to != RoleApp && !strings.HasPrefix(to, "user:") {
+		if v := room.viewers[to]; v != nil && (v.Role == RoleApp || v.Role == "") {
+			return []*Viewer{v}
+		}
+		return nil
+	}
+	var userID int64
+	if strings.HasPrefix(to, "user:") {
+		userID, _ = strconv.ParseInt(strings.TrimPrefix(to, "user:"), 10, 64)
+	}
+	out := make([]*Viewer, 0, len(room.viewers))
+	for _, v := range room.viewers {
+		if v.Role != RoleApp {
+			continue
+		}
+		if userID > 0 && v.UserID != userID {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 func deviceClientID(deviceCode string) string {

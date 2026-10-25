@@ -18,6 +18,7 @@ import '../pages/inspect/inspect_task_detail_page.dart';
 import '../pages/inspect/inspect_task_list_page.dart';
 import '../pages/iot/add_device_page.dart';
 import '../pages/iot/ble_provision_page.dart';
+import '../pages/iot/app_call_page.dart';
 import '../pages/iot/iot_device_page.dart';
 import '../pages/iot/scan_claim_page.dart';
 import '../pages/iot/share_device_page.dart';
@@ -273,6 +274,19 @@ class AppRouter {
                 ) ??
                 0,
             deviceName: state.uri.queryParameters['name'] ?? '',
+          ),
+        ),
+
+        // 设备 ↔ App 视频通话（WebRTC over WS/MQTT）。
+        GoRoute(
+          path: '/iot/call',
+          name: 'iotCall',
+          builder: (BuildContext context, GoRouterState state) => AppCallPage(
+            deviceId: int.tryParse(
+                  state.uri.queryParameters['deviceId'] ?? '',
+                ) ??
+                0,
+            deviceName: state.uri.queryParameters['name'] ?? '设备通话',
           ),
         ),
 

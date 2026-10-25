@@ -56,6 +56,8 @@ const (
 	AlarmCodeOffline = "offline" // 离线告警
 	AlarmCodeBattery = "battery" // 电量告警
 	AlarmCodeTraffic = "traffic" // 流量告警
+	AlarmCodeFall    = "fall"    // 跌倒告警（适老化相机）
+	AlarmCodeSOS     = "sos"     // 一键呼救（适老化相机）
 )
 
 // 风险/告警等级常量。

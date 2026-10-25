@@ -94,6 +94,9 @@ func parseFlags(args []string, out io.Writer) (*Config, error) {
 	fs.StringVar(&cfg.Transport, "transport", defaultTransport, "信令传输：udp / tcp（tcp 只由 client 长连接 dial 出去，不监听本地端口）")
 	fs.IntVar(&cfg.Expires, "expires", defaultExpires, "注册有效期（秒）")
 	fs.DurationVar(&cfg.KeepaliveInterval, "keepalive", defaultKeepalive, "Keepalive 心跳发送周期")
+	fs.DurationVar(&cfg.AlarmInterval, "alarm-interval", 0, "国标报警上报周期（Notify/Alarm），0=不报；建议 30s 验证落库")
+	fs.DurationVar(&cfg.PositionInterval, "position-interval", 0, "国标移动位置上报周期（Notify/MobilePosition），0=不报；建议 10s")
+	fs.StringVar(&cfg.AlarmType, "alarm-type", "5", "国标报警类型码（默认 5=移动侦测）")
 	fs.DurationVar(&riskEvery, "risk-interval", defaultRiskInterval, "AI 风险上报周期（⚠️ 本批次尚未实现，仅接受参数）")
 	fs.BoolVar(&cfg.Verbose, "verbose", false, "输出 SIP / MANSCDP 报文级日志")
 	fs.BoolVar(&cfg.Enable2022, "2022", true, "应答 GB28181-2022 查询（精准位置/巡航轨迹/看守位/存储卡）；false 模拟 2016 设备不应答")
@@ -224,6 +227,12 @@ func run(cfg *Config) error {
 	if cfg.RiskInterval > 0 {
 		logger.Warn("--risk-interval 已接受但本批次尚未实现 AI 风险上报，参数暂不生效",
 			"risk_interval", cfg.RiskInterval.String())
+	}
+	if cfg.AlarmInterval > 0 {
+		go alarmLoop(ctx, ua, cfg, logger)
+	}
+	if cfg.PositionInterval > 0 {
+		go positionLoop(ctx, ua, cfg, logger)
 	}
 
 	logger.Info("gbsim 已就绪，Ctrl+C 退出",
@@ -375,6 +384,64 @@ func keepaliveLoop(ctx context.Context, ua *sipua.UA, cfg *Config, logger *slog.
 			}
 			if _, err := ua.SendMessage(ctx, body); err != nil {
 				logger.Error("发送 Keepalive 失败", "error", err)
+			}
+		}
+	}
+}
+
+// alarmLoop 周期性上报国标报警（Notify/Alarm）。
+func alarmLoop(ctx context.Context, ua *sipua.UA, cfg *Config, logger *slog.Logger) {
+	ticker := time.NewTicker(cfg.AlarmInterval)
+	defer ticker.Stop()
+	var sn atomic.Int64
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			body, err := manscdp.Encode(&manscdp.Alarm{
+				CmdType: "Alarm", SN: nextSN(&sn), DeviceID: cfg.DeviceID,
+				AlarmPriority: "1", AlarmMethod: cfg.AlarmType,
+				AlarmTime:        time.Now().Format("2006-01-02T15:04:05"),
+				AlarmDescription: "模拟移动侦测报警",
+				Longitude:        120.1693, Latitude: 30.2741,
+			}, cfg.Charset)
+			if err != nil {
+				logger.Error("构造 Alarm 报文失败", "error", err)
+				continue
+			}
+			if _, err := ua.SendMessage(ctx, body); err != nil {
+				logger.Error("发送 Alarm 失败", "error", err)
+			} else {
+				logger.Info("已上报国标报警", "alarm_type", cfg.AlarmType)
+			}
+		}
+	}
+}
+
+// positionLoop 周期性上报移动位置（Notify/MobilePosition）。
+func positionLoop(ctx context.Context, ua *sipua.UA, cfg *Config, logger *slog.Logger) {
+	ticker := time.NewTicker(cfg.PositionInterval)
+	defer ticker.Stop()
+	var sn atomic.Int64
+	for i := 0; ; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			body, err := manscdp.Encode(&manscdp.MobilePosition{
+				CmdType: "MobilePosition", SN: nextSN(&sn), DeviceID: cfg.DeviceID,
+				Time:      time.Now().Format("2006-01-02T15:04:05"),
+				Longitude: 120.1693 + float64(i%10)*0.0001,
+				Latitude:  30.2741 + float64(i%10)*0.0001,
+				Speed:     float64(1 + i%5), Direction: float64((i * 30) % 360), Altitude: 10,
+			}, cfg.Charset)
+			if err != nil {
+				logger.Error("构造 MobilePosition 报文失败", "error", err)
+				continue
+			}
+			if _, err := ua.SendMessage(ctx, body); err != nil {
+				logger.Error("发送 MobilePosition 失败", "error", err)
 			}
 		}
 	}

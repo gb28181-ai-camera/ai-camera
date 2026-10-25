@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakePublisher struct {
@@ -197,5 +198,78 @@ func TestLeaveViewerNotifiesDevice(t *testing.T) {
 	rooms, viewers := hub.Stats()
 	if rooms != 0 || viewers != 0 {
 		t.Fatalf("空房间应回收，实际 rooms=%d viewers=%d", rooms, viewers)
+	}
+}
+
+func TestDeviceInviteRoutesToAppOnly(t *testing.T) {
+	hub := NewHub(&fakePublisher{})
+	web, fw := newViewer("viewer-1", "CAM_001")
+	app, fa := newViewer("app-1", "CAM_001")
+	app.Role = RoleApp
+	if _, err := hub.Join(web); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Join(app); err != nil {
+		t.Fatal(err)
+	}
+
+	invite := deviceMessage(t, `{"type":"invite","room_id":"CAM_001","device_code":"CAM_001","client_id":"device-CAM_001","to":"app","call_id":"c1","media_type":"video"}`)
+	if !hub.HandleDevice("iot/webrtc/signal/backend", invite) {
+		t.Fatal("invite 未被识别")
+	}
+	if fw.count() != 0 {
+		t.Fatalf("Web 预览不应收到来电，实际 %d", fw.count())
+	}
+	if fa.count() != 1 {
+		t.Fatalf("App 应收到来电，实际 %d", fa.count())
+	}
+	fa.mu.Lock()
+	got := fa.msgs[0]
+	fa.mu.Unlock()
+	if got.Type != TypeInvite || got.CallID != "c1" {
+		t.Fatalf("来电内容不对: %+v", got)
+	}
+}
+
+func TestDeviceInviteOfflinePush(t *testing.T) {
+	hub := NewHub(&fakePublisher{})
+	called := make(chan *Message, 1)
+	hub.InviteOffline = func(_ *Room, msg *Message) { called <- msg }
+
+	invite := deviceMessage(t, `{"type":"invite","room_id":"CAM_001","device_code":"CAM_001","client_id":"device-CAM_001","to":"app","call_id":"c2"}`)
+	if !hub.HandleDevice("iot/webrtc/signal/backend", invite) {
+		t.Fatal("invite 未被识别")
+	}
+	select {
+	case msg := <-called:
+		if msg.CallID != "c2" {
+			t.Fatalf("call_id=%q", msg.CallID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("无在线 App 时应触发离线推送回调")
+	}
+}
+
+func TestViewerInviteAndAgree(t *testing.T) {
+	pub := &fakePublisher{}
+	hub := NewHub(pub)
+	app, _ := newViewer("app-1", "CAM_001")
+	app.Role = RoleApp
+	if _, err := hub.Join(app); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.ForwardFromViewer("app-1", &Message{Type: TypeInvite, CallID: "c3", MediaType: "video"}); err != nil {
+		t.Fatalf("App 发 invite 失败: %v", err)
+	}
+	_, msg, ok := pub.last()
+	if !ok || msg.Type != TypeInvite || msg.Role != RoleApp || msg.CallID != "c3" {
+		t.Fatalf("invite 转发错误: %+v", msg)
+	}
+	if err := hub.ForwardFromViewer("app-1", &Message{Type: TypeAgree, CallID: "c3"}); err != nil {
+		t.Fatalf("App 发 agree 失败: %v", err)
+	}
+	_, msg, _ = pub.last()
+	if msg.Type != TypeAgree || msg.CallID != "c3" {
+		t.Fatalf("agree 转发错误: %+v", msg)
 	}
 }

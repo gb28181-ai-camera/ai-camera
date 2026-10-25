@@ -48,6 +48,8 @@ type signalMessage struct {
 	ClientID   string        `json:"client_id,omitempty"`
 	To         string        `json:"to,omitempty"`
 	Role       string        `json:"role,omitempty"`
+	CallID     string        `json:"call_id,omitempty"`
+	MediaType  string        `json:"media_type,omitempty"`
 	SDP        string        `json:"sdp,omitempty"`
 	SDPType    string        `json:"sdp_type,omitempty"`
 	Candidate  *iceCandidate `json:"candidate,omitempty"`
@@ -70,18 +72,21 @@ type peer struct {
 }
 
 type simulator struct {
-	broker     string
-	username   string
-	password   string
-	groupCode  string
-	deviceCode string
-	streamFile string
-	fps        int
-	stunURLs   string
-	turnURL    string
-	turnUser   string
-	turnPass   string
-	verbose    bool
+	broker         string
+	username       string
+	password       string
+	groupCode      string
+	deviceCode     string
+	streamFile     string
+	fps            int
+	reportInterval time.Duration
+	inviteAfter    time.Duration
+	inviteUser     string
+	stunURLs       string
+	turnURL        string
+	turnUser       string
+	turnPass       string
+	verbose        bool
 
 	client   paho.Client
 	pubTopic string
@@ -102,6 +107,9 @@ func main() {
 	flag.StringVar(&sim.deviceCode, "device-code", "CAM_001", "设备编号（房间 ID）")
 	flag.StringVar(&sim.streamFile, "stream-file", "tools/gbsim/testdata/sample.h264", "H.264 Annex-B 文件")
 	flag.IntVar(&sim.fps, "fps", 25, "推流帧率")
+	flag.DurationVar(&sim.reportInterval, "report-interval", 0, "MQTT 业务上报周期（电量/位置/告警），0=不报")
+	flag.DurationVar(&sim.inviteAfter, "invite-after", 0, "启动后多久向 App 发起呼叫（验证 invite/离线推送），0=不发起")
+	flag.StringVar(&sim.inviteUser, "invite-to", "app", "呼叫目标：app / user:<id> / 具体 client_id")
 	flag.StringVar(&sim.stunURLs, "stun", "stun:127.0.0.1:3478", "STUN 地址，逗号分隔")
 	flag.StringVar(&sim.turnURL, "turn-url", "", "TURN 地址，例如 turn:127.0.0.1:3478?transport=udp")
 	flag.StringVar(&sim.turnUser, "turn-user", "", "TURN 用户名（可选）")
@@ -157,6 +165,22 @@ func main() {
 		ClientID: "device-" + sim.deviceCode, Role: "device",
 	})
 
+	if sim.reportInterval > 0 {
+		go sim.reportLoop()
+	}
+	if sim.inviteAfter > 0 {
+		go func() {
+			time.Sleep(sim.inviteAfter)
+			log.Printf("向 %s 发起呼叫", sim.inviteUser)
+			sim.publish(&signalMessage{
+				Type: "invite", RoomID: sim.deviceCode, DeviceCode: sim.deviceCode,
+				ClientID: "device-" + sim.deviceCode, To: sim.inviteUser,
+				Role: "device", CallID: "device-call-" + time.Now().Format("150405"),
+				MediaType: "video",
+			})
+		}()
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -208,6 +232,16 @@ func (s *simulator) onCommand(_ paho.Client, msg paho.Message) {
 		s.handleCandidate(m)
 	case "leaveRoom":
 		s.handleLeave(m)
+	case "invite":
+		// App 呼叫设备：模拟器自动同意，随后等 App 发 joinRoom 再发 offer。
+		log.Printf("收到来电 call_id=%s from=%s media=%s", m.CallID, m.ClientID, m.MediaType)
+		s.publish(&signalMessage{
+			Type: "agree", RoomID: s.deviceCode, DeviceCode: s.deviceCode,
+			ClientID: "device-" + s.deviceCode, To: m.ClientID, Role: "device",
+			CallID: m.CallID, MediaType: m.MediaType,
+		})
+	case "agree", "reject", "hangup":
+		log.Printf("通话控制 type=%s call_id=%s from=%s reason=%s", m.Type, m.CallID, m.ClientID, m.Reason)
 	case "offer":
 		// 当前角色固定为 offer 方，收到 offer 说明对端角色配置反了。
 		log.Printf("忽略来自查看方的 offer（设备应为 offer 方）")
@@ -395,6 +429,60 @@ func (s *simulator) publish(m *signalMessage) {
 	if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
 		log.Printf("发布失败: %v", tok.Error())
 	}
+}
+
+// reportLoop 周期上报电量/位置，每 6 个周期补一条跌倒告警。
+func (s *simulator) reportLoop() {
+	topic := fmt.Sprintf("iot/%s/device/%s/report", s.groupCode, s.deviceCode)
+	ticker := time.NewTicker(s.reportInterval)
+	defer ticker.Stop()
+	for i := 0; ; i++ {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			battery := 88 - (i % 20)
+			base := map[string]interface{}{
+				"device_code": s.deviceCode,
+				"ts":          now.Unix(),
+			}
+			s.publishReport(topic, merge(base, map[string]interface{}{
+				"type": "battery", "battery": battery, "voltage": "12.4", "storage_free": 5120,
+			}))
+			s.publishReport(topic, merge(base, map[string]interface{}{
+				"type": "position", "longitude": 120.1693 + float64(i%10)*0.0001,
+				"latitude": 30.2741 + float64(i%10)*0.0001,
+				"speed":    float64(1 + i%5), "direction": float64((i * 30) % 360), "altitude": 10,
+			}))
+			if i > 0 && i%6 == 0 {
+				s.publishReport(topic, merge(base, map[string]interface{}{
+					"type": "alarm", "alarm_type_code": "fall", "alarm_level": "high",
+					"content": "模拟跌倒告警", "occurred_dt": now.Format("2006-01-02 15:04:05"),
+				}))
+			}
+		}
+	}
+}
+
+func (s *simulator) publishReport(topic string, payload map[string]interface{}) {
+	raw, _ := json.Marshal(payload)
+	tok := s.client.Publish(topic, 1, false, raw)
+	if !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		log.Printf("上报发布失败: %v", tok.Error())
+	}
+	if s.verbose {
+		log.Printf("↑ %s %s", topic, raw)
+	}
+}
+
+func merge(a, b map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
 }
 
 func (s *simulator) closeAll() {

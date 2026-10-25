@@ -59,6 +59,17 @@ func (r *IotServiceGroupRepo) GetByID(ctx context.Context, id int64) (*model.Iot
 	return &m, nil
 }
 
+// GetByCode 按服务组编码查询。
+func (r *IotServiceGroupRepo) GetByCode(ctx context.Context, code string) (*model.IotServiceGroup, error) {
+	var m model.IotServiceGroup
+	if err := bootstrap.DB().WithContext(ctx).
+		Where("code = ?", strings.TrimSpace(code)).
+		First(&m).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 // ListServices 查询服务组下的服务。
 func (r *IotServiceGroupRepo) ListServices(ctx context.Context, groupID int64) ([]model.IotService, error) {
 	var items []model.IotService

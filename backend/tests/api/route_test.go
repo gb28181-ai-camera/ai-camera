@@ -309,6 +309,11 @@ var contractVoiceRoutes = []string{
 	"GET /web/av/devices",
 	"POST /web/av/devices/:id/viewer-ticket",
 	"GET /web/av/ws",
+	// App 通话与离线推送
+	"POST /app/av/devices/:id/call-ticket",
+	"GET /app/av/ws",
+	"POST /app/push-tokens",
+	"DELETE /app/push-tokens/:cid",
 }
 
 // contractRoutes 契约 §3 列出的全部端点，格式 "METHOD /path"。

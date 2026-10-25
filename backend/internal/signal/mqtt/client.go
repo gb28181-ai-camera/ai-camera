@@ -132,49 +132,65 @@ func NewClient(cfg Config, handler Handler) (*Client, error) {
 				zap.String("broker", cfg.BrokerURL),
 				zap.String("client_id", cfg.ClientID))
 			// 订阅必须在 OnConnect 里重建：clean session + 自动重连后旧订阅已失效。
-			tok := pc.Subscribe(BackendTopicFilter, DefaultQoS, func(_ paho.Client, m paho.Message) {
-				c.handler(m.Topic(), m.Payload())
-			})
-			if !tok.WaitTimeout(subscribeTimeout) {
-				utils.Error("MQTT 信令订阅超时", zap.String("topic", BackendTopicFilter))
-				return
+			// 两个话题：房间/点播信令 + 设备业务上报。
+			for _, filter := range []string{BackendTopicFilter, ReportTopicFilter} {
+				tok := pc.Subscribe(filter, DefaultQoS, func(_ paho.Client, m paho.Message) {
+					c.handler(m.Topic(), m.Payload())
+				})
+				if !tok.WaitTimeout(subscribeTimeout) {
+					utils.Error("MQTT 信令订阅超时", zap.String("topic", filter))
+					return
+				}
+				if err := tok.Error(); err != nil {
+					utils.Error("MQTT 信令订阅失败", zap.String("topic", filter), zap.Error(err))
+					return
+				}
+				utils.Info("MQTT 信令订阅成功", zap.String("topic", filter))
 			}
-			if err := tok.Error(); err != nil {
-				utils.Error("MQTT 信令订阅失败",
-					zap.String("topic", BackendTopicFilter), zap.Error(err))
-				return
-			}
-			utils.Info("MQTT 信令订阅成功", zap.String("topic", BackendTopicFilter))
 		})
 
 	c.client = paho.NewClient(opts)
 	return c, nil
 }
 
-// Start 发起连接。
+// Start 发起连接，并在首次失败后持续重试。
 //
-// 初次连接失败不返回致命错误：paho 会在后台持续重试（ConnectRetry），
-// 调用方只需记 warning。配置错误（token/broker 为空）已在 NewClient 拦截。
+// 为什么不能只依赖 paho 的 ConnectRetry：后端与 broker 同时启动时，
+// 首次 CONNECT 的鉴权回调会打到尚未开始 listen 的 HTTP 端口，
+// 被 fail-closed 拒绝；paho 的 ConnectRetry 只覆盖部分失败路径，
+// 实测会停在「未连接」状态。这里用显式循环保证最终连上。
+//
+// 连接成功后的断线由 paho 的 AutoReconnect 处理；OnConnect 会重建订阅。
 func (c *Client) Start(ctx context.Context) error {
 	if c == nil || c.client == nil {
 		return errors.New("MQTT 客户端未初始化")
 	}
-	tok := c.client.Connect()
-	if !tok.WaitTimeout(connectTimeout) {
-		utils.Warn("MQTT 信令初次连接超时，将在后台重试",
-			zap.String("broker", c.cfg.BrokerURL))
-		return nil
-	}
-	if err := tok.Error(); err != nil {
-		utils.Warn("MQTT 信令初次连接失败，将在后台重试",
-			zap.String("broker", c.cfg.BrokerURL), zap.Error(err))
-		return nil
-	}
-	// 连接成功时 OnConnect 已同步完成订阅；这里只确认 ctx 未取消。
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+	go c.connectLoop(ctx)
 	return nil
+}
+
+func (c *Client) connectLoop(ctx context.Context) {
+	for {
+		if c.client.IsConnectionOpen() {
+			return
+		}
+		tok := c.client.Connect()
+		if !tok.WaitTimeout(connectTimeout) {
+			utils.Warn("MQTT 信令连接超时，5 秒后重试",
+				zap.String("broker", c.cfg.BrokerURL))
+		} else if err := tok.Error(); err != nil {
+			utils.Warn("MQTT 信令连接失败，5 秒后重试",
+				zap.String("broker", c.cfg.BrokerURL), zap.Error(err))
+		} else if c.client.IsConnectionOpen() {
+			// OnConnect 已同步完成订阅。
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
 }
 
 // Publish 发布一条消息，实现 Publisher。
@@ -198,7 +214,7 @@ func (c *Client) Close() {
 		return
 	}
 	if c.client.IsConnectionOpen() {
-		tok := c.client.Unsubscribe(BackendTopicFilter)
+		tok := c.client.Unsubscribe(BackendTopicFilter, ReportTopicFilter)
 		tok.WaitTimeout(time.Second)
 	}
 	c.client.Disconnect(disconnectQuiesce)

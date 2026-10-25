@@ -50,6 +50,7 @@ type Service struct {
 	devices  *repository.DeviceRepo
 	products *repository.IotProductRepo
 	groups   *repository.IotServiceGroupRepo
+	accounts *repository.IotDeviceRepo
 	turn     *turn.Service
 }
 
@@ -59,6 +60,7 @@ func NewService() *Service {
 		devices:  repository.NewDeviceRepo(),
 		products: repository.NewIotProductRepo(),
 		groups:   repository.NewIotServiceGroupRepo(),
+		accounts: repository.NewIotDeviceRepo(),
 		turn:     turn.New(),
 	}
 }
@@ -75,6 +77,29 @@ func (s *Service) Resolve(ctx context.Context, deviceID int64, ds *utils.DataSco
 	if err != nil {
 		return nil, errors.New("设备不存在或无权访问")
 	}
+	return s.resolveInfo(ctx, dev)
+}
+
+// ResolveApp 校验 App 当前用户是否已认领/绑定该设备。
+//
+// App 的设备可见性以 ac_iot_device_account.platform_user_id 为准，
+// 与 Web 的部门数据权限是两套模型；不能直接复用 DataScope。
+func (s *Service) ResolveApp(ctx context.Context, userID, deviceID int64) (*RoomInfo, error) {
+	if userID <= 0 || deviceID <= 0 {
+		return nil, errors.New("用户或设备ID无效")
+	}
+	if _, err := s.accounts.GetAccountByPlatformUser(ctx, deviceID, userID); err != nil {
+		return nil, errors.New("设备未绑定到当前用户")
+	}
+	dev, err := s.devices.GetByID(ctx, deviceID)
+	if err != nil {
+		return nil, errors.New("设备不存在")
+	}
+	return s.resolveInfo(ctx, dev)
+}
+
+// resolveInfo 校验设备/产品/服务组配置，返回房间信息。
+func (s *Service) resolveInfo(ctx context.Context, dev *model.Device) (*RoomInfo, error) {
 	if dev.Active != nil && !*dev.Active {
 		return nil, ErrDeviceInactive
 	}
@@ -124,9 +149,16 @@ func (s *Service) Resolve(ctx context.Context, deviceID int64, ds *utils.DataSco
 }
 
 // IssueTicket 为当前用户签发查看方 ticket。
-func (s *Service) IssueTicket(ctx context.Context, userID int64, userName, roleCode string, deptID int64, dataPerm, crossDeptIDs string, deviceID int64) (*response.AvViewerTicketResp, error) {
+func (s *Service) IssueTicket(ctx context.Context, userID int64, userName, roleCode string, deptID int64, dataPerm, crossDeptIDs string, deviceID int64, role string) (*response.AvViewerTicketResp, error) {
 	if signalroom.DefaultHub() == nil {
 		return nil, ErrSignalNotReady
+	}
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "" {
+		role = signalroom.RoleViewer
+	}
+	if role != signalroom.RoleViewer && role != signalroom.RoleApp {
+		return nil, errors.New("role 仅支持 viewer/app")
 	}
 	ds := &utils.DataScope{
 		UserID: userID, UserName: userName, DataPerm: dataPerm,
@@ -135,12 +167,24 @@ func (s *Service) IssueTicket(ctx context.Context, userID int64, userName, roleC
 	if deptID > 0 {
 		ds.DeptID = &deptID
 	}
-	info, err := s.Resolve(ctx, deviceID, ds)
+	var (
+		info *RoomInfo
+		err  error
+	)
+	if role == signalroom.RoleApp {
+		info, err = s.ResolveApp(ctx, userID, deviceID)
+	} else {
+		info, err = s.Resolve(ctx, deviceID, ds)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	clientID, err := randomID("viewer-", 8)
+	prefix := "viewer-"
+	if role == signalroom.RoleApp {
+		prefix = "app-"
+	}
+	clientID, err := randomID(prefix, 8)
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +199,7 @@ func (s *Service) IssueTicket(ctx context.Context, userID int64, userName, roleC
 		DeviceID:     info.Device.ID,
 		ClientID:     clientID,
 		Kind:         TicketKind,
+		Role:         role,
 	})
 	if err != nil {
 		return nil, err
@@ -169,6 +214,7 @@ func (s *Service) IssueTicket(ctx context.Context, userID int64, userName, roleC
 		DeviceCode:   info.Device.DeviceCode,
 		DeviceName:   info.Device.Name,
 		ClientID:     clientID,
+		Role:         role,
 		GroupCode:    info.GroupCode,
 		DeviceOnline: signalroom.DefaultHub().DeviceOnline(info.RoomID),
 		IceServers:   s.iceServers(userID),
