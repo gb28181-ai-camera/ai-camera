@@ -745,3 +745,42 @@ func TestIT_RiskFalsePositive(t *testing.T) {
 		}
 	})
 }
+
+// TestRiskService_Summary 总览指标与列表同口径（总数/待处理/高风险/未复核/未读）。
+func TestRiskService_Summary(t *testing.T) {
+	testutil.WithTx(t, func(ctx context.Context, tx *gorm.DB) {
+		ctx = testCtx()
+		svc := svcrisk.NewRiskService()
+		f := newRiskFixture(t, ctx, model.LevelHigh)
+
+		before, err := svc.Summary(ctx, dsAll())
+		if err != nil {
+			t.Fatalf("读取总览失败: %v", err)
+		}
+		for i := 0; i < 3; i++ {
+			reportRisk(t, ctx, f, 0.8)
+		}
+		after, err := svc.Summary(ctx, dsAll())
+		if err != nil {
+			t.Fatalf("读取总览失败: %v", err)
+		}
+		if after.Total != before.Total+3 {
+			t.Errorf("total = %d, 期望 %d", after.Total, before.Total+3)
+		}
+		if after.Pending != before.Pending+3 {
+			t.Errorf("pending = %d, 期望 %d", after.Pending, before.Pending+3)
+		}
+		if after.High != before.High+3 {
+			t.Errorf("high = %d, 期望 %d", after.High, before.High+3)
+		}
+		if after.Unconfirmed != before.Unconfirmed+3 {
+			t.Errorf("unconfirmed = %d, 期望 %d", after.Unconfirmed, before.Unconfirmed+3)
+		}
+		if after.Unread != before.Unread+3 {
+			t.Errorf("unread = %d, 期望 %d", after.Unread, before.Unread+3)
+		}
+		if after.Today < 3 {
+			t.Errorf("today = %d, 期望至少 3", after.Today)
+		}
+	})
+}

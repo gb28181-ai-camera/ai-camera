@@ -310,6 +310,51 @@ services:
       - "${PIPECAT_PORT:-8090}:8090"
     expose:
       - "8090"
+    volumes:
+      # 离线 STT 模型（faster-whisper / CTranslate2）。有网络时可留空，
+      # 让 faster-whisper 自行下载；内网部署把模型放这里，stt_model 填路径。
+      - whisper_models:/models
+    networks: [ai-camera]
+
+  # 本地 Embedding 服务（OpenAI-compatible /v1/embeddings）。
+  #
+  # 为什么需要它：长期记忆的语义检索必须有向量，而 Go 侧没有可靠的
+  # ONNX 推理栈。独立进程 + 标准协议，云端 provider 与本地模型可无缝切换。
+  #
+  # 用法：
+  #   docker compose --profile voice up -d embedding
+  # 后台「语音 Agent → 记忆」的 Embedding 端点填：
+  #   宿主机后端：http://127.0.0.1:8091/v1
+  #   compose full：http://embedding:8091/v1
+  #
+  # 模型默认 intfloat/multilingual-e5-large（1024 维，中英文），首次启动
+  # 会下载到 embedding_models 卷；下载期间 /health 返回 status=loading。
+  embedding:
+    profiles: [voice]
+    build:
+      context: ./deploy/embedding
+    image: ai-camera-embedding:latest
+    container_name: ai-camera-embedding
+    restart: unless-stopped
+    environment:
+      EMBEDDING_MODEL: ${VOICE_EMBEDDING_MODEL:-BAAI/bge-m3}
+      # 离线 ONNX 目录（挂载卷内）。下载命令见 deploy/embedding/README.md：
+      #   curl -L .../BAAI/bge-m3/resolve/master/onnx/<file> -o /data/models/bge-m3/<file>
+      EMBEDDING_MODEL_DIR: /data/models/bge-m3
+      EMBEDDING_DIM: ${VOICE_EMBEDDING_DIM:-1024}
+      EMBEDDING_CACHE_DIR: /data/models
+      EMBEDDING_PRELOAD: "true"
+      TZ: Asia/Shanghai
+    ports:
+      - "${EMBEDDING_PORT:-8091}:8091"
+    volumes:
+      - embedding_models:/data/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
     networks: [ai-camera]
 
   # IOT MQTT broker（mochi-mqtt）。鉴权与 ACL 全部通过 RPC 回后端，
@@ -394,6 +439,8 @@ volumes:
   redisdata:
   uploads:
   zlmrecord:               # v0.2.0：云端录像落盘
+  embedding_models:        # v0.6.0：本地 Embedding 模型缓存
+  whisper_models:          # v0.6.0：离线 faster-whisper 模型
 
 networks:
   ai-camera:

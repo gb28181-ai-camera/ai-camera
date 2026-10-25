@@ -82,6 +82,52 @@ func (h *VoiceWsHandler) WsTicket(c *gin.Context) {
 	})
 }
 
+// TestEmbedding 测试当前 Embedding 配置
+//
+// @Summary      测试 Embedding 服务
+// @Description  用当前配置真实调用一次 /v1/embeddings，返回模型、维度与耗时；未配置端点时 success=false
+// @Tags         VoiceAgent
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  response.RVoiceEmbeddingTest
+// @Failure      400  {object}  response.BaseResponse
+// @Router       /web/voice/embedding/test [post]
+// @ID           testVoiceEmbedding
+func (h *VoiceWsHandler) TestEmbedding(c *gin.Context) {
+	resp, err := h.admin.TestEmbedding(c.Request.Context())
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.Success(c, resp)
+}
+
+// BackfillEmbeddings 为历史记忆重建向量
+//
+// @Summary      历史记忆重建向量
+// @Description  分批为 embedding 为空/非 ok 的记忆生成向量并写入 pgvector；返回本次处理、成功、失败与剩余量
+// @Tags         VoiceAgent
+// @Accept       json
+// @Produce      json
+// @Param        body  body      request.VoiceEmbeddingBackfillReq  false  "批量参数"
+// @Success      200   {object}  response.RVoiceEmbeddingBackfill
+// @Failure      400   {object}  response.BaseResponse
+// @Router       /web/voice/memories/backfill [post]
+// @ID           backfillVoiceMemoryEmbeddings
+func (h *VoiceWsHandler) BackfillEmbeddings(c *gin.Context) {
+	var req request.VoiceEmbeddingBackfillReq
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	resp, err := h.admin.BackfillEmbeddings(c.Request.Context(), req.Limit)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.Success(c, resp)
+}
+
 // PageMemories 记忆列表
 //
 // @Summary      语音记忆列表

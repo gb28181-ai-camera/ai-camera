@@ -138,6 +138,12 @@ func (b *Bridge) Handle(topic string, payload []byte) {
 		return
 	}
 
+	// 房间信令（设备 ↔ 查看方）由 internal/signal/room 处理，本桥只负责
+	// App → 后端 → ZLM 的 WHEP 协商；两条链路共用同一个 broker 话题。
+	if msg.RoomID != "" {
+		return
+	}
+
 	// 无论后续成功与否，同一 request_id 只处理一次、只回一次。
 	if msg.RequestID != "" {
 		if !b.markSeen(msg.RequestID) {

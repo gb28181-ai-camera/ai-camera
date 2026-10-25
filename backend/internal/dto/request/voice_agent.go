@@ -89,6 +89,12 @@ type UpdateVoiceMcpToolReq struct {
 	RequireConfirm *bool   `json:"require_confirm"`
 }
 
+// VoiceEmbeddingBackfillReq 历史记忆重建向量。
+type VoiceEmbeddingBackfillReq struct {
+	// Limit 本次最多处理多少条（默认 100，上限 500）。
+	Limit int `json:"limit" example:"100"`
+}
+
 // PageVoiceMcpToolReq MCP 工具列表查询。
 type PageVoiceMcpToolReq struct {
 	PageReq

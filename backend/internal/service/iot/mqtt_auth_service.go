@@ -26,6 +26,8 @@ const (
 
 	platformSubscribeTopic = "iot/+/signal/backend"
 	platformPublishTopic   = "iot/+/app/+/signal"
+	// v0.6.0 房间信令：后端把查看方的 joinRoom/answer/iceCandidate 下发到设备。
+	platformDevicePublishTopic = "iot/+/device/+/signal"
 )
 
 // MqttAuthService 处理 MQTT broker 的 RPC 鉴权与 ACL。
@@ -167,9 +169,10 @@ func authenticatePlatform(req *request.MqttAuthReq) *response.MqttAuthResp {
 
 // checkPlatformACL 校验内部账号的话题权限。
 //
-// 只允许两条信令话题：
+// 只允许信令话题：
 //   - subscribe iot/+/signal/backend
-//   - publish   iot/+/app/+/signal
+//   - publish   iot/+/app/+/signal（App 的 WHEP answer）
+//   - publish   iot/+/device/+/signal（设备房间信令）
 //
 // 订阅侧允许「精确的通配符过滤器」与「具体组的话题」；发布侧禁止任何通配符，
 // 防止内部账号向未指定客户端广播。
@@ -191,10 +194,14 @@ func checkPlatformACL(action, topic string) *response.MqttACLResp {
 			return &response.MqttACLResp{Allow: true}
 		}
 	case "publish":
-		if !strings.ContainsAny(topic, "+#") && matchMQTTTopic(platformPublishTopic, topic) {
+		if !strings.ContainsAny(topic, "+#") &&
+			(matchMQTTTopic(platformPublishTopic, topic) || matchMQTTTopic(platformDevicePublishTopic, topic)) {
 			return &response.MqttACLResp{Allow: true}
 		}
-		return &response.MqttACLResp{Allow: false, Reason: "内部账号只允许发布 " + platformPublishTopic}
+		return &response.MqttACLResp{
+			Allow:  false,
+			Reason: "内部账号只允许发布 " + platformPublishTopic + " 或 " + platformDevicePublishTopic,
+		}
 	}
 	return &response.MqttACLResp{Allow: false, Reason: "内部账号无权访问该话题"}
 }

@@ -9,6 +9,7 @@ import type { PageRiskReq } from './definitions/PageRiskReq';
 import type { RCount } from './definitions/RCount';
 import type { RPageRiskRecord } from './definitions/RPageRiskRecord';
 import type { RRiskRecord } from './definitions/RRiskRecord';
+import type { RRiskSummary } from './definitions/RRiskSummary';
 import type { ReportRiskReq } from './definitions/ReportRiskReq';
 import type { UpdateAccurateReq } from './definitions/UpdateAccurateReq';
 
@@ -99,6 +100,16 @@ export class RiskController {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "POST",
         data: JSON.stringify(data),
+        headers,
+      });
+    }
+
+    static riskSummaryPath: string = "/web/risks/summary";
+    /// 风险总览指标
+    static async riskSummary(headers?: any): Promise<RRiskSummary> {
+      return request(`/web/risks/summary`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
         headers,
       });
     }

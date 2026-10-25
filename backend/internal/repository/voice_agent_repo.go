@@ -277,6 +277,36 @@ func (r *VoiceMemoryRepo) FindSimilar(ctx context.Context, ownerKey, vector stri
 	return &hits[0], nil
 }
 
+// ListMissingEmbedding 列出尚无向量的记忆（按创建时间升序）。
+//
+// 用于「重建向量」：配置好 embedding 后，把历史记忆补成语义可检索。
+// 只取正文与主键，避免把 embedding 列读进内存。
+func (r *VoiceMemoryRepo) ListMissingEmbedding(ctx context.Context, limit int) ([]model.VoiceMemory, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var items []model.VoiceMemory
+	err := bootstrap.DB().WithContext(ctx).
+		Omit("embedding").
+		Where("deleted_at IS NULL").
+		Where("embedding IS NULL OR embedding_status <> ?", model.VoiceEmbeddingOK).
+		Order("id ASC").
+		Limit(limit).
+		Find(&items).Error
+	return items, err
+}
+
+// CountMissingEmbedding 统计尚无向量的记忆数。
+func (r *VoiceMemoryRepo) CountMissingEmbedding(ctx context.Context) (int64, error) {
+	var total int64
+	err := bootstrap.DB().WithContext(ctx).
+		Model(&model.VoiceMemory{}).
+		Where("deleted_at IS NULL").
+		Where("embedding IS NULL OR embedding_status <> ?", model.VoiceEmbeddingOK).
+		Count(&total).Error
+	return total, err
+}
+
 // UpdateEmbedding 写入向量与状态。
 func (r *VoiceMemoryRepo) UpdateEmbedding(ctx context.Context, id int64, vector string, status string) error {
 	if vector == "" {

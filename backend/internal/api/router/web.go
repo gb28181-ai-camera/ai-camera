@@ -63,6 +63,7 @@ func registerWebRoutes(r *gin.Engine) {
 	cardH := handler.NewIotCardHandler()
 	voiceH := handler.NewVoiceConfigHandler()
 	voiceWsH := handler.NewVoiceWsHandler()
+	avRoomH := handler.NewAvRoomHandler()
 	riskH := handler.NewRiskHandler()
 	alarmH := handler.NewAlarmHandler()
 	inspectH := handler.NewInspectHandler()
@@ -278,6 +279,7 @@ func registerWebRoutes(r *gin.Engine) {
 		{
 			wrg.GET("", riskH.Page)
 			wrg.GET("/pending-count", riskH.PendingCount)
+			wrg.GET("/summary", riskH.Summary)
 			wrg.GET("/:id", riskH.Get)
 			wrg.PUT("/:id/read", riskH.MarkRead)
 			wrg.PUT("/:id/accurate", riskH.UpdateAccurate)
@@ -463,13 +465,24 @@ func registerWebRoutes(r *gin.Engine) {
 		{
 			wv.POST("/ws-ticket", voiceWsH.WsTicket)
 
+			wv.POST("/embedding/test", voiceWsH.TestEmbedding)
+
 			wv.GET("/memories", voiceWsH.PageMemories)
 			wv.GET("/memories/export", voiceWsH.ExportMemories)
+			wv.POST("/memories/backfill", voiceWsH.BackfillEmbeddings)
 			wv.DELETE("/memories/:id", voiceWsH.DeleteMemory)
 
 			wv.GET("/mcp/tools", voiceWsH.PageMcpTools)
 			wv.PUT("/mcp/tools/:id", voiceWsH.UpdateMcpTool)
 			wv.GET("/mcp/logs", voiceWsH.PageMcpLogs)
+		}
+
+		// ═══ 实时音视频：查看设备画面（v0.6.0）═══
+		// WS 本体在 router/voice.go（ticket 鉴权），这里只放需要 JWT 的接口。
+		wav := wAuth.Group("/av")
+		{
+			wav.GET("/devices", avRoomH.PageDevices)
+			wav.POST("/devices/:id/viewer-ticket", avRoomH.ViewerTicket)
 		}
 
 		// 播放 / 云台 / 语音：路由较多，拆到 gb_live.go

@@ -164,6 +164,46 @@ func (r *RiskRepo) CountPending(ctx context.Context, ds *utils.DataScope) (int64
 	return total, nil
 }
 
+// RiskSummaryRow 全局风险摘要（用于「AI风险」台账顶部指标）。
+//
+// 与分页列表使用同一数据权限过滤，保证指标与列表口径一致。
+type RiskSummaryRow struct {
+	Total       int64
+	Pending     int64
+	Handled     int64
+	High        int64
+	Unread      int64
+	AccurateYes int64
+	AccurateNo  int64
+	Unconfirmed int64
+	Today       int64
+}
+
+// Summary 统计风险总览。
+func (r *RiskRepo) Summary(ctx context.Context, ds *utils.DataScope) (*RiskSummaryRow, error) {
+	q := bootstrap.DB().WithContext(ctx).
+		Model(&model.RiskRecord{}).
+		Table("ac_risk_record AS r").
+		Select(`
+			COUNT(*) AS total,
+			COALESCE(SUM(CASE WHEN r.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+			COALESCE(SUM(CASE WHEN r.status = 'handled' THEN 1 ELSE 0 END), 0) AS handled,
+			COALESCE(SUM(CASE WHEN r.risk_level = 'high' THEN 1 ELSE 0 END), 0) AS high,
+			COALESCE(SUM(CASE WHEN r.read = FALSE THEN 1 ELSE 0 END), 0) AS unread,
+			COALESCE(SUM(CASE WHEN r.detect_accurate = 'yes' THEN 1 ELSE 0 END), 0) AS accurate_yes,
+			COALESCE(SUM(CASE WHEN r.detect_accurate = 'no' THEN 1 ELSE 0 END), 0) AS accurate_no,
+			COALESCE(SUM(CASE WHEN r.detect_accurate IS NULL OR r.detect_accurate = '' THEN 1 ELSE 0 END), 0) AS unconfirmed,
+			COALESCE(SUM(CASE WHEN r.occurred_dt >= CURRENT_DATE THEN 1 ELSE 0 END), 0) AS today`)
+	if ds != nil {
+		q = ds.ApplyToQuery(q, "r.dept_id")
+	}
+	var row RiskSummaryRow
+	if err := q.Scan(&row).Error; err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
 // ────────────────────────────────────────────────────────────────
 // 上报接口辅助查询
 //

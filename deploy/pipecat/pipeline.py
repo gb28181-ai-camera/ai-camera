@@ -31,6 +31,7 @@ import importlib
 import inspect
 import json
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -583,6 +584,16 @@ def _instantiate_service(category: str, config: Mapping[str, Any]) -> Any:
     cls = getattr(importlib.import_module(module_name), attr)
 
     params = _collect_params(category, config)
+    # 离线部署：容器内预置了 /models/faster-whisper-<size>，而配置里仍写
+    # 「small」这类模型名。faster-whisper 默认会去 HuggingFace 下载，内网
+    # 不可达；这里自动换成同名的本地目录，配置项无需暴露绝对路径。
+    if category == "stt" and provider == "local_whisper":
+        model = str(params.get("model") or "").strip()
+        if model and "/" not in model and not os.path.isabs(model):
+            local_dir = os.path.join("/models", f"faster-whisper-{model}")
+            if os.path.isdir(local_dir):
+                params["model"] = local_dir
+                logger.info("STT 使用本地模型 model=%s dir=%s", model, local_dir)
     kwargs = {
         "api_key": params.get("api_key"),
         "model": params.get("model"),

@@ -3,7 +3,9 @@ package voiceagent
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
 	"github.com/boticz/ai-camera-backend/internal/dto/response"
@@ -17,6 +19,7 @@ type AdminService struct {
 	memories *repository.VoiceMemoryRepo
 	tools    *repository.VoiceMcpToolRepo
 	logs     *repository.VoiceMcpCallLogRepo
+	config   ConfigProvider
 }
 
 // NewAdminService 构造管理服务。
@@ -25,7 +28,90 @@ func NewAdminService() *AdminService {
 		memories: repository.NewVoiceMemoryRepo(),
 		tools:    repository.NewVoiceMcpToolRepo(),
 		logs:     repository.NewVoiceMcpCallLogRepo(),
+		config:   NewConfigProvider(),
 	}
+}
+
+// TestEmbedding 用当前配置真实调用一次 Embedding 服务。
+//
+// 与 provider 的 /test 一样，「网络可达但模型不对」也作为结果返回，
+// 不作为接口故障：前端需要同时展示 endpoint、模型、维度与耗时。
+func (s *AdminService) TestEmbedding(ctx context.Context) (*response.VoiceEmbeddingTestResp, error) {
+	cfg := s.runtime(ctx)
+	client := NewEmbeddingClient(cfg.EmbeddingEndpoint, cfg.EmbeddingModel, cfg.EmbeddingAPIKey)
+	out := &response.VoiceEmbeddingTestResp{
+		Endpoint: cfg.EmbeddingEndpoint,
+		Model:    cfg.EmbeddingModel,
+	}
+	if out.Model == "" {
+		out.Model = "bge-m3"
+	}
+	if !client.Configured() {
+		out.Message = "未配置 Embedding 端点，请填写 embedding_endpoint 后重试"
+		return out, nil
+	}
+	started := time.Now()
+	vec, err := client.Embed(ctx, "这是一条用于验证 Embedding 服务的中文测试文本。")
+	out.ElapsedMS = time.Since(started).Milliseconds()
+	if err != nil {
+		out.Message = err.Error()
+		return out, nil
+	}
+	out.Success = true
+	out.Dim = len(vec)
+	out.Message = "Embedding 可用，返回 " + strconv.Itoa(len(vec)) + " 维向量"
+	return out, nil
+}
+
+// BackfillEmbeddings 为历史记忆补齐向量。
+//
+// 只处理 embedding 为空或状态不是 ok 的记录；单条失败继续处理下一条，
+// 返回 failed 数与剩余量，便于运维重复点击直到 remaining=0。
+func (s *AdminService) BackfillEmbeddings(ctx context.Context, limit int) (*response.VoiceEmbeddingBackfillResp, error) {
+	cfg := s.runtime(ctx)
+	client := NewEmbeddingClient(cfg.EmbeddingEndpoint, cfg.EmbeddingModel, cfg.EmbeddingAPIKey)
+	if !client.Configured() {
+		return nil, ErrEmbeddingNotConfigured
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	items, err := s.memories.ListMissingEmbedding(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := &response.VoiceEmbeddingBackfillResp{Scanned: len(items)}
+	for i := range items {
+		vec, err := client.Embed(ctx, items[i].Content)
+		if err != nil {
+			out.Failed++
+			// 状态保持 failed，便于下次继续重试。
+			_ = s.memories.UpdateEmbedding(ctx, items[i].ID, "", model.VoiceEmbeddingFailed)
+			continue
+		}
+		if err := s.memories.UpdateEmbedding(ctx, items[i].ID, vectorLiteral(vec), model.VoiceEmbeddingOK); err != nil {
+			out.Failed++
+			continue
+		}
+		out.Updated++
+	}
+	out.Remaining, _ = s.memories.CountMissingEmbedding(ctx)
+	return out, nil
+}
+
+// runtime 读取语音运行期配置（数据库 + 环境变量）。
+func (s *AdminService) runtime(ctx context.Context) *RuntimeConfig {
+	if s.config == nil {
+		return BuildRuntimeConfig(nil)
+	}
+	cfg, err := s.config.Runtime(ctx)
+	if err != nil || cfg == nil {
+		return BuildRuntimeConfig(nil)
+	}
+	return cfg
 }
 
 // EnsureBuiltins 把内置工具写入数据库（幂等）。

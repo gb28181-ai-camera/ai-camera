@@ -849,12 +849,32 @@ Pipecat 负责 VAD/STT/LLM/TTS；Go 负责鉴权、WS 网关、MCP 与记忆数�
 | 内部 MCP | `POST /internal/mcp` | JSON-RPC：initialize/tools/list/tools/call |
 | 内部记忆 | `/internal/voice/memory/{retrieve,write}` | pgvector 检索/写入 |
 | 管理 | `/web/voice/memories*`、`/web/voice/mcp/*` | 记忆与 MCP 工具/日志 |
+| Embedding | `POST /web/voice/embedding/test`、`POST /web/voice/memories/backfill` | 测试本地模型；历史记忆补向量 |
 
 - `X-Voice-Context` 使用 HMAC-SHA256；工具身份只从签名上下文注入。
-- 记忆默认 1024 维 + HNSW；未配置 embedding 时降级为时间/关键词检索。
+- 记忆默认 1024 维 + HNSW；本地 `deploy/embedding`（BAAI/bge-m3，ONNX）
+  写入时同步生成向量，失败才降级为时间/关键词检索。
 - ticket 进程内一次性；多副本需改 Redis。
 - DDL：`docs/开发文档/数据库设计/sql/ddl/15-语音Agent.sql`；
   协议：`docs/敏捷开发/v0.6.0 智能语音聊天/00-设计与协议.md`。
+
+### 19. 实时音视频预览（v0.6.0）
+
+WebRTC 服务组设备的房间信令与画面查看。后端只中继信令，不碰媒体。
+
+| 分组 | 端点 | 说明 |
+|:--|:--|:--|
+| 设备下拉 | `GET /web/av/devices` | 仅产品绑定启用 webrtc 组的设备 |
+| Ticket | `POST /web/av/devices/:id/viewer-ticket` | 数据权限校验 + 60s ticket + TURN 凭据 |
+| WS | `GET /web/av/ws?ticket=...` | 浏览器 ↔ Go ↔ MQTT ↔ 设备 |
+
+- MQTT 话题：设备订阅 `iot/<group>/device/<device_code>/signal`，
+  发布 `iot/<group>/signal/backend`；`room_id=device_code`。
+- 消息：`joinRoom / offer / answer / iceCandidate / leaveRoom / ready / error`。
+- 平台账号 ACL 新增 publish `iot/+/device/+/signal`。
+- 实现：`internal/signal/room`、`internal/service/avroom`；
+  UI：`/av/preview`；模拟器：`tools/webrtcsim`（Pion + H.264）。
+- 页面/接口文档：`docs/开发文档/页面功能和接口/16-实时音视频实时预览页面与接口.md`。
 
 ### 路由分组与中间件
 

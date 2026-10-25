@@ -378,6 +378,8 @@ radio = max(414 / 短边, 1)        ← 钳制为 1，即只缩不放
   Go 网关 → Pipecat `/ws/voice`。
 - 音频：PCM16 / 16kHz 上行、24kHz 下行；半双工，TTS 期间暂停麦克风 + 300ms 尾巴。
 - 功能：按住说话/点击开始、STT/LLM/TTS 字幕、MCP 工具提示、打断、断线重连。
+- 服务端能力：STT 默认 `local_whisper/small/zh`（离线 faster-whisper），
+  TTS 默认 `edge_tts/zh-CN-XiaoxiaoNeural`；LLM 需管理员在后台配置 API Key。
 - 依赖：`record`（麦克风）、`flutter_sound`（PCM 边收边播）、`web_socket_channel`。
 - `flutter_sound` 为 MPL-2.0，需在合规清单登记。
 

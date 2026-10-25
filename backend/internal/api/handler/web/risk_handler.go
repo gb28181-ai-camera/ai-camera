@@ -249,6 +249,25 @@ func (h *RiskHandler) PendingCount(c *gin.Context) {
 	utils.Success(c, count)
 }
 
+// Summary 风险总览
+//
+// @Summary      风险总览指标
+// @Description  返回总数/待处理/已处理/高风险/未读/检测准确分布/今日新增，口径与风险列表的数据权限一致
+// @Tags         Risk
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  response.RRiskSummary
+// @Router       /web/risks/summary [get]
+// @ID           riskSummary
+func (h *RiskHandler) Summary(c *gin.Context) {
+	resp, err := h.svc.Summary(c.Request.Context(), utils.NewDataScope(c))
+	if err != nil {
+		utils.ServerError(c, err.Error())
+		return
+	}
+	utils.Success(c, resp)
+}
+
 // Report 设备上报风险
 //
 // @Summary      设备上报风险

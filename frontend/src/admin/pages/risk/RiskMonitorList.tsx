@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
-  Button, DatePicker, Descriptions, Form, Image, Input, message, Modal, Popconfirm, Radio, Select, Space, Table,
+  Alert, Button, DatePicker, Descriptions, Form, Image, Input, message, Modal, Popconfirm, Radio,
+  Segmented, Select, Space, Table,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -57,7 +58,8 @@ const RiskMonitorList: React.FC = () => {
   const [deviceID, setDeviceID] = useState<number | undefined>()
   const [riskTypeID, setRiskTypeID] = useState<number | undefined>()
   const [regionID, setRegionID] = useState<number | undefined>()
-  const [status, setStatus] = useState<string | undefined>()
+  // 风险监控是「待处理处置队列」：默认只看未处理；切到「全部」可查已处理历史。
+  const [status, setStatus] = useState<string | undefined>('pending')
   const [accurate, setAccurate] = useState<string | undefined>()
   const [level, setLevel] = useState<string | undefined>()
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
@@ -170,7 +172,7 @@ const RiskMonitorList: React.FC = () => {
     setDeviceID(undefined)
     setRiskTypeID(undefined)
     setRegionID(undefined)
-    setStatus(undefined)
+    setStatus('pending')
     setAccurate(undefined)
     setLevel(undefined)
     setRange(null)
@@ -347,10 +349,18 @@ const RiskMonitorList: React.FC = () => {
 
   return (
     <PageContainer
-      title="风险监控"
-      subTitle="设备上报的风险数据查询、检测确认、处理与删除"
+      title="风险监控处置"
+      subTitle="待处理风险处置队列：复核检测准确、填写处理结果、跳转设备监控；全部历史见「AI风险台账」"
       extra={
-        <Space>
+        <Space wrap>
+          <Segmented
+            value={status === 'pending' ? 'pending' : 'all'}
+            options={[
+              { label: '待处理', value: 'pending' },
+              { label: '全部', value: 'all' },
+            ]}
+            onChange={(v) => { setStatus(v === 'pending' ? 'pending' : undefined); setPage(1) }}
+          />
           <span style={{ color: '#888' }}>刷新频率</span>
           <Select
             style={{ width: 140 }}
@@ -362,6 +372,18 @@ const RiskMonitorList: React.FC = () => {
         </Space>
       }
     >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="本页默认只显示未处理风险"
+        description="处置完成后记录会从队列消失；如需按时间追溯全部风险（含已处理、误报），请前往「AI风险台账」。"
+        action={
+          <Button size="small" onClick={() => navigate('/risk/ai-risk')}>
+            查看全部历史
+          </Button>
+        }
+      />
       <SearchBar
         fields={[
           { name: 'keyword', label: '设备名称', placeholder: '请输入设备名称' },

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -492,8 +493,10 @@ func (s *VoiceAgentService) Apply(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	endpoint := strings.TrimSpace(values[voicePipecatEndpoint])
-	token := strings.TrimSpace(values[voicePipecatToken])
+	// 控制面地址/令牌允许环境变量覆盖：容器部署时密钥不落盘，
+	// 与 voiceagent.BuildRuntimeConfig 的优先级保持一致（环境变量 > 数据库）。
+	endpoint := firstNonEmpty(strings.TrimSpace(os.Getenv("PIPECAT_ENDPOINT")), strings.TrimSpace(values[voicePipecatEndpoint]))
+	token := firstNonEmpty(strings.TrimSpace(os.Getenv("PIPECAT_TOKEN")), strings.TrimSpace(values[voicePipecatToken]))
 	if endpoint == "" {
 		return errors.New("未配置 Pipecat 控制面地址（pipecat_endpoint），无法下发配置")
 	}

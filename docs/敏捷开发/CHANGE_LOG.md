@@ -26,13 +26,27 @@
 | 8 | 短期上下文 + pgvector 长期记忆 | ✅ |
 | 9 | Flutter App 语音聊天页 | ✅ |
 | 10 | Web 语音 Agent 配置/MCP/记忆页 | ✅ |
+| 11 | 本地 Embedding（BGE-M3/ONNX）+ 向量真实落库 + 历史补向量 | ✅ |
+| 12 | 实时音视频：MQTT 房间信令 + `/av/preview` 设备画面 + 设备模拟器 | ✅ |
+| 13 | AI风险台账 / 风险监控处置 的职责区分与总览指标 | ✅ |
 
 **关键设计**：
 - Pipecat 仅内网可达；生产由 Go 网关统一鉴权并注入签名上下文。
 - ticket 60s 一次性；设备用产品×AIChat 凭据 HTTP Basic。
 - 服务端 MCP 用 JSON-RPC over HTTP；设备 MCP 复用同一 WS 的 `type=mcp`。
-- 长期记忆默认 BGE-M3 1024 维 + HNSW；未配置 embedding 时降级为时间/关键词检索。
+- 长期记忆默认 BGE-M3 1024 维 + HNSW；本地 `deploy/embedding` 用
+  ModelScope ONNX 离线推理，写入时同步生成向量；失败才降级时间/关键词。
 - 默认半双工，`barge_in` 预留未启用；设备端唤醒主路径。
+- WebRTC 实时预览信令走 MQTT（joinRoom/offer/answer/iceCandidate/leaveRoom），
+  媒体 P2P/TURN；后端只中继，不解析 SDP。
+
+**2026-10-25 补充实测**：
+- Embedding：`/health` → `source=onnx, loaded=true, dim=1024`；写入后
+  `embedding_status=ok`、`vector_dims=1024`；历史 failed 记录 backfill 全部转 ok。
+- ASR/TTS：Edge TTS 合成中文音频 → faster-whisper-small（本地 ModelScope 模型）
+  转写成功（zh, prob=1.0）；Pipecat `/test` stt/tts/vad 全 ok，LLM 缺 key。
+- 实时预览：Node WS 握手拿到 5022 字节 offer；Playwright(Edge) 真实视频首帧
+  `videoWidth>0`、`connection=connected`。
 
 **已知限制**：见 [01-实现说明.md §3](v0.6.0%20智能语音聊天/01-实现说明.md)。
 

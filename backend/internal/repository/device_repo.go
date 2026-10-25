@@ -114,6 +114,27 @@ func (r *DeviceRepo) GetByID(ctx context.Context, id int64) (*model.Device, erro
 	return &m, nil
 }
 
+// GetByIDScoped 按主键查询设备，并施加行级数据权限。
+//
+// 用于「按 ID 进入一个受控资源」的接口（如 WebRTC 查看）：列表过滤不能替代
+// 详情越权校验，否则知道 ID 就能绕过列表拿到别人的设备。
+func (r *DeviceRepo) GetByIDScoped(ctx context.Context, id int64, ds *utils.DataScope) (*model.Device, error) {
+	q := deviceQuery().WithContext(ctx).Where("d.id = ?", id)
+	if ds != nil {
+		q = ds.ApplyToQuery(q, "d.dept_id")
+	}
+	var m model.Device
+	if err := q.Select("d.*").
+		Preload("Region").
+		Preload("IotCard").
+		Preload("Firmware").
+		Preload("AIModel").
+		First(&m).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 // ExistsByCode 判断设备编号是否已存在（excludeID>0 时排除自身）。
 func (r *DeviceRepo) ExistsByCode(ctx context.Context, code string, excludeID int64) (bool, error) {
 	q := bootstrap.DB().WithContext(ctx).Model(&model.Device{}).Where("device_code = ?", code)

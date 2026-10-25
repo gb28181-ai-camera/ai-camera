@@ -142,6 +142,7 @@ const ROUTES: { path: string; page: LazyPage }[] = [
   // 实时音视频（WebRTC 服务组）
   { path: 'av/device', page: lazy(() => import('./pages/av/WebRtcDeviceList')) },
   { path: 'av/service', page: lazy(() => import('./pages/av/WebRtcServiceSettings')) },
+  { path: 'av/preview', page: lazy(() => import('./pages/av/WebRtcPreview')) },
 
   // 智能语音聊天（AIChat 服务组）
   { path: 'voice/device', page: lazy(() => import('./pages/voice/AiChatDeviceList')) },

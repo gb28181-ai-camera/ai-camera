@@ -3012,6 +3012,14 @@ SELECT 192, 17, 2, '服务设置', '/av/service', 'SettingOutlined', 'av/WebRtcS
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'av:service:view');
 
 INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 193, 17, 2, '实时预览', '/av/preview', 'PlayCircleOutlined', 'av/WebRtcPreview', 'menu', 'pc', 'av:preview:view', '菜单', 3, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'av:preview:view');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9601, 193, 3, '连接设备', '', '', '', 'button', 'pc', 'av:preview:connect', '按钮', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'av:preview:connect');
+
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
 SELECT 201, 18, 2, '设备管理', '/voice/device', 'DesktopOutlined', 'voice/AiChatDeviceList', 'menu', 'pc', 'voice-chat:device:list', '菜单', 1, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'voice-chat:device:list');
 
@@ -3145,11 +3153,20 @@ WHERE a.menu_id = 152
     WHERE x.menu_id = 202 AND x.method = a.method AND x.path = a.path AND x.deleted_at IS NULL
   );
 
+-- 实时预览（193）：设备下拉复用 /web/av/devices，连接使用 ticket 接口。
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9800, 193, 'GET', '/web/av/devices', '实时预览设备下拉', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='GET' AND path='/web/av/devices');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9801, 9601, 'POST', '/web/av/devices/:id/viewer-ticket', '查看设备画面 ticket', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/web/av/devices/:id/viewer-ticket');
+
 -- ── 14.5 授权与祖先补齐 ──────────────────────────────────────
 INSERT INTO ac_role_menu_rel (role_id, menu_id)
 SELECT 1, m.id FROM ac_menu m
 WHERE m.permission_code IN ('ai:view', 'av:view', 'voice-chat:view', 'iot:monitor-dir:view',
-                            'av:device:list', 'av:service:view', 'voice-chat:device:list', 'voice-chat:service:view')
+                            'av:device:list', 'av:service:view', 'av:preview:view', 'av:preview:connect',
+                            'voice-chat:device:list', 'voice-chat:service:view')
   AND NOT EXISTS (SELECT 1 FROM ac_role_menu_rel r WHERE r.role_id = 1 AND r.menu_id = m.id);
 
 -- 给所有已有子菜单授权的角色补齐祖先目录，避免侧边栏只授权子项时父目录不渲染。
@@ -3236,6 +3253,53 @@ WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'app:voice');
 INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
 SELECT 9707, 109, 'POST', '/app/voice/ws-ticket', '创建 App 语音 WS ticket', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/app/voice/ws-ticket');
+
+-- Embedding 配置验证与历史记忆补向量（v0.6.0 补齐）
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9708, 1263, 'POST', '/web/voice/embedding/test', '测试 Embedding 服务', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/web/voice/embedding/test');
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9709, 12632, 'POST', '/web/voice/memories/backfill', '历史记忆重建向量', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='POST' AND path='/web/voice/memories/backfill');
+
+-- AI风险 / 风险监控 的职责区分（页面标题同步）：
+--   AI风险   = 全局台账（含已处理历史 + 总览指标）；
+--   风险监控 = 待处理处置队列（默认 status=pending）。
+UPDATE ac_menu SET name = 'AI风险台账' WHERE id = 3;
+UPDATE ac_menu SET name = '风险监控处置' WHERE id = 51;
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9810, 3, 'GET', '/web/risks/summary', '风险台账总览指标', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method='GET' AND path='/web/risks/summary');
+
+-- 语音默认配置：STT/TTS/VAD 走零密钥本地实现，Embedding 指向本地服务。
+-- 只插入不存在的键，管理员在后台改过的值不会被覆盖。
+-- pipecat_token 不在此处落库：容器部署由 PIPECAT_TOKEN 环境变量注入。
+INSERT INTO ac_thirdparty_config (category, name, code, "value", secret, created_by, created_dt, updated_by, updated_dt)
+SELECT v.category, v.name, v.code, v.value, v.secret,
+       'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+FROM (VALUES
+  ('voice_agent', 'STT Provider',      'stt_provider',     'local_whisper', FALSE),
+  ('voice_agent', 'STT 模型',          'stt_model',        'small',         FALSE),
+  ('voice_agent', 'STT 语言',          'stt_language',     'zh',            FALSE),
+  ('voice_agent', 'TTS Provider',      'tts_provider',     'edge_tts',      FALSE),
+  ('voice_agent', 'TTS 音色',          'tts_voice',        'zh-CN-XiaoxiaoNeural', FALSE),
+  ('voice_agent', 'TTS 语速',          'tts_speed',        '1.0',           FALSE),
+  ('voice_agent', 'VAD Provider',      'vad_provider',     'silero',        FALSE),
+  ('voice_agent', 'LLM Provider',      'llm_provider',     'anthropic',     FALSE),
+  ('voice_agent', 'LLM 模型',          'llm_model',        'claude-sonnet-5-5', FALSE),
+  ('voice_agent', '启用长期记忆',      'memory_enabled',   'true',          FALSE),
+  ('voice_agent', '记忆召回条数',      'memory_top_k',     '6',             FALSE),
+  ('voice_agent', '记忆保留天数',      'memory_ttl_days',  '180',           FALSE),
+  ('voice_agent', 'Embedding 端点',    'embedding_endpoint', 'http://127.0.0.1:8091/v1', FALSE),
+  ('voice_agent', 'Embedding 模型',    'embedding_model',  'BAAI/bge-m3',   FALSE),
+  ('voice_agent', '启用 WebSocket',    'ws_enabled',       'true',          FALSE),
+  ('voice_agent', 'Pipecat WS 路径',   'ws_path',          '/ws/voice',     FALSE),
+  ('voice_agent', '启用 MCP',          'mcp_enabled',      'true',          FALSE)
+) AS v(category, name, code, value, secret)
+WHERE NOT EXISTS (
+  SELECT 1 FROM ac_thirdparty_config c
+  WHERE c.category = v.category AND c.code = v.code AND c.deleted_at IS NULL
+);
 
 INSERT INTO ac_role_menu_rel (role_id, menu_id)
 SELECT 1, 109

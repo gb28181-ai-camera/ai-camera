@@ -370,6 +370,10 @@ func TestGbPositionLatestRealtimeHistory(t *testing.T) {
 // ── 语音 Agent 配置：脱敏 + 写回空值保持原值 ─────────────────
 
 func TestVoiceAgentConfigMaskingAndKeepSecret(t *testing.T) {
+	// Apply 支持环境变量覆盖（容器部署密钥不落盘）；单测必须清空外部环境，
+	// 否则本机 .env 里的 PIPECAT_* 会让「未配置」场景被误判为已配置。
+	t.Setenv("PIPECAT_ENDPOINT", "")
+	t.Setenv("PIPECAT_TOKEN", "")
 	testutil.WithTx(t, func(ctx context.Context, tx *gorm.DB) {
 		svc := svcsetting.NewVoiceAgentService()
 		secret := "sk-voice-secret-1234"

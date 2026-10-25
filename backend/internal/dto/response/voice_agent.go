@@ -20,6 +20,36 @@ type RVoiceWsTicket struct {
 	Data VoiceWsTicketResp `json:"data"`
 }
 
+// VoiceEmbeddingTestResp Embedding 连通性测试结果。
+type VoiceEmbeddingTestResp struct {
+	Success   bool   `json:"success" example:"true"`
+	Endpoint  string `json:"endpoint" example:"http://127.0.0.1:8091/v1"`
+	Model     string `json:"model" example:"intfloat/multilingual-e5-large"`
+	Dim       int    `json:"dim" example:"1024"`
+	ElapsedMS int64  `json:"elapsed_ms" example:"38"`
+	Message   string `json:"message" example:"Embedding 可用，返回 1024 维向量"`
+}
+
+// RVoiceEmbeddingTest Embedding 测试响应。
+type RVoiceEmbeddingTest struct {
+	BaseResponse
+	Data VoiceEmbeddingTestResp `json:"data"`
+}
+
+// VoiceEmbeddingBackfillResp 历史记忆重建向量的结果。
+type VoiceEmbeddingBackfillResp struct {
+	Scanned   int   `json:"scanned" example:"100"`
+	Updated   int   `json:"updated" example:"98"`
+	Failed    int   `json:"failed" example:"2"`
+	Remaining int64 `json:"remaining" example:"0"`
+}
+
+// RVoiceEmbeddingBackfill 重建向量响应。
+type RVoiceEmbeddingBackfill struct {
+	BaseResponse
+	Data VoiceEmbeddingBackfillResp `json:"data"`
+}
+
 // VoiceMemoryItem 记忆列表项（不含向量）。
 type VoiceMemoryItem struct {
 	ID              int64      `json:"id"`

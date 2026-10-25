@@ -352,13 +352,30 @@ API 客户端为 `GbDeviceController`、`GbChannelController`、`GbPlayControlle
 2. **系统管理** —— 账号与权限、基础信息、告警设置、第三方平台
 3. **物联网管理** —— 产品、服务组、设备、设备资源、升级管理、设备监控
 4. **国标视频** —— GB28181 设备/通道、播放与录像、报警与位置、流媒体运维、级联、组织管理
-5. **实时音视频** —— WebRTC 服务组设备管理、服务设置（`/av/device`、`/av/service`）
+5. **实时音视频** —— WebRTC 服务组设备管理、服务设置、实时预览（`/av/device`、`/av/service`、`/av/preview`）
 6. **智能语音聊天** —— AIChat 服务组设备管理、服务设置、语音 Agent（`/voice/*`）
-7. **AI 智能分析** —— 实时监控、AI 风险/监控、风险监控、巡检中心、统计分析
+7. **AI 智能分析** —— 实时监控、AI风险台账、AI监控、风险监控处置、巡检中心、统计分析
 
 - 新页面的设备列表复用 IOT 设备管理组件，通过 `service_group_type=webrtc|aichat` 过滤；
 - `MainLayout` 的菜单点击已补 `onClick → navigate(key)`；
 - 菜单/按钮权限仍由后端菜单树驱动，配置入口为 `/system/menu` 与 `/system/role`。
+
+### 实时音视频 → 实时预览（v0.6.0）
+
+`/av/preview`：选择 WebRTC 服务组设备 → `POST /web/av/devices/:id/viewer-ticket`
+→ `GET /web/av/ws`；浏览器只发 joinRoom/answer/iceCandidate/leaveRoom，
+设备是 offer 方。页面展示视频、分辨率/帧率/码率、ICE 状态与信令日志。
+支持设备重新 offer（rollback 后重新 answer）。细节见
+`docs/开发文档/页面功能和接口/16-实时音视频实时预览页面与接口.md`。
+
+### AI风险台账 vs 风险监控处置
+
+- **AI风险台账**（`/risk/ai-risk`）：不默认筛选，保留全部历史；顶部 8 个总览指标
+  （总数/待处理/高风险/未读/今日新增/准确/误报/未复核），用于追溯与统计。
+- **风险监控处置**（`/risk/monitor`）：默认 `status=pending` 的处置队列，
+  支持自动刷新、详情复核、设备监控跳转；可切「全部」查看历史。
+- 两页共用 `/web/risks` 端点，但默认筛选与页面目标不同；AI风险台账新增
+  `GET /web/risks/summary`。
 
 ---
 
@@ -371,12 +388,14 @@ API 客户端为 `GbDeviceController`、`GbChannelController`、`GbPlayControlle
 | 基础 | STT/LLM/TTS/VAD provider 与 Pipecat 控制面 |
 | WebSocket | WS 开关、快速应答、设备唤醒、连接测试（ticket → Go 网关 → Pipecat hello） |
 | MCP | 工具列表/启用/风险等级/需确认、调用日志 |
-| 记忆 | 长期记忆列表/搜索/删除/CSV 导出 |
+| 记忆 | 长期记忆列表/搜索/删除/CSV 导出；测试 Embedding、历史记忆重建向量 |
 | 观测 | Pipecat 地址/WS 状态/应用配置 |
 
 - 连接测试使用 `POST /web/voice/ws-ticket` 获取一次性 ticket，再连 `ws_url`；
   浏览器不采集音频，只验证信令链路。
 - 密钥（`internal_mcp_token`、`embedding_api_key`）只写不读，读接口 `****`。
+- Embedding 默认指向本地 `deploy/embedding`（BAAI/bge-m3，1024 维）；
+  「测试 Embedding」真实调用 `/v1/embeddings`，「重建向量」分批补历史记忆。
 - 旧 `/gb/org/voice-agent` 保留为兼容 re-export，菜单已指向 `/voice/agent`。
 
 ---

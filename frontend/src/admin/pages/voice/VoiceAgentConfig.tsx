@@ -447,6 +447,8 @@ const VoiceAgentConfig: React.FC = () => {
   const [memoryLoading, setMemoryLoading] = useState(false)
   const [memoryError, setMemoryError] = useState('')
   const [memoryDetail, setMemoryDetail] = useState<VoiceMemoryItem | null>(null)
+  const [testingEmbedding, setTestingEmbedding] = useState(false)
+  const [backfilling, setBackfilling] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -865,6 +867,43 @@ const VoiceAgentConfig: React.FC = () => {
       message.error(apiErrorMessage(err, '连通性测试失败'))
     } finally {
       setTestingCategory(undefined)
+    }
+  }
+
+  const handleTestEmbedding = async () => {
+    setTestingEmbedding(true)
+    try {
+      const res = await VoiceAgentController.testVoiceEmbedding()
+      const data = res.data
+      const parts: string[] = []
+      if (data?.message) parts.push(data.message)
+      if (typeof data?.dim === 'number' && data.dim > 0) parts.push(`${data.dim} 维`)
+      if (typeof data?.elapsed_ms === 'number') parts.push(`${data.elapsed_ms} ms`)
+      if (data?.success) {
+        message.success(parts.length > 0 ? parts.join('，') : 'Embedding 可用')
+      } else {
+        message.warning(parts.length > 0 ? parts.join('，') : 'Embedding 不可用')
+      }
+    } catch (err) {
+      message.error(apiErrorMessage(err, 'Embedding 测试失败'))
+    } finally {
+      setTestingEmbedding(false)
+    }
+  }
+
+  const handleBackfillEmbeddings = async () => {
+    setBackfilling(true)
+    try {
+      const res = await VoiceAgentController.backfillVoiceMemoryEmbeddings({ limit: 100 })
+      const data = res.data
+      message.success(
+        `已处理 ${data?.scanned ?? 0} 条：成功 ${data?.updated ?? 0}，失败 ${data?.failed ?? 0}，剩余 ${data?.remaining ?? 0}`,
+      )
+      void loadMemories(memoryPage, memoryPageSize, memoryQuery)
+    } catch (err) {
+      message.error(apiErrorMessage(err, '重建向量失败'))
+    } finally {
+      setBackfilling(false)
     }
   }
 
@@ -1697,6 +1736,31 @@ const VoiceAgentConfig: React.FC = () => {
           >
             <Input.Password placeholder="留空或含 **** 表示不修改" maxLength={500} autoComplete="new-password" />
           </Form.Item>
+        </Col>
+        <Col xs={24}>
+          <Space wrap>
+            <Button
+              icon={<ApiOutlined />}
+              className="e2e-voice-embedding-test-btn"
+              loading={testingEmbedding}
+              disabled={!canTest}
+              onClick={() => void handleTestEmbedding()}
+            >
+              测试 Embedding
+            </Button>
+            <Button
+              icon={<ReloadOutlined />}
+              className="e2e-voice-embedding-backfill-btn"
+              loading={backfilling}
+              disabled={!canUpdate}
+              onClick={() => void handleBackfillEmbeddings()}
+            >
+              历史记忆重建向量
+            </Button>
+            <Typography.Text type="secondary">
+              配置后先保存，再测试；重建每次最多 100 条，可重复点击直到剩余为 0。
+            </Typography.Text>
+          </Space>
         </Col>
       </Row>
 

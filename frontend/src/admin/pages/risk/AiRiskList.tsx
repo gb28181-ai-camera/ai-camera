@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
-  Badge, Button, DatePicker, Form, Image, Input, message, Modal, Popconfirm, Radio, Space, Table,
+  Alert, Badge, Button, Card, Col, DatePicker, Form, Image, Input, message, Modal, Popconfirm,
+  Radio, Row, Space, Statistic, Table,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   DeleteOutlined, EyeOutlined, ToolOutlined, VideoCameraOutlined, CheckCircleOutlined,
+  MonitorOutlined,
 } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import type { Dayjs } from 'dayjs'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
@@ -20,6 +23,7 @@ import type { RiskRecord } from '../../api/generated/definitions/RiskRecord'
 import type { PageRiskReq } from '../../api/generated/definitions/PageRiskReq'
 import type { HandleRiskReq } from '../../api/generated/definitions/HandleRiskReq'
 import type { UpdateAccurateReq } from '../../api/generated/definitions/UpdateAccurateReq'
+import type { RiskSummaryResp } from '../../api/generated/definitions/RiskSummaryResp'
 import { useAuthStore } from '../../store/authStore'
 import {
   CLOSED_IMAGE, CLOSED_VIDEO, DETECT_ACCURATE_OPTIONS, HANDLE_STATUS_OPTIONS, LEVEL_OPTIONS,
@@ -41,11 +45,13 @@ const AiRiskList: React.FC = () => {
   const canHandle = permCodes.includes('risk:handle')
   const canAccurate = permCodes.includes('risk:accurate')
   const canDelete = permCodes.includes('risk:delete')
+  const navigate = useNavigate()
 
   const [data, setData] = useState<RiskRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [pendingCount, setPendingCount] = useState(0)
+  const [summary, setSummary] = useState<RiskSummaryResp | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
 
@@ -103,8 +109,19 @@ const AiRiskList: React.FC = () => {
     }
   }, [])
 
+  const fetchSummary = useCallback(async () => {
+    try {
+      const res = await RiskController.riskSummary()
+      setSummary(res.data ?? null)
+    } catch {
+      /* 指标失败不阻塞列表 */
+    }
+  }, [])
+
   useEffect(() => { void fetchData() }, [fetchData])
   useEffect(() => { void fetchPending() }, [fetchPending])
+  // 列表变化（筛选/分页/处理/删除）后同步刷新台账指标。
+  useEffect(() => { void fetchSummary() }, [fetchSummary, data.length, total])
 
   /** 重置到第一页（所有筛选条件变化时调用） */
   const resetPage = () => setPage(1)
@@ -325,16 +342,59 @@ const AiRiskList: React.FC = () => {
 
   return (
     <PageContainer
-      title="AI风险"
-      subTitle="设备 AI 识别的全部风险信息，支持检测准确确认与处理闭环"
+      title="AI风险台账"
+      subTitle="全局风险档案：包含已处理历史与检测准确分布；日常复核处置请到「风险监控」"
       extra={
         <Space>
           <Badge count={pendingCount} overflowCount={999} color="red">
             <Button icon={<CheckCircleOutlined />}>待处理</Button>
           </Badge>
+          <Button icon={<MonitorOutlined />} onClick={() => navigate('/risk/monitor')}>
+            去风险监控处置
+          </Button>
         </Space>
       }
     >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="AI风险 = 全局台账；风险监控 = 待处理处置队列"
+        description="本页保留全部历史（含已处理），用于追溯与统计；「风险监控」默认只看未处理，并提供自动刷新、详情复核与设备监控跳转。"
+        action={
+          <Button size="small" onClick={() => navigate('/risk/monitor')}>
+            打开处置队列
+          </Button>
+        }
+      />
+
+      <Row gutter={12} style={{ marginBottom: 16 }}>
+        <Col xs={12} md={6} lg={3}>
+          <Card size="small"><Statistic title="风险总数" value={summary?.total ?? 0} /></Card>
+        </Col>
+        <Col xs={12} md={6} lg={3}>
+          <Card size="small"><Statistic title="待处理" value={summary?.pending ?? pendingCount} valueStyle={{ color: '#cf1322' }} /></Card>
+        </Col>
+        <Col xs={12} md={6} lg={3}>
+          <Card size="small"><Statistic title="高风险" value={summary?.high ?? 0} valueStyle={{ color: '#d4380d' }} /></Card>
+        </Col>
+        <Col xs={12} md={6} lg={3}>
+          <Card size="small"><Statistic title="未读" value={summary?.unread ?? 0} /></Card>
+        </Col>
+        <Col xs={12} md={6} lg={3}>
+          <Card size="small"><Statistic title="今日新增" value={summary?.today ?? 0} /></Card>
+        </Col>
+        <Col xs={12} md={6} lg={3}>
+          <Card size="small"><Statistic title="判定准确" value={summary?.accurateYes ?? 0} /></Card>
+        </Col>
+        <Col xs={12} md={6} lg={3}>
+          <Card size="small"><Statistic title="误报" value={summary?.accurateNo ?? 0} /></Card>
+        </Col>
+        <Col xs={12} md={6} lg={3}>
+          <Card size="small"><Statistic title="未复核" value={summary?.unconfirmed ?? 0} /></Card>
+        </Col>
+      </Row>
+
       <SearchBar
         fields={[
           { name: 'keyword', label: '设备名称', placeholder: '请输入设备名称' },

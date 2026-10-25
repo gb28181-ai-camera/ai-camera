@@ -1,0 +1,12 @@
+# 本地 Embedding 服务依赖。
+# fastembed 基于 ONNX Runtime，CPU 即可运行；模型在首次调用/预热时下载到
+# EMBEDDING_CACHE_DIR，建议挂载持久卷，避免重建容器重复下载。
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.9,<3.0
+# 本地 ONNX 推理（BGE-M3）
+onnxruntime>=1.18,<2.0
+tokenizers>=0.20,<1.0
+numpy>=1.26,<3.0
+# 可选：未配置 EMBEDDING_MODEL_DIR 时按模型名下载（需要 HuggingFace 可达）
+fastembed>=0.7,<1.0

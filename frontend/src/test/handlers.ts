@@ -210,6 +210,29 @@ export const handlers = [
       { id: 1, risk_type_id: 1, device_id: 1, status: 'pending', risk_type: { name: '未佩戴安全帽' } },
     ], 1)
   ),
+  http.get(`${API_BASE}/web/risks/summary`, () =>
+    httpResponse.success({
+      total: 1, pending: 1, handled: 0, high: 1, unread: 1,
+      accurate_yes: 0, accurate_no: 0, unconfirmed: 1, today: 1,
+    })
+  ),
+  http.get(`${API_BASE}/web/risks/pending-count`, () => httpResponse.success(1)),
+
+  // 实时音视频
+  http.get(`${API_BASE}/web/av/devices`, () =>
+    httpResponse.page([{ id: 1, name: '东门摄像头', device_code: 'CAM_001', status: 'online' }], 1)
+  ),
+
+  // 语音：Embedding 测试 / 重建向量
+  http.post(`${API_BASE}/web/voice/embedding/test`, () =>
+    httpResponse.success({
+      success: true, endpoint: 'http://127.0.0.1:8091/v1', model: 'BAAI/bge-m3',
+      dim: 1024, elapsed_ms: 12, message: 'Embedding 可用，返回 1024 维向量',
+    })
+  ),
+  http.post(`${API_BASE}/web/voice/memories/backfill`, () =>
+    httpResponse.success({ scanned: 0, updated: 0, failed: 0, remaining: 0 })
+  ),
 
   // 告警
   http.get(`${API_BASE}/web/alarms`, () =>

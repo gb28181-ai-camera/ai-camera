@@ -180,6 +180,25 @@ func (s *RiskService) PendingCount(ctx context.Context, ds *utils.DataScope) (in
 	return s.repo.CountPending(ctx, ds)
 }
 
+// Summary 全局风险总览（与列表同口径的数据权限）。
+func (s *RiskService) Summary(ctx context.Context, ds *utils.DataScope) (*response.RiskSummaryResp, error) {
+	row, err := s.repo.Summary(ctx, ds)
+	if err != nil {
+		return nil, err
+	}
+	return &response.RiskSummaryResp{
+		Total:       row.Total,
+		Pending:     row.Pending,
+		Handled:     row.Handled,
+		High:        row.High,
+		Unread:      row.Unread,
+		AccurateYes: row.AccurateYes,
+		AccurateNo:  row.AccurateNo,
+		Unconfirmed: row.Unconfirmed,
+		Today:       row.Today,
+	}, nil
+}
+
 // Report 设备上报风险（ApiKey 认证，无用户上下文）。
 //
 // 依据 device_code 定位设备、risk_type_code 定位风险类型，落库时冗余

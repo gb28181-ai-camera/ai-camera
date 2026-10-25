@@ -303,6 +303,12 @@ var contractVoiceRoutes = []string{
 	"POST /internal/mcp",
 	"POST /internal/voice/memory/retrieve",
 	"POST /internal/voice/memory/write",
+	"POST /web/voice/embedding/test",
+	"POST /web/voice/memories/backfill",
+	// v0.6.0 实时音视频：MQTT 房间信令
+	"GET /web/av/devices",
+	"POST /web/av/devices/:id/viewer-ticket",
+	"GET /web/av/ws",
 }
 
 // contractRoutes 契约 §3 列出的全部端点，格式 "METHOD /path"。
@@ -465,6 +471,7 @@ var contractRoutes = []string{
 	// ── §3.7 风险 ──
 	"GET /web/risks",
 	"GET /web/risks/pending-count",
+	"GET /web/risks/summary",
 	"GET /web/risks/:id",
 	"PUT /web/risks/:id/read",
 	"PUT /web/risks/:id/accurate",

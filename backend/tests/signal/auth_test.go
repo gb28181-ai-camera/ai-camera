@@ -95,9 +95,12 @@ func TestPlatformACL(t *testing.T) {
 		{"订阅其他话题", "subscribe", "iot/g1/app/c1/signal", false},
 		{"订阅 #", "subscribe", "iot/#", false},
 		{"发布 answer", "publish", "iot/g1/app/flutter-1/signal", true},
+		{"发布设备房间信令", "publish", "iot/g1/device/CAM_001/signal", true},
+		{"发布设备话题多一层", "publish", "iot/g1/device/CAM_001/signal/extra", false},
 		{"发布多一层", "publish", "iot/g1/app/flutter-1/signal/extra", false},
 		{"发布到后端话题", "publish", "iot/g1/signal/backend", false},
 		{"发布通配符", "publish", "iot/g1/app/+/signal", false},
+		{"发布设备通配符", "publish", "iot/g1/device/+/signal", false},
 		// 内部账号服务所有服务组，因此任意组的 app 话题都应允许。
 		{"其他组发布", "publish", "iot/g2/app/flutter-1/signal", true},
 		{"未知动作", "delete", "iot/g1/app/flutter-1/signal", false},

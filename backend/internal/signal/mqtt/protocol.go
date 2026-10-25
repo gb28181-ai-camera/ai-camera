@@ -71,6 +71,9 @@ type Message struct {
 	SDP       string `json:"sdp,omitempty"`
 	Code      string `json:"code,omitempty"`
 	Message   string `json:"message,omitempty"`
+	// RoomID 非空表示这是「设备 ↔ 查看方」房间信令，由 internal/signal/room
+	// 处理；WHEP 桥必须忽略，不能把它当成 App 的点播 offer。
+	RoomID string `json:"room_id,omitempty"`
 }
 
 // NewAnswer 构造发给 App 的 answer 消息。

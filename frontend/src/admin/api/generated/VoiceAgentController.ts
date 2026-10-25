@@ -10,10 +10,13 @@ import type { RPageVoiceMcpTool } from './definitions/RPageVoiceMcpTool';
 import type { RPageVoiceMemory } from './definitions/RPageVoiceMemory';
 import type { RVoiceAgentConfig } from './definitions/RVoiceAgentConfig';
 import type { RVoiceAgentTest } from './definitions/RVoiceAgentTest';
+import type { RVoiceEmbeddingBackfill } from './definitions/RVoiceEmbeddingBackfill';
+import type { RVoiceEmbeddingTest } from './definitions/RVoiceEmbeddingTest';
 import type { RVoiceWsTicket } from './definitions/RVoiceWsTicket';
 import type { TestVoiceAgentReq } from './definitions/TestVoiceAgentReq';
 import type { UpdateVoiceAgentReq } from './definitions/UpdateVoiceAgentReq';
 import type { UpdateVoiceMcpToolReq } from './definitions/UpdateVoiceMcpToolReq';
+import type { VoiceEmbeddingBackfillReq } from './definitions/VoiceEmbeddingBackfillReq';
 import type { VoiceWsTicketReq } from './definitions/VoiceWsTicketReq';
 
 export class VoiceAgentController {
@@ -71,6 +74,17 @@ export class VoiceAgentController {
       });
     }
 
+    static testVoiceEmbeddingPath: string = "/web/voice/embedding/test";
+    /// 测试 Embedding 服务
+    static async testVoiceEmbedding(headers?: any): Promise<RVoiceEmbeddingTest> {
+      return request(`/web/voice/embedding/test`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: null,
+        headers,
+      });
+    }
+
     static pageVoiceMcpLogsPath: string = "/web/voice/mcp/logs";
     /// MCP 调用审计
     static async pageVoiceMcpLogs(page?: number, page_size?: number, tool_name?: string, status?: string, user_id?: number, device_id?: number, session_id?: string, start_dt?: string, end_dt?: string, headers?: any): Promise<RPageVoiceMcpLog> {
@@ -118,6 +132,17 @@ export class VoiceAgentController {
       return request(`/web/voice/memories/${id}`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "DELETE",
+        headers,
+      });
+    }
+
+    static backfillVoiceMemoryEmbeddingsPath: string = "/web/voice/memories/backfill";
+    /// 历史记忆重建向量
+    static async backfillVoiceMemoryEmbeddings(data?: VoiceEmbeddingBackfillReq, headers?: any): Promise<RVoiceEmbeddingBackfill> {
+      return request(`/web/voice/memories/backfill`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: JSON.stringify(data),
         headers,
       });
     }

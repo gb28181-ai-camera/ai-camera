@@ -21,6 +21,7 @@ import (
 	gbsvc "github.com/boticz/ai-camera-backend/internal/service/gb28181"
 	"github.com/boticz/ai-camera-backend/internal/service/iot"
 	mqttsignal "github.com/boticz/ai-camera-backend/internal/signal/mqtt"
+	signalroom "github.com/boticz/ai-camera-backend/internal/signal/room"
 )
 
 // @title           AI Camera 智能监控平台 API
@@ -84,12 +85,17 @@ func main() {
 	var (
 		signalClient *mqttsignal.Client
 		signalBridge *mqttsignal.Bridge
+		signalHub    *signalroom.Hub
 	)
 	if sigCfg, err := mqttsignal.ConfigFromEnv(); err != nil {
 		log.Fatalf("MQTT 信令配置非法: %v", err)
 	} else if sigCfg.Enabled {
 		signalClient, err = mqttsignal.NewClient(sigCfg, func(topic string, payload []byte) {
-			// 消息在 Start 之后才可能到达；此处再判空是防止配置错误导致 nil panic。
+			// 同一个 broker 话题承载两条链路：房间信令优先，其余交给 WHEP 桥。
+			// 消息在 Start 之后才可能到达；判空防止初始化顺序导致 nil panic。
+			if signalHub != nil && signalHub.HandleDevice(topic, payload) {
+				return
+			}
 			if signalBridge != nil {
 				signalBridge.Handle(topic, payload)
 			}
@@ -98,6 +104,8 @@ func main() {
 			log.Fatalf("MQTT 信令客户端初始化失败: %v", err)
 		}
 		signalBridge = mqttsignal.NewBridge(signalClient, whep.NewDefaultClient(), play.DefaultRegistry())
+		signalHub = signalroom.NewHub(signalClient)
+		signalroom.SetDefaultHub(signalHub)
 		if err := signalClient.Start(appCtx); err != nil {
 			log.Printf("MQTT 信令启动异常（HTTP 服务继续运行）: %v", err)
 		}
