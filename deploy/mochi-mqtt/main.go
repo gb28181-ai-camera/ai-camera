@@ -17,7 +17,9 @@ package main
 import (
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/boticz/ai-camera-mochi-mqtt/hook"
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -77,6 +79,18 @@ func main() {
 	logger.Info("mochi-mqtt 启动", "tcp", listen, "ws", wsListen, "backend", backend)
 	if err := server.Serve(); err != nil {
 		logger.Error("mochi-mqtt 运行失败", "error", err)
+		os.Exit(1)
+	}
+
+	// mochi-mqtt v2.7.x 的 Serve() 只负责拉起监听协程后立即返回，
+	// 不阻塞主 goroutine；若这里直接返回，进程会以 0 退出并被 restart 策略
+	// 反复拉起（表现为容器一直 Restarting）。因此显式等待退出信号。
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	logger.Info("收到退出信号，正在关闭 mochi-mqtt")
+	if err := server.Close(); err != nil {
+		logger.Error("关闭 mochi-mqtt 失败", "error", err)
 		os.Exit(1)
 	}
 }

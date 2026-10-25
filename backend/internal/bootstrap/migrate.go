@@ -109,6 +109,10 @@ func AutoMigrate() {
 		// ── JT/T 1078 车载终端（v0.2.0，三期范围）──
 	}
 
+	// 模块自注册模型：新增模块在自己的 model 文件里调用 model.RegisterModel(&X{})，
+	// 无需改动本文件，避免多人/多 agent 并行开发时集中修改同一处列表。
+	models = append(models, model.ExtraModels()...)
+
 	if err := globalDB.AutoMigrate(models...); err != nil {
 		log.Fatalf("数据库迁移失败: %v", err)
 	}

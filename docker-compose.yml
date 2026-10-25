@@ -309,11 +309,16 @@ services:
       - "${MQTT_WS_PORT:-8083}:8083"
     environment:
       TZ: Asia/Shanghai
-      # 容器内直连 backend 服务名；本地开发可改为 http://host.docker.internal:8081
+      # backend 属于 profile full，容器内可直连服务名 http://backend:8080；
+      # 宿主机后端形态（本地开发）必须覆盖为 http://host.docker.internal:8080。
       BACKEND_RPC_URL: ${MQTT_BACKEND_RPC_URL:-http://backend:8080}
       # 与后端 MQTT_RPC_TOKEN 必须一致；为空时 broker 拒绝启动（fail-fast）
       MQTT_RPC_TOKEN: ${MQTT_RPC_TOKEN:-}
       MQTT_DEBUG: ${MQTT_DEBUG:-0}
+    # Linux 宿主上 host.docker.internal 默认不存在，需显式映射到网关；
+    # 宿主机后端形态下 broker 要通过它回调 /rpc/mqtt/*。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks: [ai-camera]
 
   # TURN/STUN（coturn）。鉴权采用 TURN REST API：
