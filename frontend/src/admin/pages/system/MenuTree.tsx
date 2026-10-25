@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Switch,
-  Table, Tag, TreeSelect, message,
+  Table, Tag, Transfer, TreeSelect, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
 import DynamicIcon from '../../components/DynamicIcon'
 import { MenuController } from '../../api/generated/MenuController'
+import { RoleController } from '../../api/generated/RoleController'
 import { useAuthStore } from '../../store/authStore'
 import type { Menu } from '../../api/generated/definitions/Menu'
 import type { MenuAPI } from '../../api/generated/definitions/MenuAPI'
+import type { Role } from '../../api/generated/definitions/Role'
 
 /** 菜单类型选项，与后端 model.Menu.Type 取值一致 */
 const MENU_TYPE_OPTIONS = [
@@ -80,6 +82,86 @@ const API_HEAD_STYLE: React.CSSProperties = {
   textAlign: 'left',
 }
 
+const PLATFORM_LABELS: Record<string, string> = {
+  pc: 'PC 管理后台',
+  mobile: '移动端',
+}
+
+/** 在菜单树中按 ID 查找节点 */
+function findMenuById(nodes: Menu[], id: number): Menu | undefined {
+  for (const node of nodes) {
+    if (node.id === id) return node
+    if (node.children && node.children.length > 0) {
+      const hit = findMenuById(node.children, id)
+      if (hit) return hit
+    }
+  }
+  return undefined
+}
+
+/** 收集指定节点自身及全部子孙的 ID（编辑父级时需整体排除，避免树成环） */
+function collectSubtreeIds(nodes: Menu[], rootId: number): Set<number> {
+  const ids = new Set<number>()
+  const root = findMenuById(nodes, rootId)
+  if (!root) return ids
+  const walk = (node: Menu) => {
+    if (typeof node.id === 'number') ids.add(node.id)
+    node.children?.forEach(walk)
+  }
+  walk(root)
+  return ids
+}
+
+/**
+ * 按允许的父级类型裁剪 TreeSelect 数据。
+ *
+ * 不合格的节点不展示，但其合格子孙会被提升到上一层（避免历史脏数据导致节点整体消失）；
+ * `excludeIds`（自身及子孙）则整棵跳过。
+ */
+function toParentTreeSelectData(
+  nodes: Menu[],
+  excludeIds: Set<number>,
+  allowedTypes: Set<string>,
+): MenuTreeSelectNode[] {
+  const rows: MenuTreeSelectNode[] = []
+  for (const node of nodes) {
+    if (typeof node.id === 'number' && excludeIds.has(node.id)) continue
+    const children = node.children && node.children.length > 0
+      ? toParentTreeSelectData(node.children, excludeIds, allowedTypes)
+      : []
+    if (allowedTypes.has(String(node.type ?? ''))) {
+      rows.push({
+        key: node.id ?? 0,
+        value: node.id ?? 0,
+        title: String(node.name ?? ''),
+        children: children.length > 0 ? children : undefined,
+      })
+    } else {
+      rows.push(...children)
+    }
+  }
+  return rows
+}
+
+/** 校验「子类型 → 父级」组合，返回错误文案；合法返回 undefined */
+function validateParentType(
+  childType: string,
+  parentId: number | undefined,
+  nodes: Menu[],
+): string | undefined {
+  if (!parentId) {
+    // 根节点兼容历史数据（顶级菜单），按钮仍必须挂在菜单下
+    return childType === 'button' ? '按钮的上级只能是菜单' : undefined
+  }
+  const parent = findMenuById(nodes, parentId)
+  if (!parent) return '父菜单不存在'
+  const parentType = String(parent.type ?? '')
+  if (childType === 'directory' && parentType !== 'directory') return '目录的上级只能是目录'
+  if (childType === 'menu' && parentType !== 'directory') return '菜单的上级只能是目录'
+  if (childType === 'button' && parentType !== 'menu') return '按钮的上级只能是菜单'
+  return undefined
+}
+
 /**
  * 菜单管理：树形表格 + 增删改 + 接口绑定。
  * 菜单树同时驱动侧边栏与按钮级权限（permission_code）；按钮绑定的接口是 Casbin p 策略的唯一来源。
@@ -104,6 +186,21 @@ export default function MenuTree() {
   const [apiSaving, setApiSaving] = useState(false)
   const [apiForm] = Form.useForm<MenuApiFormValues>()
 
+  // 状态快捷开关（行内）
+  const [togglingId, setTogglingId] = useState<number | undefined>(undefined)
+
+  // 允许访问角色
+  const [roleOptions, setRoleOptions] = useState<Role[]>([])
+  const [roleModalOpen, setRoleModalOpen] = useState(false)
+  const [roleTarget, setRoleTarget] = useState<Menu | null>(null)
+  const [roleTargetKeys, setRoleTargetKeys] = useState<string[]>([])
+  const [roleSaving, setRoleSaving] = useState(false)
+
+  // 表单内的菜单类型：父级候选与合法性校验随类型变化。
+  // 用本地 state 而非 Form.useWatch：弹窗懒渲染时 useWatch 会在未挂载的 form 上告警。
+  const [formType, setFormType] = useState<string>('menu')
+  const effectiveFormType = formType
+
   const permCodes = useAuthStore((s) => s.permCodes)
   // permCodes 为空说明菜单权限尚未加载，此时不隐藏按钮，避免整页操作被锁死
   const can = (code: string) => permCodes.length === 0 || permCodes.includes(code)
@@ -111,11 +208,13 @@ export default function MenuTree() {
   const canUpdate = can('system:menu:update')
   const canDelete = can('system:menu:delete')
   const canBindApi = can('system:menu:api')
+  const canAssignRole = can('system:menu:role')
 
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await MenuController.treeMenus()
+      // 管理页需要看到停用菜单（可重新启用）与移动端菜单，故不按平台过滤且包含停用
+      const res = await MenuController.treeMenus('all', true)
       if (res.code === 200) {
         setData(res.data ?? [])
       } else {
@@ -129,6 +228,13 @@ export default function MenuTree() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // 角色候选：管理菜单授权时可回显停用角色，故用分页接口取全量（选项接口仅启用角色）
+  useEffect(() => {
+    RoleController.pageRoles(1, 200).then((res) => {
+      if (res.code === 200) setRoleOptions(res.data?.items ?? [])
+    })
+  }, [])
 
   const handleSearch = (values: Record<string, unknown>) => setSearch(values)
   const handleReset = () => {
@@ -183,24 +289,23 @@ export default function MenuTree() {
     return rows
   }, [filteredData, expandedKeys, keyword, statusFilter])
 
-  /** 菜单树 → TreeSelect 数据（可排除指定节点及其子孙，避免把父级选成自己） */
-  const toTreeSelectData = (nodes: Menu[], excludeId?: number): MenuTreeSelectNode[] =>
-    nodes
-      .filter((node) => node.id !== excludeId)
-      .map((node) => ({
-        key: node.id ?? 0,
-        value: node.id ?? 0,
-        title: String(node.name ?? ''),
-        children: node.children && node.children.length > 0 ? toTreeSelectData(node.children) : undefined,
-      }))
+  /** 父级候选：排除自身及全部子孙，并按「子类型可挂载的父类型」裁剪 */
+  const parentTreeData = useMemo(() => {
+    const excludeIds = editing?.id ? collectSubtreeIds(data, editing.id) : new Set<number>()
+    const allowedTypes = new Set<string>([effectiveFormType === 'button' ? 'menu' : 'directory'])
+    return toParentTreeSelectData(data, excludeIds, allowedTypes)
+  }, [data, editing, effectiveFormType])
 
   const openCreate = (parent?: Menu) => {
     setEditing(null)
     form.resetFields()
+    // 目录下默认建菜单、菜单下默认建按钮；按钮本身不允许再有下级
+    const childType = parent?.type === 'menu' ? 'button' : 'menu'
+    setFormType(childType)
     form.setFieldsValue({
       parent_id: parent?.id,
-      type: 'menu',
-      platform: 'pc',
+      type: childType,
+      platform: parent?.platform ?? 'pc',
       sequence: 10,
       active: true,
       hidden: false,
@@ -210,6 +315,7 @@ export default function MenuTree() {
 
   const openEdit = (record: Menu) => {
     setEditing(record)
+    setFormType(record.type ?? 'menu')
     form.setFieldsValue({
       parent_id: record.parent_id ?? undefined,
       name: record.name ?? '',
@@ -229,6 +335,16 @@ export default function MenuTree() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
+    // 提交前拦截「类型 → 父级」非法组合，并避免把父级选成自身/子孙
+    const parentError = validateParentType(values.type, values.parent_id, data)
+    if (parentError) {
+      message.error(parentError)
+      return
+    }
+    if (editing?.id && values.parent_id && collectSubtreeIds(data, editing.id).has(values.parent_id)) {
+      message.error('父菜单不能是当前菜单自身或其子菜单')
+      return
+    }
     setSaving(true)
     try {
       if (editing) {
@@ -271,6 +387,63 @@ export default function MenuTree() {
     }
   }
 
+  /** 行内启停：只提交 active，其余字段由后端保持原值 */
+  const handleToggleActive = async (record: Menu, checked: boolean) => {
+    if (!record.id) return
+    setTogglingId(record.id)
+    try {
+      const res = await MenuController.updateMenu(String(record.id), { active: checked })
+      if (res.code === 200) {
+        message.success(checked ? '已启用' : '已停用')
+        fetchData()
+      } else {
+        message.error(res.message || '操作失败')
+      }
+    } catch {
+      message.error('操作失败')
+    } finally {
+      setTogglingId(undefined)
+    }
+  }
+
+  /** 打开「允许访问角色」弹窗并回显（菜单 → 角色方向） */
+  const openRoleAuth = async (record: Menu) => {
+    if (!record.id) return
+    setRoleTarget(record)
+    setRoleTargetKeys([])
+    setRoleModalOpen(true)
+    const res = await MenuController.getMenuRoles(String(record.id))
+    if (res.code === 200) {
+      setRoleTargetKeys((res.data ?? [])
+        .map((role) => role.id)
+        .filter((id): id is number => typeof id === 'number')
+        .map(String))
+    } else {
+      message.error(res.message || '获取菜单角色失败')
+    }
+  }
+
+  /** 覆盖式保存菜单授权角色，后端会为受影响角色重建 Casbin 策略 */
+  const handleAssignRoles = async () => {
+    if (!roleTarget?.id) return
+    setRoleSaving(true)
+    try {
+      const res = await MenuController.assignMenuRoles(String(roleTarget.id), {
+        ids: roleTargetKeys.map(Number),
+      })
+      if (res.code === 200) {
+        message.success('角色授权已保存')
+        setRoleModalOpen(false)
+      } else {
+        message.error(res.message || '保存失败')
+      }
+    } catch {
+      message.error('保存失败')
+    } finally {
+      setRoleSaving(false)
+    }
+  }
+
   /** 展开行时按需加载该菜单绑定的接口 */
   const loadApis = async (menuId?: number) => {
     if (!menuId) return
@@ -286,6 +459,11 @@ export default function MenuTree() {
   }
 
   const openApiModal = (record: Menu) => {
+    // 目录/按钮不承载接口，Casbin p 策略只取菜单绑定的接口
+    if (record.type !== 'menu') {
+      message.warning('仅「菜单」类型可绑定接口')
+      return
+    }
     setApiTarget(record)
     apiForm.resetFields()
     apiForm.setFieldsValue({ method: 'GET' })
@@ -340,7 +518,7 @@ export default function MenuTree() {
         <div style={{ marginBottom: 8 }}>
           <Space>
             <span>已绑定接口：</span>
-            {canBindApi && (
+            {canBindApi && menu.type === 'menu' && (
               <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => openApiModal(menu)}>
                 新增接口
               </Button>
@@ -416,6 +594,18 @@ export default function MenuTree() {
       },
     },
     {
+      title: '平台', dataIndex: 'platform', key: 'platform', width: 110,
+      render: (value: string) => (
+        <Tag color={value === 'mobile' ? 'geekblue' : 'cyan'}>
+          {PLATFORM_LABELS[value] ?? value ?? '-'}
+        </Tag>
+      ),
+    },
+    {
+      title: '隐藏', dataIndex: 'hidden', key: 'hidden', width: 80,
+      render: (value: boolean) => (value ? <Tag color="default">隐藏</Tag> : <Tag color="green">显示</Tag>),
+    },
+    {
       title: '链接', key: 'link', width: 90,
       render: (_, record) => {
         const path = String(record.path ?? '')
@@ -433,24 +623,46 @@ export default function MenuTree() {
       render: (value: string) => (value ? <Tag>{value}</Tag> : '-'),
     },
     {
-      title: '状态', key: 'active', width: 80,
-      render: (_, record) => (record.active === false ? <Tag>停用</Tag> : <Tag color="green">启用</Tag>),
+      title: '状态', key: 'active', width: 100,
+      render: (_, record) => (
+        <Switch
+          className="e2e-menu-active-switch"
+          size="small"
+          checked={record.active !== false}
+          checkedChildren="启用"
+          unCheckedChildren="停用"
+          loading={togglingId === record.id}
+          disabled={!canUpdate}
+          onChange={(checked) => handleToggleActive(record, checked)}
+        />
+      ),
     },
     {
-      title: '操作', key: 'action', width: 300, fixed: 'right' as const,
+      title: '操作', key: 'action', width: 380, fixed: 'right' as const,
       render: (_, record) => (
         <ActionButtons>
-          {canCreate && (
+          {canCreate && record.type !== 'button' && (
             <Button type="link" size="small" icon={<PlusOutlined />} onClick={() => openCreate(record)}>新增下级</Button>
           )}
           {canUpdate && (
             <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
           )}
-          {canBindApi && (
+          {canAssignRole && (
+            <Button
+              className="e2e-menu-role-btn"
+              type="link"
+              size="small"
+              icon={<TeamOutlined />}
+              onClick={() => openRoleAuth(record)}
+            >
+              允许访问角色
+            </Button>
+          )}
+          {canBindApi && record.type === 'menu' && (
             <Button type="link" size="small" onClick={() => openApiModal(record)}>绑定接口</Button>
           )}
           {canDelete && (
-            <Popconfirm title="确定删除?存在子菜单时将一并删除。" onConfirm={() => handleDelete(record)}>
+            <Popconfirm title="确定删除?存在子菜单时删除将被拒绝。" onConfirm={() => handleDelete(record)}>
               <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
             </Popconfirm>
           )}
@@ -528,18 +740,32 @@ export default function MenuTree() {
         <Form form={form} layout="vertical">
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="parent_id" label="父菜单">
+              <Form.Item
+                name="parent_id"
+                label="父菜单"
+                extra="目录/菜单的上级为目录，按钮的上级为菜单；不选则为顶级"
+              >
                 <TreeSelect
                   allowClear
                   placeholder="不选则为顶级菜单"
-                  treeData={toTreeSelectData(data, editing?.id)}
+                  treeData={parentTreeData}
                   treeDefaultExpandAll
                 />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="type" label="菜单类型" rules={[{ required: true, message: '请选择菜单类型' }]}>
-                <Select options={MENU_TYPE_OPTIONS} />
+                <Select
+                  options={MENU_TYPE_OPTIONS}
+                  onChange={(value: string) => {
+                    setFormType(value)
+                    // 类型变化后若现有父级不再合法则清空，避免提交时才报错
+                    const currentParent = form.getFieldValue('parent_id') as number | undefined
+                    if (validateParentType(value, currentParent, data)) {
+                      form.setFieldsValue({ parent_id: undefined })
+                    }
+                  }}
+                />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -624,6 +850,34 @@ export default function MenuTree() {
             <Input placeholder="如：用户分页列表" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 允许访问角色：菜单 → 角色方向授权 */}
+      <Modal
+        className="e2e-menu-role-modal"
+        title={`允许访问角色 - ${roleTarget?.name ?? ''}`}
+        open={roleModalOpen}
+        onOk={handleAssignRoles}
+        onCancel={() => setRoleModalOpen(false)}
+        confirmLoading={roleSaving}
+        width={760}
+      >
+        <div style={{ marginBottom: 12, color: '#666' }}>
+          选择可访问该菜单的角色；保存后后端会为受影响角色重建 Casbin 策略。
+        </div>
+        <Transfer
+          dataSource={roleOptions.map((role) => ({
+            key: String(role.id ?? ''),
+            title: `${role.name ?? ''}${role.code ? `（${role.code}）` : ''}${role.active === false ? ' - 已停用' : ''}`,
+          }))}
+          targetKeys={roleTargetKeys}
+          onChange={(keys) => setRoleTargetKeys(keys.map(String))}
+          render={(item) => item.title ?? ''}
+          titles={['全部角色', '已授权角色']}
+          showSearch
+          listStyle={{ width: 340, height: 380 }}
+          filterOption={(input, item) => String(item.title ?? '').toLowerCase().includes(input.toLowerCase())}
+        />
       </Modal>
     </PageContainer>
   )

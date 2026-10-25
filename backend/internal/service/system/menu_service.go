@@ -47,15 +47,25 @@ type MenuService struct{}
 // NewMenuService 构造菜单服务。
 func NewMenuService() *MenuService { return &MenuService{} }
 
-// Tree 返回指定平台的菜单树（仅启用菜单），platform 为空时默认 pc。
+// Tree 返回指定平台的启用菜单树（角色授权树的默认行为）。
 //
-// 全部菜单一次性查出后在内存按 parent_id 组装，children 按 sequence 升序；
-// 父节点不在结果集内（例如父菜单已停用）的节点按根节点返回，避免丢节点。
+// platform 为空时默认 pc。全部菜单一次性查出后在内存按 parent_id 组装，
+// children 按 sequence 升序；父节点不在结果集内（例如父菜单已停用）的节点
+// 按根节点返回，避免丢节点。
 func (s *MenuService) Tree(ctx context.Context, platform string) ([]model.Menu, error) {
+	return s.TreeWithOptions(ctx, platform, false)
+}
+
+// TreeWithOptions 返回指定平台的菜单树。
+//
+// includeInactive=true 时包含停用菜单（管理页用于重新启用）；platform="all" 时
+// 不按平台过滤，同时返回 pc 与 mobile 菜单。角色授权接口仍使用 Tree 的默认行为
+// （仅启用 PC 菜单）。
+func (s *MenuService) TreeWithOptions(ctx context.Context, platform string, includeInactive bool) ([]model.Menu, error) {
 	if platform == "" {
 		platform = defaultPlatform
 	}
-	list, err := repository.NewMenuRepo().ListByPlatform(ctx, platform)
+	list, err := repository.NewMenuRepo().ListByPlatform(ctx, platform, includeInactive)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +114,7 @@ func (s *MenuService) Create(ctx context.Context, req *request.CreateMenuReq) (*
 		m.Sequence = 10
 	}
 
-	level, err := s.resolveLevel(ctx, req.ParentID)
+	level, err := s.resolveParent(ctx, req.ParentID, m.Type)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +133,12 @@ func (s *MenuService) Update(ctx context.Context, id int64, req *request.UpdateM
 	m, err := repo.GetByID(ctx, id)
 	if err != nil {
 		return err
+	}
+
+	// 生效后的类型：未传 type 时沿用原值。
+	effectiveType := m.Type
+	if req.Type != "" {
+		effectiveType = req.Type
 	}
 
 	if req.Name != "" {
@@ -165,12 +181,18 @@ func (s *MenuService) Update(ctx context.Context, id int64, req *request.UpdateM
 		if err := s.ensureNotDescendant(ctx, id, *req.ParentID); err != nil {
 			return err
 		}
-		level, err := s.resolveLevel(ctx, req.ParentID)
+		// 移动节点时同时校验父级类型（目录/菜单/按钮的挂载规则）。
+		level, err := s.resolveParent(ctx, req.ParentID, effectiveType)
 		if err != nil {
 			return err
 		}
 		m.ParentID = req.ParentID
 		m.Level = level
+	} else if req.Type != "" {
+		// 仅改类型不改父级：同样校验新类型能否挂在现有父级下。
+		if err := s.validateParentType(ctx, effectiveType, m.ParentID); err != nil {
+			return err
+		}
 	}
 
 	return repo.Update(ctx, m)
@@ -203,6 +225,85 @@ func (s *MenuService) Delete(ctx context.Context, id int64) error {
 
 	s.syncCasbinForRoles(ctx, roles)
 	return nil
+}
+
+// GetRoles 查询菜单已授权的角色列表（菜单→角色方向）。
+func (s *MenuService) GetRoles(ctx context.Context, menuID int64) ([]model.Role, error) {
+	repo := repository.NewMenuRepo()
+	if _, err := repo.GetByID(ctx, menuID); err != nil {
+		return nil, err
+	}
+	return repo.ListRolesByMenuID(ctx, menuID)
+}
+
+// AssignRoles 覆盖式设置菜单的授权角色，并为受影响角色重建 Casbin p 策略。
+//
+// 「受影响角色」= 变更前拥有该菜单的角色 ∪ 变更后拥有该菜单的角色：
+// 前者需要移除该菜单带来的接口权限，后者需要新增，二者都要重建。
+func (s *MenuService) AssignRoles(ctx context.Context, menuID int64, roleIDs []int64) error {
+	repo := repository.NewMenuRepo()
+	if _, err := repo.GetByID(ctx, menuID); err != nil {
+		return err
+	}
+
+	oldRoles, err := repo.ListRolesByMenuID(ctx, menuID)
+	if err != nil {
+		return err
+	}
+
+	ids := uniquePositiveIDs(roleIDs)
+	roleRepo := repository.NewRoleRepo()
+	newRoles := make([]model.Role, 0, len(ids))
+	for _, roleID := range ids {
+		role, err := roleRepo.GetByID(ctx, roleID)
+		if err != nil {
+			if IsNotFound(err) {
+				return bizErr("角色 %d 不存在", roleID)
+			}
+			return err
+		}
+		newRoles = append(newRoles, *role)
+	}
+
+	if err := repo.SetRoleIDsForMenu(ctx, menuID, ids); err != nil {
+		return err
+	}
+
+	s.syncCasbinForRoles(ctx, mergeRoles(oldRoles, newRoles))
+	return nil
+}
+
+// uniquePositiveIDs 去重并剔除非法 ID，保持原有顺序。
+func uniquePositiveIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// mergeRoles 按角色 ID 合并两组角色，避免同一角色被重复重建策略。
+func mergeRoles(a, b []model.Role) []model.Role {
+	seen := make(map[int64]struct{}, len(a)+len(b))
+	out := make([]model.Role, 0, len(a)+len(b))
+	for _, list := range [][]model.Role{a, b} {
+		for _, role := range list {
+			if _, ok := seen[role.ID]; ok {
+				continue
+			}
+			seen[role.ID] = struct{}{}
+			out = append(out, role)
+		}
+	}
+	return out
 }
 
 // ListAPIs 查询菜单绑定的接口列表。
@@ -260,10 +361,10 @@ func (s *MenuService) DeleteAPI(ctx context.Context, menuID, apiID int64) error 
 
 // ─── 内部方法 ────────────────────────────────────────────────
 
-// resolveLevel 依据父菜单推导层级：根为 1，子为父 level+1。
-func (s *MenuService) resolveLevel(ctx context.Context, parentID *int64) (int, error) {
+// resolveParent 校验父级挂载规则并推导层级：根为 1，子为父 level+1。
+func (s *MenuService) resolveParent(ctx context.Context, parentID *int64, childType string) (int, error) {
 	if parentID == nil || *parentID <= 0 {
-		return 1, nil
+		return 1, s.validateMenuType(childType)
 	}
 	parent, err := repository.NewMenuRepo().GetByID(ctx, *parentID)
 	if err != nil {
@@ -272,11 +373,67 @@ func (s *MenuService) resolveLevel(ctx context.Context, parentID *int64) (int, e
 		}
 		return 0, err
 	}
+	if err := validateParentChildType(childType, parent.Type); err != nil {
+		return 0, err
+	}
 	lv := parent.Level + 1
 	if lv < 2 {
 		lv = 2
 	}
 	return lv, nil
+}
+
+// validateParentType 校验 childType 能否挂在 parentID 之下（parentID 为空表示根）。
+//
+// 挂载规则：
+//   - 根节点：directory / menu / button 均可（兼容历史数据中的顶级菜单）；
+//   - 目录（directory）只能挂在目录下；
+//   - 菜单（menu）只能挂在目录下；
+//   - 按钮（button）只能挂在菜单下。
+func (s *MenuService) validateParentType(ctx context.Context, childType string, parentID *int64) error {
+	if err := s.validateMenuType(childType); err != nil {
+		return err
+	}
+	if parentID == nil || *parentID <= 0 {
+		return nil
+	}
+	parent, err := repository.NewMenuRepo().GetByID(ctx, *parentID)
+	if err != nil {
+		if IsNotFound(err) {
+			return bizErr("父菜单不存在")
+		}
+		return err
+	}
+	return validateParentChildType(childType, parent.Type)
+}
+
+// validateMenuType 校验菜单类型取值。
+func (s *MenuService) validateMenuType(childType string) error {
+	switch childType {
+	case "directory", "menu", "button":
+		return nil
+	default:
+		return bizErr("无效的菜单类型 %s（仅支持 directory/menu/button）", childType)
+	}
+}
+
+// validateParentChildType 校验「子类型能否挂在父类型下」。
+func validateParentChildType(childType, parentType string) error {
+	switch childType {
+	case "directory":
+		if parentType != "directory" {
+			return bizErr("目录的上级只能是目录")
+		}
+	case "menu":
+		if parentType != "directory" {
+			return bizErr("菜单的上级只能是目录")
+		}
+	case "button":
+		if parentType != "menu" {
+			return bizErr("按钮的上级只能是菜单")
+		}
+	}
+	return nil
 }
 
 // ensureNotDescendant 校验 newParentID 不是 id 的后代，防止菜单树成环。

@@ -19,8 +19,8 @@ export class GbDeviceController {
 
     static pageGbDevicesPath: string = "/web/gb/devices";
     /// 国标设备分页列表
-    static async pageGbDevices(page?: number, page_size?: number, keyword?: string, register_status?: string, status?: string, region_id?: number, headers?: any): Promise<RPageGbDevice> {
-      return request(`/web/gb/devices?page=${page ?? "" }&page_size=${page_size ?? "" }&keyword=${keyword ?? "" }&register_status=${register_status ?? "" }&status=${status ?? "" }&region_id=${region_id ?? "" }`, {
+    static async pageGbDevices(page?: number, page_size?: number, keyword?: string, register_status?: string, status?: string, region_id?: number, product_id?: number, service_group_type?: string, headers?: any): Promise<RPageGbDevice> {
+      return request(`/web/gb/devices?page=${page ?? "" }&page_size=${page_size ?? "" }&keyword=${keyword ?? "" }&register_status=${register_status ?? "" }&status=${status ?? "" }&region_id=${region_id ?? "" }&product_id=${product_id ?? "" }&service_group_type=${service_group_type ?? "" }`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "GET",
         headers,

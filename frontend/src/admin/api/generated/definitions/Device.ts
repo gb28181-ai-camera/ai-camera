@@ -6,6 +6,7 @@ import type { DeletedAt } from './DeletedAt';
 import type { Firmware } from './Firmware';
 import type { IotCard } from './IotCard';
 import type { IotProduct } from './IotProduct';
+import type { IotServiceGroupBrief } from './IotServiceGroupBrief';
 import type { Region } from './Region';
 
 export type Device = Definition & {
@@ -57,6 +58,8 @@ export type Device = Definition & {
 	register_status?: string;
 	remark?: string;
 	sdp_ip?: string;
+	/** ServiceGroups 非持久化：设备所属产品绑定的服务组摘要，列表页批量填充。 */
+	service_groups?: IotServiceGroupBrief[];
 	sip_expires?: string;
 	sip_password?: string;
 	sip_realm?: string;

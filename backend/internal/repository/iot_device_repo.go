@@ -50,11 +50,14 @@ func (r *IotDeviceRepo) Page(ctx context.Context, req *request.PageIotDeviceReq)
 	if t := strings.TrimSpace(req.ServiceGroupType); t != "" {
 		q = q.Where(`EXISTS (
 			SELECT 1
-			FROM ac_iot_product_service_group psg
+			FROM ac_iot_product p
+			JOIN ac_iot_product_service_group psg ON psg.product_id = p.id
 			JOIN ac_iot_service_group sg ON sg.id = psg.service_group_id
-			WHERE psg.product_id = d.product_id
+			WHERE p.id = d.product_id
+			  AND p.deleted_at IS NULL
 			  AND psg.deleted_at IS NULL
 			  AND sg.deleted_at IS NULL
+			  AND sg.active = TRUE
 			  AND sg.type = ?
 		)`, t)
 	}

@@ -1,4 +1,4 @@
-import { expect, gotoAdmin, readPermCodes, shot, test, uniqName } from '../fixtures/auth'
+import { OK_BUTTON, expect, gotoAdmin, readPermCodes, shot, test, uniqName } from '../fixtures/auth'
 import {
   apiCall,
   expectApiOk,
@@ -223,6 +223,48 @@ test.describe('04d 部门 + 岗位管理', () => {
 
       expect(await hasButton(page, '新建岗位')).toBe(true)
       await expect(page.locator(POST_MODAL)).toHaveCount(0)
+    })
+
+    test('分配角色弹窗：回显岗位角色并保存', async ({ page }) => {
+      const roles = (await expectApiOk(
+        await apiCall(page, 'GET', '/web/system/roles?page=1&page_size=1')
+      )) as unknown as { items?: { id: number; name: string }[] }
+      const role = roles.items?.[0]
+      expect(role).toBeTruthy()
+
+      const name = uniqName('E2E角色岗位')
+      const code = `e2e_role_post_${Date.now()}`
+      const created = await expectApiOk(
+        await apiCall(page, 'POST', POST_API, {
+          name,
+          code,
+          sequence: 64,
+          role_ids: [role!.id],
+        })
+      )
+      const id = Number(created.id)
+
+      await page.reload()
+      await expect(page.locator('.page-container-title').first()).toHaveText('岗位管理')
+      await searchTable(page, POST_HINT, name, POST_API)
+      const row = tableRow(page, name)
+      await expect(row).toHaveCount(1)
+      await row.getByRole('button', { name: '分配角色' }).click()
+
+      const modal = page.locator('.e2e-post-role-modal')
+      await expect(modal).toBeVisible()
+      // 回显：getPost 返回的 role_ids 以标签形式出现在多选框中
+      await expect(modal.getByText(role!.name, { exact: false }).first()).toBeVisible()
+
+      const resp = page.waitForResponse(
+        (res) => res.url().includes(`${POST_API}/${id}`) && res.request().method() === 'PUT'
+      )
+      await modal.getByRole('button', { name: OK_BUTTON }).click()
+      expect((await resp).status()).toBe(200)
+      const detail = await expectApiOk(await apiCall(page, 'GET', `${POST_API}/${id}`))
+      expect(detail.role_ids).toEqual([role!.id])
+
+      await expectApiOk(await apiCall(page, 'DELETE', `${POST_API}/${id}`))
     })
 
     test('按关键字搜索接口生效（命中/空态）', async ({ page }) => {

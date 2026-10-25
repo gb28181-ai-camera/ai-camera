@@ -11,6 +11,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
+import IotServiceGroupTags from '../../components/IotServiceGroupTags'
 import { IOTController } from '../../api/generated/IOTController'
 import type { IotProduct } from '../../api/generated/definitions/IotProduct'
 import type { IotServiceGroup } from '../../api/generated/definitions/IotServiceGroup'
@@ -102,8 +103,6 @@ export default function ProductList() {
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
   const [activeFilter, setActiveFilter] = useState<boolean | undefined>(undefined)
-  /** 产品 → 已绑定服务组数量。列表接口不返回该字段，按当前页逐条查询。 */
-  const [groupCounts, setGroupCounts] = useState<Record<number, number>>({})
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<IotProduct | null>(null)
@@ -122,38 +121,20 @@ export default function ProductList() {
   /** 系统预置的三条服务组，供产品表单多选。 */
   const [allGroups, setAllGroups] = useState<IotServiceGroup[]>([])
 
-  /** 按当前页产品批量统计已绑定服务组数量 */
-  const loadGroupCounts = useCallback(async (rows: IotProduct[]) => {
-    const results = await Promise.all(rows.map(async (row) => {
-      if (row.id == null) return null
-      try {
-        const res = await IOTController.getIotProductServiceGroups(row.id)
-        return { id: row.id, count: res.data?.length ?? 0 }
-      } catch {
-        return null
-      }
-    }))
-    const next: Record<number, number> = {}
-    for (const item of results) {
-      if (item) next[item.id] = item.count
-    }
-    setGroupCounts(next)
-  }, [])
-
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
+      // 列表接口已批量返回 service_groups，直接展示，避免逐行 N+1 查询。
       const res = await IOTController.pageIotProducts(page, pageSize, keyword || undefined, activeFilter)
       const items = res.data?.items ?? []
       setData(items)
       setTotal(Number(res.data?.total ?? 0))
-      void loadGroupCounts(items)
     } catch (err) {
       notifyError(err, '获取产品列表失败')
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, keyword, activeFilter, loadGroupCounts])
+  }, [page, pageSize, keyword, activeFilter])
 
   /** 服务组是系统预置的三条，这里一次拉全量用于表单多选。 */
   const fetchGroups = useCallback(async () => {
@@ -339,8 +320,10 @@ export default function ProductList() {
       render: (v?: boolean) => (v ? <Tag color="blue">是</Tag> : <Tag>否</Tag>),
     },
     {
-      title: '绑定服务组数', key: 'group_count', width: 120, align: 'center',
-      render: (_, row) => (row.id != null && groupCounts[row.id] !== undefined ? groupCounts[row.id] : '-'),
+      title: '服务组', key: 'service_groups', width: 200,
+      render: (_, row) => (
+        <IotServiceGroupTags className="e2e-iot-product-service-groups" groups={row.service_groups} />
+      ),
     },
     {
       title: '启用状态', dataIndex: 'active', width: 100,

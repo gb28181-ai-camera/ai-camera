@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Button, Descriptions, Divider, Dropdown, Empty, Form, Input, InputNumber, Modal, Popconfirm, Progress, Select,
   Space, Spin, Table, Tag, Typography, message,
@@ -17,7 +18,9 @@ import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
 import StatusTag from '../../components/StatusTag'
+import IotServiceGroupTags from '../../components/IotServiceGroupTags'
 import { GbDeviceController } from '../../api/generated/GbDeviceController'
+import { IOTController } from '../../api/generated/IOTController'
 import { GbChannelController } from '../../api/generated/GbChannelController'
 import { GbMediaServerController } from '../../api/generated/GbMediaServerController'
 import { RegionController } from '../../api/generated/RegionController'
@@ -27,6 +30,7 @@ import type { GbActivationResp } from '../../api/generated/definitions/GbActivat
 import type { GbChannelItem } from '../../api/generated/definitions/GbChannelItem'
 import type { GbDeviceSyncStatusResp } from '../../api/generated/definitions/GbDeviceSyncStatusResp'
 import type { GbTimeStatisticsResp } from '../../api/generated/definitions/GbTimeStatisticsResp'
+import type { IotProduct } from '../../api/generated/definitions/IotProduct'
 import type { UpdateGbDeviceReq } from '../../api/generated/definitions/UpdateGbDeviceReq'
 import { useAuthStore } from '../../store/authStore'
 import { DEVICE_STATUS_OPTIONS } from '../../types/business'
@@ -89,6 +93,13 @@ const STREAM_MODE_OPTIONS = [
 const GB_VERSION_OPTIONS = [
   { label: 'GB/T 28181-2016', value: '2016' },
   { label: 'GB/T 28181-2022', value: '2022' },
+]
+
+/** 服务组类型筛选：与后端 service_group_type 取值一致 */
+const SERVICE_GROUP_OPTIONS = [
+  { label: 'GB28181', value: 'gb28181' },
+  { label: 'WebRTC', value: 'webrtc' },
+  { label: 'AIChat', value: 'aichat' },
 ]
 
 /** 编辑设备表单值（字段与 UpdateGbDeviceReq 对齐，仅前端表单结构） */
@@ -183,6 +194,8 @@ export default function GbDeviceList() {
   const canGuard = permCodes.includes('gb:device:guard')
   const canAlarmReset = permCodes.includes('gb:device:alarm-reset')
   const canTimeStatistics = permCodes.includes('gb:device:time-statistics')
+  // 产品下拉依赖 IOT 产品列表权限；无权限时不发起请求，避免进页面就弹 403
+  const canListIotProducts = permCodes.includes('iot:product:list')
 
   const [data, setData] = useState<GbDeviceItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -190,11 +203,18 @@ export default function GbDeviceList() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
 
-  const [keyword, setKeyword] = useState('')
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+
+  // 支持从 IOT 设备页带 keyword 跳转（?keyword=<device_code>）
+  const [keyword, setKeyword] = useState(() => searchParams.get('keyword') ?? '')
   const [registerStatus, setRegisterStatus] = useState<string | undefined>()
   const [status, setStatus] = useState<string | undefined>()
   const [regionID, setRegionID] = useState<number | undefined>()
   const [regionOptions, setRegionOptions] = useState<{ label: string; value: number }[]>([])
+  const [productID, setProductID] = useState<number | undefined>()
+  const [serviceGroupType, setServiceGroupType] = useState<string | undefined>()
+  const [productOptions, setProductOptions] = useState<{ label: string; value: number }[]>([])
 
   // 详情弹窗
   const [detailOpen, setDetailOpen] = useState(false)
@@ -253,7 +273,7 @@ export default function GbDeviceList() {
     setLoading(true)
     try {
       const res = await GbDeviceController.pageGbDevices(
-        page, pageSize, keyword || undefined, registerStatus, status, regionID
+        page, pageSize, keyword || undefined, registerStatus, status, regionID, productID, serviceGroupType,
       )
       setData(res.data?.items ?? [])
       setTotal(Number(res.data?.total ?? 0))
@@ -262,7 +282,7 @@ export default function GbDeviceList() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, keyword, registerStatus, status, regionID])
+  }, [page, pageSize, keyword, registerStatus, status, regionID, productID, serviceGroupType])
 
   useEffect(() => { void fetchData() }, [fetchData])
 
@@ -279,11 +299,34 @@ export default function GbDeviceList() {
       .catch(() => setRegionOptions([]))
   }, [])
 
+  // 产品下拉：筛选栏使用（同一产品可绑定多个服务组）
+  useEffect(() => {
+    if (!canListIotProducts) return
+    IOTController.pageIotProducts(1, 200)
+      .then((res) => {
+        setProductOptions(
+          (res.data?.items ?? [])
+            .filter((item: IotProduct) => typeof item.id === 'number')
+            .map((item: IotProduct) => ({
+              label: `${item.name ?? ''}${item.code ? `（${item.code}）` : ''}`,
+              value: Number(item.id),
+            }))
+        )
+      })
+      .catch(() => setProductOptions([]))
+  }, [canListIotProducts])
+
   const handleSearch = (values: Record<string, unknown>) => {
     setKeyword(typeof values.keyword === 'string' ? values.keyword : '')
     setRegisterStatus(typeof values.register_status === 'string' && values.register_status ? values.register_status : undefined)
     setStatus(typeof values.status === 'string' && values.status ? values.status : undefined)
     setRegionID(values.region_id === undefined || values.region_id === null || values.region_id === '' ? undefined : Number(values.region_id))
+    setProductID(values.product_id === undefined || values.product_id === null || values.product_id === '' ? undefined : Number(values.product_id))
+    setServiceGroupType(
+      typeof values.service_group_type === 'string' && values.service_group_type
+        ? values.service_group_type
+        : undefined,
+    )
     setPage(1)
   }
 
@@ -292,6 +335,8 @@ export default function GbDeviceList() {
     setRegisterStatus(undefined)
     setStatus(undefined)
     setRegionID(undefined)
+    setProductID(undefined)
+    setServiceGroupType(undefined)
     setPage(1)
   }
 
@@ -763,6 +808,18 @@ export default function GbDeviceList() {
       title: '国标编码', dataIndex: 'gb_device_id', width: 190, ellipsis: true,
       render: (v?: string) => (v ? <Typography.Text copyable={{ text: v }}>{v}</Typography.Text> : '-'),
     },
+    {
+      title: '所属产品', key: 'product', width: 190, ellipsis: true,
+      render: (_, row) => (row.product_name
+        ? <span>{row.product_name}{row.product_code ? `（${row.product_code}）` : ''}</span>
+        : <Typography.Text type="secondary">未绑定</Typography.Text>),
+    },
+    {
+      title: '服务组', key: 'service_groups', width: 190,
+      render: (_, row) => (
+        <IotServiceGroupTags className="e2e-gb-device-service-groups" groups={row.service_groups} />
+      ),
+    },
     { title: '注册状态', dataIndex: 'register_status', width: 100, render: renderRegisterStatus },
     {
       title: '在线状态', dataIndex: 'status', width: 100,
@@ -852,6 +909,10 @@ export default function GbDeviceList() {
           { name: 'register_status', label: '注册状态', type: 'select', options: REGISTER_STATUS_OPTIONS },
           { name: 'status', label: '在线状态', type: 'select', options: DEVICE_STATUS_OPTIONS },
           { name: 'region_id', label: '所属区域', type: 'select', options: regionOptions },
+          ...(canListIotProducts
+            ? [{ name: 'product_id', label: '产品', type: 'select' as const, options: productOptions }]
+            : []),
+          { name: 'service_group_type', label: '服务组', type: 'select', options: SERVICE_GROUP_OPTIONS },
         ]}
         onSearch={handleSearch}
         onReset={handleReset}
@@ -911,6 +972,45 @@ export default function GbDeviceList() {
                 { key: 'register_dt', label: '最近注册时间', children: fmtDT(detail.register_dt) },
                 { key: 'updated_dt', label: '更新时间', children: fmtDT(detail.updated_dt) },
                 { key: 'remark', label: '备注', children: detail.remark || '-', span: 2 },
+              ]}
+            />
+
+            {/* IOT 归属：统一设备模型下，同一台设备可同时属于多个服务组 */}
+            <Descriptions
+              className="e2e-gb-device-detail-iot"
+              title="IOT 归属"
+              bordered
+              size="small"
+              column={2}
+              items={[
+                {
+                  key: 'product',
+                  label: '所属产品',
+                  children: detail.product_name
+                    ? `${detail.product_name}${detail.product_code ? `（${detail.product_code}）` : ''}`
+                    : '-',
+                },
+                {
+                  key: 'service_groups',
+                  label: '服务组',
+                  children: <IotServiceGroupTags groups={detail.service_groups} />,
+                },
+                {
+                  key: 'iot_link',
+                  label: 'IOT 设备',
+                  span: 2,
+                  children: detail.device_code ? (
+                    <Button
+                      type="link"
+                      size="small"
+                      className="e2e-gb-device-iot-link"
+                      style={{ padding: 0 }}
+                      onClick={() => navigate(`/iot/device?keyword=${encodeURIComponent(detail.device_code ?? '')}`)}
+                    >
+                      在 IOT 设备中查看
+                    </Button>
+                  ) : '-',
+                },
               ]}
             />
 

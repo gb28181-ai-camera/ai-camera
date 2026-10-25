@@ -3,6 +3,7 @@
 // 请勿手工修改 —— 任何手工改动都会在下次生成时丢失。
 // 需要保留的手写方法/别名请登记到 scripts/api-gen-preserve.mjs。
 import request from '../request';
+import type { AssignMenuRolesReq } from './definitions/AssignMenuRolesReq';
 import type { BaseResponse } from './definitions/BaseResponse';
 import type { CreateMenuAPIReq } from './definitions/CreateMenuAPIReq';
 import type { CreateMenuReq } from './definitions/CreateMenuReq';
@@ -10,14 +11,15 @@ import type { RMenu } from './definitions/RMenu';
 import type { RMenuAPI } from './definitions/RMenuAPI';
 import type { RMenuAPIList } from './definitions/RMenuAPIList';
 import type { RMenuList } from './definitions/RMenuList';
+import type { RMenuRoleList } from './definitions/RMenuRoleList';
 import type { UpdateMenuReq } from './definitions/UpdateMenuReq';
 
 export class MenuController {
 
     static treeMenusPath: string = "/web/system/menus";
     /// 菜单树列表
-    static async treeMenus(platform?: string, headers?: any): Promise<RMenuList> {
-      return request(`/web/system/menus?platform=${platform ?? "" }`, {
+    static async treeMenus(platform?: string, include_inactive?: boolean, headers?: any): Promise<RMenuList> {
+      return request(`/web/system/menus?platform=${platform ?? "" }&include_inactive=${include_inactive ?? "" }`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "GET",
         headers,
@@ -82,6 +84,27 @@ export class MenuController {
       return request(`/web/system/menus/${id}/apis`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "POST",
+        data: JSON.stringify(data),
+        headers,
+      });
+    }
+
+    static getMenuRolesPath: string = "/web/system/menus/{id}/roles";
+    /// 菜单角色列表
+    static async getMenuRoles(id: string | number, headers?: any): Promise<RMenuRoleList> {
+      return request(`/web/system/menus/${id}/roles`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
+        headers,
+      });
+    }
+
+    static assignMenuRolesPath: string = "/web/system/menus/{id}/roles";
+    /// 分配菜单角色
+    static async assignMenuRoles(id: string | number, data: AssignMenuRolesReq, headers?: any): Promise<BaseResponse> {
+      return request(`/web/system/menus/${id}/roles`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "PUT",
         data: JSON.stringify(data),
         headers,
       });

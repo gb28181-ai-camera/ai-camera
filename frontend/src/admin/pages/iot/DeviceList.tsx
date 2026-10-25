@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Button, Col, Form, Input, Modal, Popconfirm, Row, Select, Space, Table, Tag, Tooltip,
+  Button, Col, Descriptions, Form, Input, Modal, Popconfirm, Row, Select, Space, Table, Tag, Tooltip,
   Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -12,8 +13,11 @@ import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
 import StatusTag from '../../components/StatusTag'
+import IotServiceGroupTags, { hasServiceGroupType } from '../../components/IotServiceGroupTags'
 import { IOTController } from '../../api/generated/IOTController'
+import { GbDeviceController } from '../../api/generated/GbDeviceController'
 import type { Device } from '../../api/generated/definitions/Device'
+import type { GbActivationResp } from '../../api/generated/definitions/GbActivationResp'
 import type { IotProduct } from '../../api/generated/definitions/IotProduct'
 import type { IotDeviceAccount } from '../../api/generated/definitions/IotDeviceAccount'
 import type { IotDeviceActivated } from '../../api/generated/definitions/IotDeviceActivated'
@@ -31,6 +35,26 @@ const STATUS_OPTIONS = [
   { label: '在线', value: 'online' },
   { label: '离线', value: 'offline' },
 ]
+
+/** 服务组类型筛选：与后端 service_group_type 取值一致 */
+const SERVICE_GROUP_OPTIONS = [
+  { label: 'GB28181', value: 'gb28181' },
+  { label: 'WebRTC', value: 'webrtc' },
+  { label: 'AIChat', value: 'aichat' },
+]
+
+/** 国标注册状态 → 文案 / 颜色 */
+const GB_REGISTER_STATUS_META: Record<string, { text: string; color: string }> = {
+  pending: { text: '待激活', color: 'orange' },
+  activated: { text: '已激活', color: 'green' },
+  rejected: { text: '已拒绝', color: 'red' },
+}
+
+function renderGbRegisterStatus(value?: string) {
+  if (!value) return '-'
+  const meta = GB_REGISTER_STATUS_META[value] ?? { text: value, color: 'default' }
+  return <Tag color={meta.color}>{meta.text}</Tag>
+}
 
 const ACCOUNT_STATUS_OPTIONS = [
   { label: '正常', value: 'active' },
@@ -81,15 +105,23 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
   const canAccountCreate = permCodes.includes('iot:device:account:create')
   const canAccountUpdate = permCodes.includes('iot:device:account:update')
   const canAccountDelete = permCodes.includes('iot:device:account:delete')
+  const canGbActivation = permCodes.includes('gb:device:activation')
+
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  /** 通用页支持按服务组筛选；实时音视频 / 智能语音聊天页固定按 prop 过滤。 */
+  const canFilterServiceGroup = serviceGroupType === undefined
 
   const [data, setData] = useState<Device[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [keyword, setKeyword] = useState('')
+  // 支持从其他页面带 keyword 跳转（如国标设备 → IOT 设备）
+  const [keyword, setKeyword] = useState(() => searchParams.get('keyword') ?? '')
   const [productFilter, setProductFilter] = useState<number | undefined>(undefined)
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
+  const [serviceGroupFilter, setServiceGroupFilter] = useState<string | undefined>(undefined)
   const [products, setProducts] = useState<IotProduct[]>([])
   /** 设备 → 主账号用户名。列表接口不返回账号，按当前页逐条查询详情。 */
   const [ownerMap, setOwnerMap] = useState<Record<number, string>>({})
@@ -132,6 +164,13 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
   const [servicesDevice, setServicesDevice] = useState<Device | null>(null)
   const [services, setServices] = useState<IotServiceGroupDetail[]>([])
 
+  // 国标接入（产品绑定 GB28181 服务组、且尚未生成国标编码时可用）
+  const [gbActivationOpen, setGbActivationOpen] = useState(false)
+  const [gbActivationLoading, setGbActivationLoading] = useState(false)
+  const [gbActivationDevice, setGbActivationDevice] = useState<Device | null>(null)
+  const [gbActivation, setGbActivation] = useState<GbActivationResp | null>(null)
+  const [gbActivationCharset, setGbActivationCharset] = useState<string | undefined>(undefined)
+
   const productOptions = products.flatMap((product) => (
     product.id == null
       ? []
@@ -168,8 +207,10 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
+      // 固定页（/av/device、/voice/device）以 prop 为准；通用页取搜索栏选择值。
+      const effectiveGroupType = serviceGroupType ?? serviceGroupFilter
       const res = await IOTController.pageIotDevices(
-        page, pageSize, keyword || undefined, productFilter, statusFilter, serviceGroupType,
+        page, pageSize, keyword || undefined, productFilter, statusFilter, effectiveGroupType,
       )
       const items = res.data?.items ?? []
       setData(items)
@@ -180,7 +221,7 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, keyword, productFilter, statusFilter, serviceGroupType, loadOwners])
+  }, [page, pageSize, keyword, productFilter, statusFilter, serviceGroupType, serviceGroupFilter, loadOwners])
 
   useEffect(() => { void fetchData() }, [fetchData])
   useEffect(() => { void fetchProducts() }, [fetchProducts])
@@ -189,6 +230,11 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
     setKeyword(typeof values.keyword === 'string' ? values.keyword : '')
     setProductFilter(typeof values.product_id === 'number' ? values.product_id : undefined)
     setStatusFilter(typeof values.status === 'string' && values.status ? values.status : undefined)
+    setServiceGroupFilter(
+      typeof values.service_group_type === 'string' && values.service_group_type
+        ? values.service_group_type
+        : undefined,
+    )
     setPage(1)
   }
 
@@ -196,6 +242,7 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
     setKeyword('')
     setProductFilter(undefined)
     setStatusFilter(undefined)
+    setServiceGroupFilter(undefined)
     setPage(1)
   }
 
@@ -400,6 +447,44 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
     }
   }
 
+  /**
+   * 国标接入：为设备生成国标编码 / SIP 密码，生成后设备才会出现在
+   * 「国标视频 → 国标设备」。入口放在 IOT 设备页，避免新设备无列表入口。
+   */
+  const handleGbActivation = async (row: Device) => {
+    if (row.id == null) {
+      message.error('设备 ID 缺失，无法生成国标接入凭证')
+      return
+    }
+    setGbActivationDevice(row)
+    setGbActivation(null)
+    setGbActivationCharset(undefined)
+    setGbActivationOpen(true)
+    setGbActivationLoading(true)
+    try {
+      const res = await GbDeviceController.generateGbActivation(row.id)
+      if (res.data) {
+        setGbActivation(res.data)
+        // 激活响应不含字符集；再取一次设备详情展示后端已补齐的默认值。
+        try {
+          const detail = await IOTController.getIotDevice(row.id)
+          setGbActivationCharset(detail.data?.device?.charset)
+        } catch {
+          // 详情仅用于补充展示，失败不阻断激活结果
+        }
+        void fetchData()
+      } else {
+        message.error(res.message || '生成国标接入凭证失败')
+        setGbActivationOpen(false)
+      }
+    } catch (err) {
+      notifyError(err, '生成国标接入凭证失败')
+      setGbActivationOpen(false)
+    } finally {
+      setGbActivationLoading(false)
+    }
+  }
+
   const handleResetSecret = async (row: Device) => {
     if (row.id == null) return
     try {
@@ -527,6 +612,12 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
         : <Typography.Text type="secondary">未绑定</Typography.Text>),
     },
     {
+      title: '服务组', key: 'service_groups', width: 190,
+      render: (_, row) => (
+        <IotServiceGroupTags className="e2e-iot-device-service-groups" groups={row.service_groups} />
+      ),
+    },
+    {
       title: '在线状态', dataIndex: 'status', width: 100,
       render: (v?: string) => <StatusTag type="device" status={v ?? 'offline'} />,
     },
@@ -548,13 +639,13 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
       render: (v?: boolean) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
     },
     {
-      title: '操作', key: 'action', width: 760, fixed: 'right',
+      title: '操作', key: 'action', width: 900, fixed: 'right',
       render: (_, row) => {
         // 产品关闭分享时后端会拒绝生成分享码；按钮同步禁用，避免无效点击。
         // 未绑定产品（历史设备）不阻断，遵循后端规则。
         const shareAllowed = row.product?.allow_share !== false
         return (
-          <ActionButtons maxWidth={760}>
+          <ActionButtons maxWidth={900}>
             <Button type="link" size="small" icon={<UserOutlined />} onClick={() => openAccounts(row)}>
               账号管理
             </Button>
@@ -567,6 +658,30 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
             >
               服务授权
             </Button>
+            {canGbActivation && hasServiceGroupType(row.service_groups, 'gb28181') && !row.gb_device_id && (
+              <Button
+                type="link"
+                size="small"
+                icon={<QrcodeOutlined />}
+                className="e2e-iot-device-gb-activation-btn"
+                onClick={() => void handleGbActivation(row)}
+              >
+                国标接入
+              </Button>
+            )}
+            {row.gb_device_id && (
+              <Button
+                type="link"
+                size="small"
+                icon={<LinkOutlined />}
+                className="e2e-iot-device-gb-link"
+                onClick={() => navigate(
+                  `/gb/device/list?keyword=${encodeURIComponent(row.device_code ?? '')}`,
+                )}
+              >
+                国标设备
+              </Button>
+            )}
             {canUpdate && (
               <Button
                 type="link"
@@ -727,6 +842,10 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
           { name: 'keyword', label: '关键字', placeholder: '请输入设备名称/编号/位置' },
           { name: 'product_id', label: '所属产品', type: 'select', options: productOptions },
           { name: 'status', label: '在线状态', type: 'select', options: STATUS_OPTIONS },
+          // 固定页（实时音视频 / 智能语音聊天）只展示对应服务组，筛选项无意义
+          ...(canFilterServiceGroup
+            ? [{ name: 'service_group_type', label: '服务组', type: 'select' as const, options: SERVICE_GROUP_OPTIONS }]
+            : []),
         ]}
         onSearch={handleSearch}
         onReset={handleReset}
@@ -897,6 +1016,73 @@ export default function DeviceList({ serviceGroupType, title, subTitle }: Device
         data={shareQrData}
         onClose={() => setShareQrOpen(false)}
       />
+
+      <Modal
+        className="e2e-iot-device-gb-activation-modal"
+        title={gbActivationDevice
+          ? `国标接入 - ${gbActivationDevice.name ?? gbActivationDevice.device_code ?? ''}`
+          : '国标接入'}
+        open={gbActivationOpen}
+        loading={gbActivationLoading}
+        onCancel={() => setGbActivationOpen(false)}
+        footer={<Button onClick={() => setGbActivationOpen(false)}>关闭</Button>}
+        width={680}
+        destroyOnHidden
+      >
+        {gbActivation ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              以下参数用于在摄像头端配置 GB/T 28181 接入；SIP 密码仅此处明文展示，请妥善保存。
+            </Typography.Paragraph>
+            <Descriptions
+              bordered
+              size="small"
+              column={1}
+              items={[
+                {
+                  key: 'gb_id',
+                  label: '国标编码',
+                  children: gbActivation.gb_device_id
+                    ? <Typography.Text copyable={{ text: gbActivation.gb_device_id }}>{gbActivation.gb_device_id}</Typography.Text>
+                    : '-',
+                },
+                {
+                  key: 'sip_server',
+                  label: 'SIP 服务器',
+                  children: gbActivation.sip_server
+                    ? <Typography.Text copyable={{ text: gbActivation.sip_server }}>{gbActivation.sip_server}</Typography.Text>
+                    : '-',
+                },
+                {
+                  key: 'sip_domain',
+                  label: 'SIP 域',
+                  children: gbActivation.sip_domain
+                    ? <Typography.Text copyable={{ text: gbActivation.sip_domain }}>{gbActivation.sip_domain}</Typography.Text>
+                    : '-',
+                },
+                {
+                  key: 'sip_port',
+                  label: 'SIP 端口',
+                  children: gbActivation.sip_port ?? '-',
+                },
+                {
+                  key: 'sip_password',
+                  label: 'SIP 密码',
+                  children: gbActivation.sip_password
+                    ? <Typography.Text copyable={{ text: gbActivation.sip_password }}>{gbActivation.sip_password}</Typography.Text>
+                    : '-',
+                },
+                { key: 'transport', label: '传输协议', children: gbActivation.transport || '-' },
+                { key: 'charset', label: '字符集', children: gbActivationCharset || '-' },
+                { key: 'register_status', label: '注册状态', children: renderGbRegisterStatus(gbActivation.register_status) },
+              ]}
+            />
+            <Typography.Text type="secondary">
+              配置完成后设备会出现在「国标视频 → 国标设备」，并自动完成首次注册。
+            </Typography.Text>
+          </Space>
+        ) : null}
+      </Modal>
 
       <Modal
         className="e2e-iot-device-services-modal"

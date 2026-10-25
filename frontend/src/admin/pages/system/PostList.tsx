@@ -5,14 +5,16 @@ import {
   Table, Tag, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, PlusOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
 import { PostController } from '../../api/generated/PostController'
+import { RoleController } from '../../api/generated/RoleController'
 import { useAuthStore } from '../../store/authStore'
 import type { Post } from '../../api/generated/definitions/Post'
+import type { Role } from '../../api/generated/definitions/Role'
 
 /** 岗位表单值 */
 interface PostFormValues {
@@ -41,6 +43,14 @@ export default function PostList() {
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm<PostFormValues>()
 
+  // 分配角色
+  const [roleOptions, setRoleOptions] = useState<Role[]>([])
+  const [roleModalOpen, setRoleModalOpen] = useState(false)
+  const [roleTarget, setRoleTarget] = useState<Post | null>(null)
+  const [roleIds, setRoleIds] = useState<number[]>([])
+  const [roleLoading, setRoleLoading] = useState(false)
+  const [roleSaving, setRoleSaving] = useState(false)
+
   const permCodes = useAuthStore((s) => s.permCodes)
   // permCodes 为空说明菜单权限尚未加载，此时不隐藏按钮，避免整页操作被锁死
   const can = (code: string) => permCodes.length === 0 || permCodes.includes(code)
@@ -67,6 +77,13 @@ export default function PostList() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // 角色候选：分页接口可取到停用角色，避免已关联的停用角色无法回显
+  useEffect(() => {
+    RoleController.pageRoles(1, 200).then((res) => {
+      if (res.code === 200) setRoleOptions(res.data?.items ?? [])
+    })
+  }, [])
 
   const handleSearch = (values: Record<string, unknown>) => {
     setSearch(values)
@@ -149,6 +166,51 @@ export default function PostList() {
     }
   }
 
+  /** 打开「分配角色」弹窗：从岗位详情读取 role_ids 回显 */
+  const openRoleAssign = async (record: Post) => {
+    setRoleTarget(record)
+    setRoleIds([])
+    setRoleModalOpen(true)
+    setRoleLoading(true)
+    try {
+      const res = await PostController.getPost(String(record.id))
+      if (res.code === 200) {
+        setRoleIds(res.data?.role_ids ?? [])
+      } else {
+        message.error(res.message || '获取岗位角色失败')
+      }
+    } finally {
+      setRoleLoading(false)
+    }
+  }
+
+  /** 保存岗位角色：role_ids 显式传数组（空数组表示清空） */
+  const handleAssignRoles = async () => {
+    if (!roleTarget) return
+    setRoleSaving(true)
+    try {
+      const res = await PostController.updatePost(String(roleTarget.id), {
+        name: roleTarget.name,
+        code: roleTarget.code,
+        sequence: roleTarget.sequence,
+        description: roleTarget.description,
+        active: roleTarget.active !== false,
+        role_ids: roleIds,
+      })
+      if (res.code === 200) {
+        message.success('岗位角色已保存')
+        setRoleModalOpen(false)
+        fetchData()
+      } else {
+        message.error(res.message || '保存失败')
+      }
+    } catch {
+      message.error('保存失败')
+    } finally {
+      setRoleSaving(false)
+    }
+  }
+
   const handleDelete = async (record: Post) => {
     try {
       const res = await PostController.deletePost(String(record.id))
@@ -203,11 +265,22 @@ export default function PostList() {
       render: (value: string) => (value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'),
     },
     {
-      title: '操作', key: 'action', width: 160, fixed: 'right' as const,
+      title: '操作', key: 'action', width: 240, fixed: 'right' as const,
       render: (_, record) => (
         <ActionButtons>
           {canUpdate && (
             <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+          )}
+          {canUpdate && (
+            <Button
+              className="e2e-post-role-btn"
+              type="link"
+              size="small"
+              icon={<SafetyCertificateOutlined />}
+              onClick={() => openRoleAssign(record)}
+            >
+              分配角色
+            </Button>
           )}
           {canDelete && (
             <Popconfirm title="确定删除?" onConfirm={() => handleDelete(record)}>
@@ -326,6 +399,36 @@ export default function PostList() {
             </Col>
           </Row>
         </Form>
+      </Modal>
+
+      {/* 分配角色：岗位 → 角色（Casbin g3 继承） */}
+      <Modal
+        className="e2e-post-role-modal"
+        title={`分配角色 - ${roleTarget?.name ?? ''}`}
+        open={roleModalOpen}
+        onOk={handleAssignRoles}
+        onCancel={() => setRoleModalOpen(false)}
+        confirmLoading={roleSaving}
+        okButtonProps={{ loading: roleLoading }}
+        width={620}
+      >
+        <div style={{ marginBottom: 12, color: '#666' }}>
+          岗位关联的角色会通过 Casbin g3（岗位 → 角色）继承给岗位下的用户。
+        </div>
+        <Select
+          mode="multiple"
+          allowClear
+          loading={roleLoading}
+          disabled={roleLoading}
+          placeholder="请选择角色"
+          style={{ width: '100%' }}
+          value={roleIds}
+          onChange={(values: number[]) => setRoleIds(values)}
+          options={roleOptions.map((role) => ({
+            label: `${role.name ?? ''}${role.code ? `（${role.code}）` : ''}`,
+            value: role.id,
+          }))}
+        />
       </Modal>
     </PageContainer>
   )

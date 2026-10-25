@@ -71,6 +71,8 @@ func respondGbErr(c *gin.Context, err error, notFound ...error) {
 // @Param        register_status  query     string  false  "注册状态 pending/activated/rejected"
 // @Param        status           query     string  false  "运行状态 online/offline"
 // @Param        region_id        query     int     false  "区域ID"
+// @Param        product_id       query     int     false  "所属 IOT 产品ID"
+// @Param        service_group_type query  string  false  "服务组类型 gb28181/webrtc/aichat"
 // @Success      200  {object}  response.RPageGbDevice
 // @Failure      400  {object}  response.BaseResponse
 // @Router       /web/gb/devices [get]

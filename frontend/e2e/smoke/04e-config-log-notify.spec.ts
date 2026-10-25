@@ -38,7 +38,7 @@ test.describe('04e 系统参数 / 操作日志 / 系统通知', () => {
     })
 
     test('列表渲染与关键字搜索（无匹配为空态）', async ({ page }) => {
-      await expectColumns(page, ['参数名称', '参数键', '参数值', '类型', '分组', '状态', '操作'])
+      await expectColumns(page, ['参数名称', '参数键', '参数值', '类型', '分组', '排序', '状态', '操作'])
       await expect(page.getByPlaceholder(CONFIG_HINT)).toBeVisible()
       await shot(page, '04e-config-list')
 
@@ -109,6 +109,8 @@ test.describe('04e 系统参数 / 操作日志 / 系统通知', () => {
 
       await page.getByRole('button', { name: '新建参数' }).click()
       await expect(page.locator(CONFIG_MODAL)).toBeVisible()
+      // v0.3.0：支持 Schema 编辑与更多数据类型
+      await expect(page.locator(CONFIG_MODAL).getByText('配置 Schema')).toBeVisible()
       await page.locator(CONFIG_MODAL).getByRole('button', { name: /确\s*定/ }).click()
       await expect(page.locator(CONFIG_MODAL).getByText('请输入参数名称')).toBeVisible()
       await page.locator(CONFIG_MODAL).getByRole('button', { name: /取\s*消/ }).click()

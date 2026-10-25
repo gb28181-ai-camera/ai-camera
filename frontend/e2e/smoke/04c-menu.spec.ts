@@ -47,26 +47,29 @@ test.describe('04c 菜单管理', () => {
       '组件',
       '排序',
       '按钮类型',
+      '平台',
+      '隐藏',
       '权限标识',
       '状态',
       '操作',
     ])
-    for (const name of ['首页', '实时监控', 'AI风险', '系统设置']) {
+    for (const name of ['首页', '系统管理', '物联网管理', '国标视频', '实时音视频', '智能语音聊天', 'AI 智能分析']) {
       await expect(page.locator('.ant-table-row').filter({ hasText: name }).first()).toBeVisible()
     }
     await shot(page, '04c-menu-tree')
   })
 
-  test('展开目录行后子菜单出现（含系统管理 → 用户管理）', async ({ page }) => {
-    // 展开「系统设置」
-    const sysRow = page.locator('.ant-table-row').filter({ hasText: '系统设置' }).first()
+  test('展开目录行后子菜单出现（含账号与权限 → 用户管理）', async ({ page }) => {
+    // 展开一级「系统管理」
+    const sysRow = page.locator('.ant-table-row').filter({ hasText: '系统管理' }).first()
     await expect(sysRow).toBeVisible()
     await sysRow.locator('.ant-table-row-expand-icon').click()
 
-    const systemMgmt = page.locator('.ant-table-row').filter({ hasText: '系统管理' }).first()
+    // 二级「账号与权限」（原系统管理子目录）
+    const systemMgmt = page.locator('.ant-table-row').filter({ hasText: '账号与权限' }).first()
     await expect(systemMgmt).toBeVisible()
 
-    // 再展开「系统管理」→ 用户管理 可见
+    // 再展开「账号与权限」→ 用户管理 可见
     await systemMgmt.locator('.ant-table-row-expand-icon').click()
     await expect(page.locator('.ant-table-row').filter({ hasText: '用户管理' }).first()).toBeVisible()
     await shot(page, '04c-menu-expanded')
@@ -139,15 +142,32 @@ test.describe('04c 菜单管理', () => {
     expect(codes).toContain('system:view')
     expect(codes).toContain('system:menu:create')
     expect(codes).toContain('system:menu:api')
+    expect(codes).toContain('system:menu:role')
 
     expect(await hasButton(page, '新建菜单')).toBe(true)
 
-    // 行内操作入口同样渲染（编辑 / 绑定接口 / 新增下级）
+    // 行内操作入口同样渲染（编辑 / 绑定接口 / 新增下级 / 允许访问角色）
     expect(await hasButton(page, '绑定接口')).toBe(true)
+    expect(await hasButton(page, '允许访问角色')).toBe(true)
 
     // 弹窗未打开时不渲染
     await expect(page.locator(MODAL)).toHaveCount(0)
     await expect(page.locator(API_MODAL)).toHaveCount(0)
+    await expect(page.locator('.e2e-menu-role-modal')).toHaveCount(0)
+  })
+
+  test('允许访问角色弹窗：角色穿梭框渲染并回显', async ({ page }) => {
+    const row = page.locator('.ant-table-row').filter({ hasText: '首页' }).first()
+    await expect(row).toBeVisible()
+    await row.getByRole('button', { name: '允许访问角色' }).click()
+
+    const modal = page.locator('.e2e-menu-role-modal')
+    await expect(modal).toBeVisible()
+    await expect(modal.locator('.ant-transfer')).toBeVisible()
+    await expect(modal.getByText('已授权角色')).toBeVisible()
+    await shot(page, '04c-menu-role-modal')
+    await modal.getByRole('button', { name: /取\s*消/ }).click()
+    await expect(modal).toBeHidden()
   })
 
   test('菜单必填契约：缺少菜单名称时接口返回 400', async ({ page }) => {

@@ -3,12 +3,14 @@
 import type { Definition } from './Definition';
 
 export type CreateConfigReq = Definition & {
-	/** 枚举值: string / int / bool / json */
-	data_type?: 'string' | 'int' | 'bool' | 'json' | (string & {});
+	active?: boolean;
+	/** 枚举值: string / int / integer / float / bool / boolean / json / select */
+	data_type?: 'string' | 'int' | 'integer' | 'float' | 'bool' | 'boolean' | 'json' | 'select' | (string & {});
 	description?: string;
 	group_name?: string;
 	key: string;
 	name: string;
+	schema?: string;
 	sequence?: number;
 	value?: string;
 }

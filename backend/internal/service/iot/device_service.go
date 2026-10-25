@@ -38,13 +38,38 @@ func NewDeviceService() *DeviceService {
 // Page 设备分页列表（接入密钥脱敏）。
 func (s *DeviceService) Page(ctx context.Context, req *request.PageIotDeviceReq) (*response.PageIotDeviceResp, error) {
 	req.Normalize()
+	if t := strings.TrimSpace(req.ServiceGroupType); t != "" {
+		switch t {
+		case model.IotServiceGroupGb28181, model.IotServiceGroupWebRTC, model.IotServiceGroupAIChat:
+			// ok
+		default:
+			return nil, errors.New("service_group_type 只支持 gb28181 / webrtc / aichat")
+		}
+	}
 	items, total, err := s.devices.Page(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]model.Device, 0, len(items))
+	productIDs := make([]int64, 0, len(items))
+	seen := make(map[int64]struct{}, len(items))
 	for i := range items {
-		out = append(out, maskDevice(items[i]))
+		masked := maskDevice(items[i])
+		out = append(out, masked)
+		if masked.ProductID != nil {
+			if _, ok := seen[*masked.ProductID]; !ok {
+				seen[*masked.ProductID] = struct{}{}
+				productIDs = append(productIDs, *masked.ProductID)
+			}
+		}
+	}
+	// 列表一次批量补齐服务组摘要，避免前端逐行请求。
+	if groups, err := s.products.ListServiceGroupBriefsByProductIDs(ctx, productIDs); err == nil {
+		for i := range out {
+			if out[i].ProductID != nil {
+				out[i].ServiceGroups = groups[*out[i].ProductID]
+			}
+		}
 	}
 	return &response.PageIotDeviceResp{
 		Total: total, Page: req.Page, PageSize: req.PageSize, Items: out,

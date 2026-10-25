@@ -51,6 +51,7 @@ export default function UserList() {
   const [pageSize, setPageSize] = useState(20)
   const [search, setSearch] = useState<Record<string, unknown>>({})
   const [deptId, setDeptId] = useState<number | undefined>(undefined)
+  const [postId, setPostId] = useState<number | undefined>(undefined)
   const [activeFilter, setActiveFilter] = useState<boolean | undefined>(undefined)
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([])
   const [modalOpen, setModalOpen] = useState(false)
@@ -78,7 +79,14 @@ export default function UserList() {
     setLoading(true)
     try {
       const keyword = String(search.keyword ?? '')
-      const res = await UserController.pageUsers(page, pageSize, keyword || undefined, deptId, activeFilter)
+      const res = await UserController.pageUsers(
+        page,
+        pageSize,
+        keyword || undefined,
+        deptId,
+        activeFilter,
+        postId,
+      )
       if (res.code === 200) {
         setData(res.data?.items ?? [])
         setTotal(res.data?.total ?? 0)
@@ -88,7 +96,7 @@ export default function UserList() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, search, deptId, activeFilter])
+  }, [page, pageSize, search, deptId, postId, activeFilter])
 
   useEffect(() => {
     fetchData()
@@ -112,6 +120,7 @@ export default function UserList() {
   const handleReset = () => {
     setSearch({})
     setDeptId(undefined)
+    setPostId(undefined)
     setActiveFilter(undefined)
     setPage(1)
   }
@@ -346,6 +355,23 @@ export default function UserList() {
                 setPage(1)
               }}
               placeholder="全部部门"
+            />
+          </Space>
+        </Col>
+        <Col>
+          <Space>
+            <span>岗位：</span>
+            <Select
+              className="e2e-user-post-filter"
+              style={{ width: 180 }}
+              allowClear
+              placeholder="全部岗位"
+              value={postId}
+              onChange={(value: number | undefined) => {
+                setPostId(value)
+                setPage(1)
+              }}
+              options={postOptions.map((item) => ({ label: item.name, value: item.id }))}
             />
           </Space>
         </Col>

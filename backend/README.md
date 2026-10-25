@@ -6,7 +6,7 @@ Go 后端服务：Gin + GORM + PostgreSQL + Casbin，按 `Handler → Service �
 MQTT 鉴权与 WebRTC 信令、TURN/STUN 凭据签发；v0.4.0 对齐 WVP-GB28181-Pro 的
 设备配置/控制、媒体指标与流会话、日志 SSE、分享播放、录像合并等运维能力。
 
-> 当前版本: **v0.5.0** | 最后更新: 2026-10-25
+> 当前版本: **v0.5.1** | 最后更新: 2026-10-25
 
 ---
 

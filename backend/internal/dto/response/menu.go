@@ -25,3 +25,16 @@ type RMenuAPI struct {
 	BaseResponse
 	Data model.MenuAPI `json:"data"`
 }
+
+// MenuRoleBrief 菜单已授权角色的摘要信息。
+type MenuRoleBrief struct {
+	ID   int64  `json:"id"`
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+// RMenuRoleList 菜单已授权角色列表响应。
+type RMenuRoleList struct {
+	BaseResponse
+	Data []MenuRoleBrief `json:"data"`
+}

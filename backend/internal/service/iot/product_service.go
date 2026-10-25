@@ -47,6 +47,16 @@ func (s *ProductService) Page(ctx context.Context, req *request.PageIotProductRe
 	if items == nil {
 		items = []model.IotProduct{}
 	}
+	// 列表一次批量补齐服务组摘要，避免前端逐行请求。
+	ids := make([]int64, 0, len(items))
+	for i := range items {
+		ids = append(ids, items[i].ID)
+	}
+	if groups, err := s.repo.ListServiceGroupBriefsByProductIDs(ctx, ids); err == nil {
+		for i := range items {
+			items[i].ServiceGroups = groups[items[i].ID]
+		}
+	}
 	return &response.PageIotProductResp{
 		Total: total, Page: req.Page, PageSize: req.PageSize, Items: items,
 	}, nil

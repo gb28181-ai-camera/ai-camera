@@ -160,6 +160,9 @@ func registerWebRoutes(r *gin.Engine) {
 			wsg.GET("/menus/:id", menuH.Get)
 			wsg.PUT("/menus/:id", menuH.Update)
 			wsg.DELETE("/menus/:id", menuH.Delete)
+			// 菜单→角色授权（静态子路径 roles 写在 apis 之前；权限码 system:menu:role）
+			wsg.GET("/menus/:id/roles", menuH.GetRoles)
+			wsg.PUT("/menus/:id/roles", menuH.AssignRoles)
 			wsg.GET("/menus/:id/apis", menuH.ListAPIs)
 			wsg.POST("/menus/:id/apis", menuH.CreateAPI)
 

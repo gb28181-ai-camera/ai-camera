@@ -3179,3 +3179,32 @@ SELECT DISTINCT 'p', 'super_admin', path, method FROM ac_menu_api WHERE deleted_
 SELECT setval(pg_get_serial_sequence('ac_menu', 'id'), COALESCE((SELECT MAX(id) FROM ac_menu), 1));
 SELECT setval(pg_get_serial_sequence('ac_menu_api', 'id'), COALESCE((SELECT MAX(id) FROM ac_menu_api), 1));
 SELECT setval(pg_get_serial_sequence('ac_role_menu_rel', 'id'), COALESCE((SELECT MAX(id) FROM ac_role_menu_rel), 1));
+
+-- ════════════════════════════════════════════════════════════════
+-- 15. 账号与权限对齐（boticz-mes）
+-- ════════════════════════════════════════════════════════════════
+
+-- 菜单 → 角色授权（覆盖式）。菜单管理页新增「允许访问角色」入口。
+INSERT INTO ac_menu (id, parent_id, level, name, path, icon, component, type, platform, permission_code, description, sequence, active, hidden, created_by, created_dt, updated_by, updated_dt)
+SELECT 9600, '863', 4, '菜单授权角色', '', '', '', 'button', 'pc', 'system:menu:role', '按钮', 14, TRUE, FALSE, 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu WHERE permission_code = 'system:menu:role');
+
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9101, 9600, 'GET', '/web/system/menus/:id/roles', '查询菜单已授权角色', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'GET' AND path = '/web/system/menus/:id/roles');
+
+INSERT INTO ac_menu_api (id, menu_id, method, path, description, created_by, created_dt, updated_by, updated_dt)
+SELECT 9102, 9600, 'PUT', '/web/system/menus/:id/roles', '覆盖式授权菜单角色', 'system', CURRENT_TIMESTAMP, 'system', CURRENT_TIMESTAMP
+WHERE NOT EXISTS (SELECT 1 FROM ac_menu_api WHERE method = 'PUT' AND path = '/web/system/menus/:id/roles');
+
+INSERT INTO ac_role_menu_rel (role_id, menu_id)
+SELECT 1, 9600
+WHERE NOT EXISTS (SELECT 1 FROM ac_role_menu_rel WHERE role_id = 1 AND menu_id = 9600);
+
+DELETE FROM casbin_rule WHERE p_type = 'p' AND v0 = 'super_admin';
+INSERT INTO casbin_rule (p_type, v0, v1, v2)
+SELECT DISTINCT 'p', 'super_admin', path, method FROM ac_menu_api WHERE deleted_at IS NULL;
+
+SELECT setval(pg_get_serial_sequence('ac_menu', 'id'), COALESCE((SELECT MAX(id) FROM ac_menu), 1));
+SELECT setval(pg_get_serial_sequence('ac_menu_api', 'id'), COALESCE((SELECT MAX(id) FROM ac_menu_api), 1));
+SELECT setval(pg_get_serial_sequence('ac_role_menu_rel', 'id'), COALESCE((SELECT MAX(id) FROM ac_role_menu_rel), 1));

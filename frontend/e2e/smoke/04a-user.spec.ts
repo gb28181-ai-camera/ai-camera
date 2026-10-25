@@ -116,8 +116,9 @@ test.describe('04a 用户管理', () => {
       '最后登录',
       '操作',
     ])
-    // 部门 / 状态下拉筛选（SearchBar 之外的额外汇总条件）
+    // 部门 / 岗位 / 状态下拉筛选（SearchBar 之外的额外汇总条件）
     await expect(page.getByText('部门：')).toBeVisible()
+    await expect(page.getByText('岗位：')).toBeVisible()
     await expect(page.getByText('状态：')).toBeVisible()
     await expect(page.getByPlaceholder('请输入用户名或姓名')).toBeVisible()
     await shot(page, '04a-user-list')

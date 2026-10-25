@@ -14,10 +14,12 @@ package request
 // 只查询已配置国标接入的设备（gb_device_id 非空）；keyword 匹配设备名称/编号/国标编码。
 type PageGbDeviceReq struct {
 	PageReq
-	Keyword        string `form:"keyword" json:"keyword" example:"东门"`
-	RegisterStatus string `form:"register_status" json:"register_status" example:"pending"`
-	Status         string `form:"status" json:"status" example:"online"`
-	RegionID       *int64 `form:"region_id" json:"region_id"`
+	Keyword          string `form:"keyword" json:"keyword" example:"东门"`
+	RegisterStatus   string `form:"register_status" json:"register_status" example:"pending"`
+	Status           string `form:"status" json:"status" example:"online"`
+	RegionID         *int64 `form:"region_id" json:"region_id"`
+	ProductID        *int64 `form:"product_id" json:"product_id"`
+	ServiceGroupType string `form:"service_group_type" json:"service_group_type" example:"gb28181"`
 }
 
 // PageGbChannelReq 国标通道分页查询。

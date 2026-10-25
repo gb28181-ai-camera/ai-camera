@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	"strings"
 
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
 	"github.com/boticz/ai-camera-backend/internal/model"
@@ -23,6 +24,11 @@ func (s *ConfigService) List(ctx context.Context, keyword string) ([]model.Syste
 func (s *ConfigService) Create(ctx context.Context, req *request.CreateConfigReq) (*model.SystemConfig, error) {
 	repo := repository.NewConfigRepo()
 
+	dataType, err := normalizeConfigDataType(req.DataType)
+	if err != nil {
+		return nil, err
+	}
+
 	exists, err := repo.ExistsCode(ctx, req.Key, 0)
 	if err != nil {
 		return nil, err
@@ -32,18 +38,19 @@ func (s *ConfigService) Create(ctx context.Context, req *request.CreateConfigReq
 	}
 
 	active := true
+	if req.Active != nil {
+		active = *req.Active
+	}
 	c := &model.SystemConfig{
 		Name:        req.Name,
 		Code:        req.Key,
 		Value:       req.Value,
 		GroupName:   req.GroupName,
-		DataType:    req.DataType,
+		DataType:    dataType,
+		Schema:      req.Schema,
 		Sequence:    req.Sequence,
 		Description: req.Description,
 		Active:      &active,
-	}
-	if c.DataType == "" {
-		c.DataType = "string"
 	}
 	if c.GroupName == "" {
 		c.GroupName = "system"
@@ -84,7 +91,14 @@ func (s *ConfigService) Update(ctx context.Context, id int64, req *request.Updat
 		c.Value = req.Value
 	}
 	if req.DataType != "" {
-		c.DataType = req.DataType
+		dataType, err := normalizeConfigDataType(req.DataType)
+		if err != nil {
+			return err
+		}
+		c.DataType = dataType
+	}
+	if req.Schema != "" {
+		c.Schema = req.Schema
 	}
 	if req.GroupName != "" {
 		c.GroupName = req.GroupName
@@ -94,6 +108,10 @@ func (s *ConfigService) Update(ctx context.Context, id int64, req *request.Updat
 	}
 	if req.Description != "" {
 		c.Description = req.Description
+	}
+	// Active 为 nil 表示未传，保持原启用状态。
+	if req.Active != nil {
+		c.Active = req.Active
 	}
 
 	return repo.Update(ctx, c)
@@ -115,4 +133,24 @@ func (s *ConfigService) SetActive(ctx context.Context, id int64, active bool) er
 		return err
 	}
 	return repo.SetActive(ctx, id, active)
+}
+
+// normalizeConfigDataType 校验并归一数据类型，缺省为 string。
+//
+// 支持 string/int/integer/float/bool/boolean/json/select；其中 integer→int、
+// boolean→bool 做别名归一后落库，其余原样保存。非法类型返回业务错误（400）。
+func normalizeConfigDataType(raw string) (string, error) {
+	dt := strings.ToLower(strings.TrimSpace(raw))
+	switch dt {
+	case "":
+		return "string", nil
+	case "string", "int", "float", "bool", "json", "select":
+		return dt, nil
+	case "integer":
+		return "int", nil
+	case "boolean":
+		return "bool", nil
+	default:
+		return "", bizErr("不支持的数据类型 %s（仅支持 string/int/integer/float/bool/boolean/json/select）", raw)
+	}
 }

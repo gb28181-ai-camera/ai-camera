@@ -98,6 +98,9 @@ type Device struct {
 	Firmware *Firmware   `gorm:"foreignKey:FirmwareID;references:ID" json:"firmware,omitempty"`
 	AIModel  *AIModel    `gorm:"foreignKey:ModelID;references:ID" json:"ai_model,omitempty"`
 	Product  *IotProduct `gorm:"foreignKey:ProductID;references:ID;-:migration" json:"product,omitempty"`
+
+	// ServiceGroups 非持久化：设备所属产品绑定的服务组摘要，列表页批量填充。
+	ServiceGroups []IotServiceGroupBrief `gorm:"-" json:"service_groups,omitempty"`
 }
 
 func (Device) TableName() string { return "ac_device" }

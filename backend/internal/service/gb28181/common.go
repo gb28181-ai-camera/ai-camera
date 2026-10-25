@@ -313,7 +313,7 @@ func toGbDeviceItem(d model.Device) response.GbDeviceItem {
 	if d.Region != nil {
 		regionName = d.Region.Name
 	}
-	return response.GbDeviceItem{
+	item := response.GbDeviceItem{
 		ID:             d.ID,
 		Name:           d.Name,
 		DeviceCode:     d.DeviceCode,
@@ -340,7 +340,13 @@ func toGbDeviceItem(d model.Device) response.GbDeviceItem {
 		Remark:         d.Remark,
 		CreatedDT:      d.CreatedDT,
 		UpdatedDT:      d.UpdatedDT,
+		ProductID:      d.ProductID,
 	}
+	if d.Product != nil {
+		item.ProductCode = d.Product.Code
+		item.ProductName = d.Product.Name
+	}
+	return item
 }
 
 // toGbChannelItem 把 ac_gb_channel 转为列表项，关联名称从 Preload 结果读取。
