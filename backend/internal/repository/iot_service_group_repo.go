@@ -11,7 +11,7 @@ import (
 )
 
 // ════════════════════════════════════════════════════════════════
-// IOT 管理 - 服务组 / 服务项
+// IOT 管理 - 服务组 / 服务
 // ════════════════════════════════════════════════════════════════
 
 // IotServiceGroupRepo IOT 服务组数据访问层。
@@ -25,7 +25,7 @@ func (r *IotServiceGroupRepo) Page(ctx context.Context, req *request.PageIotServ
 	q := bootstrap.DB().WithContext(ctx).Model(&model.IotServiceGroup{})
 	if kw := strings.TrimSpace(req.Keyword); kw != "" {
 		like := "%" + kw + "%"
-		q = q.Where("(name ILIKE ? OR code ILIKE ? OR username ILIKE ?)", like, like, like)
+		q = q.Where("(name ILIKE ? OR code ILIKE ?)", like, like)
 	}
 	if typ := strings.TrimSpace(req.Type); typ != "" {
 		q = q.Where("type = ?", typ)
@@ -59,23 +59,9 @@ func (r *IotServiceGroupRepo) GetByID(ctx context.Context, id int64) (*model.Iot
 	return &m, nil
 }
 
-// FindByUsername 按组级登录名查询服务组。
-//
-// MQTT 鉴权只需用户名定位；密码比对在 service 层做（需要 constant-time 比较），
-// 避免把口令比较散落到 SQL 里。
-func (r *IotServiceGroupRepo) FindByUsername(ctx context.Context, username string) (*model.IotServiceGroup, error) {
-	var m model.IotServiceGroup
-	if err := bootstrap.DB().WithContext(ctx).
-		Where("username = ?", username).
-		First(&m).Error; err != nil {
-		return nil, err
-	}
-	return &m, nil
-}
-
-// ListItems 查询服务组的服务项。
-func (r *IotServiceGroupRepo) ListItems(ctx context.Context, groupID int64) ([]model.IotServiceItem, error) {
-	var items []model.IotServiceItem
+// ListServices 查询服务组下的服务。
+func (r *IotServiceGroupRepo) ListServices(ctx context.Context, groupID int64) ([]model.IotService, error) {
+	var items []model.IotService
 	err := bootstrap.DB().WithContext(ctx).
 		Where("group_id = ?", groupID).
 		Order("sequence ASC, id ASC").
@@ -84,6 +70,36 @@ func (r *IotServiceGroupRepo) ListItems(ctx context.Context, groupID int64) ([]m
 		return nil, err
 	}
 	return items, nil
+}
+
+// ListServicesByGroupIDs 批量查询多个服务组下的服务。
+func (r *IotServiceGroupRepo) ListServicesByGroupIDs(ctx context.Context, groupIDs []int64) ([]model.IotService, error) {
+	if len(groupIDs) == 0 {
+		return []model.IotService{}, nil
+	}
+	var items []model.IotService
+	err := bootstrap.DB().WithContext(ctx).
+		Where("group_id IN ?", groupIDs).
+		Order("group_id ASC, sequence ASC, id ASC").
+		Find(&items).Error
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// GetService 按主键查询服务。
+func (r *IotServiceGroupRepo) GetService(ctx context.Context, id int64) (*model.IotService, error) {
+	var m model.IotService
+	if err := bootstrap.DB().WithContext(ctx).First(&m, id).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// CreateService 新增单个服务（供测试/初始化使用）。
+func (r *IotServiceGroupRepo) CreateService(ctx context.Context, m *model.IotService) error {
+	return bootstrap.DB().WithContext(ctx).Create(m).Error
 }
 
 // ExistsByCode 判断服务组编码是否存在（excludeID>0 时排除自身）。
@@ -99,20 +115,7 @@ func (r *IotServiceGroupRepo) ExistsByCode(ctx context.Context, code string, exc
 	return cnt > 0, nil
 }
 
-// ExistsByUsername 判断组级登录名是否已被占用（自动生成时需要重试）。
-func (r *IotServiceGroupRepo) ExistsByUsername(ctx context.Context, username string, excludeID int64) (bool, error) {
-	q := bootstrap.DB().WithContext(ctx).Model(&model.IotServiceGroup{}).Where("username = ?", username)
-	if excludeID > 0 {
-		q = q.Where("id <> ?", excludeID)
-	}
-	var cnt int64
-	if err := q.Count(&cnt).Error; err != nil {
-		return false, err
-	}
-	return cnt > 0, nil
-}
-
-// Create 新增服务组。
+// Create 新增服务组（仅供测试/初始化使用；业务接口不开放新增）。
 func (r *IotServiceGroupRepo) Create(ctx context.Context, m *model.IotServiceGroup) error {
 	return bootstrap.DB().WithContext(ctx).Create(m).Error
 }
@@ -127,14 +130,6 @@ func (r *IotServiceGroupRepo) Delete(ctx context.Context, id int64) error {
 	return bootstrap.DB().WithContext(ctx).Delete(&model.IotServiceGroup{}, id).Error
 }
 
-// UpdateCredentials 只更新用户名与密码。
-func (r *IotServiceGroupRepo) UpdateCredentials(ctx context.Context, id int64, username, password string) error {
-	return bootstrap.DB().WithContext(ctx).
-		Model(&model.IotServiceGroup{}).
-		Where("id = ?", id).
-		Updates(map[string]interface{}{"username": username, "password": password}).Error
-}
-
 // ListByIDs 按 ID 批量查询服务组（绑定前校验存在性）。
 func (r *IotServiceGroupRepo) ListByIDs(ctx context.Context, ids []int64) ([]model.IotServiceGroup, error) {
 	if len(ids) == 0 {
@@ -147,24 +142,24 @@ func (r *IotServiceGroupRepo) ListByIDs(ctx context.Context, ids []int64) ([]mod
 	return items, nil
 }
 
-// ReplaceItems 整体替换服务项。
+// ReplaceServices 整体替换服务组下的服务。
 //
-// 与产品绑定同理，使用硬删除：若软删除，(group_id, protocol) 唯一索引
-// 仍被已删除的行占用，同一协议将永远无法重新加入。
-func (r *IotServiceGroupRepo) ReplaceItems(ctx context.Context, groupID int64, items []model.IotServiceItem) error {
+// 使用硬删除：软删除行会继续占用 (group_id, code) 唯一索引，
+// 导致同一服务编码无法重新加入。
+func (r *IotServiceGroupRepo) ReplaceServices(ctx context.Context, groupID int64, services []model.IotService) error {
 	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().
 			Where("group_id = ?", groupID).
-			Delete(&model.IotServiceItem{}).Error; err != nil {
+			Delete(&model.IotService{}).Error; err != nil {
 			return err
 		}
-		if len(items) == 0 {
+		if len(services) == 0 {
 			return nil
 		}
-		for i := range items {
-			items[i].GroupID = groupID
-			items[i].ID = 0
+		for i := range services {
+			services[i].GroupID = groupID
+			services[i].ID = 0
 		}
-		return tx.Create(&items).Error
+		return tx.Create(&services).Error
 	})
 }

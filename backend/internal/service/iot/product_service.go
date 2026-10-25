@@ -21,15 +21,19 @@ import (
 
 // ProductService IOT 产品业务逻辑。
 type ProductService struct {
-	repo  *repository.IotProductRepo
-	group *repository.IotServiceGroupRepo
+	repo           *repository.IotProductRepo
+	group          *repository.IotServiceGroupRepo
+	productService *repository.IotProductServiceRepo
+	turnUser       *TurnUserService
 }
 
 // NewProductService 构造产品服务。
 func NewProductService() *ProductService {
 	return &ProductService{
-		repo:  repository.NewIotProductRepo(),
-		group: repository.NewIotServiceGroupRepo(),
+		repo:           repository.NewIotProductRepo(),
+		group:          repository.NewIotServiceGroupRepo(),
+		productService: repository.NewIotProductServiceRepo(),
+		turnUser:       NewTurnUserService(),
 	}
 }
 
@@ -60,11 +64,7 @@ func (s *ProductService) Get(ctx context.Context, id int64) (*model.IotProduct, 
 	return m, nil
 }
 
-// Create 新增产品。
-//
-// 配置约束在这里**严格**执行：产品是设备接入配置的聚合根，一旦写入错误组合，
-// 后续 OTA 会把设备根本用不了的配网方式/服务组下发下去。历史数据的兼容
-// 只在 Update 中通过 warning 放行，新建没有这个包袱。
+// Create 新增产品，并同步绑定服务组、生成产品×服务凭据。
 func (s *ProductService) Create(ctx context.Context, req *request.CreateIotProductReq) (*model.IotProduct, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -73,6 +73,9 @@ func (s *ProductService) Create(ctx context.Context, req *request.CreateIotProdu
 	code := strings.TrimSpace(req.Code)
 	if code == "" {
 		return nil, errors.New("产品编码不能为空")
+	}
+	if len(req.ServiceGroupIDs) == 0 {
+		return nil, errors.New("请至少选择一个服务组")
 	}
 
 	exists, err := s.repo.ExistsByCode(ctx, code, 0)
@@ -83,9 +86,6 @@ func (s *ProductService) Create(ctx context.Context, req *request.CreateIotProdu
 		return nil, ErrProductCodeExists
 	}
 
-	// 配网方式与分享策略都由产品自己配置：
-	// 安防相机通常填 qrcode（无需配网），适老化相机填 bluetooth。
-	// 平台不再按产品类型做联动约束，只校验取值本身合法。
 	mode := strings.TrimSpace(req.NetConfigMode)
 	if mode == "" {
 		mode = model.IotNetConfigBluetooth
@@ -111,13 +111,15 @@ func (s *ProductService) Create(ctx context.Context, req *request.CreateIotProdu
 	if err := s.repo.Create(ctx, m); err != nil {
 		return nil, err
 	}
+	if _, err := s.BindServiceGroups(ctx, m.ID, req.ServiceGroupIDs); err != nil {
+		// 创建失败时回滚产品，避免留下一个没有服务配置的半成品。
+		_ = s.repo.Delete(ctx, m.ID)
+		return nil, err
+	}
 	return m, nil
 }
 
 // Update 更新产品。文本非空才覆盖，指针非 nil 才覆盖。
-//
-// 配网方式与服务组都是产品自身配置，只校验取值合法，不做跨字段联动。
-// 返回值保留 warning 以兼容旧响应结构，正常为空。
 func (s *ProductService) Update(ctx context.Context, id int64, req *request.UpdateIotProductReq) (string, error) {
 	m, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -155,8 +157,6 @@ func (s *ProductService) Update(ctx context.Context, id int64, req *request.Upda
 	if req.Active != nil {
 		m.Active = req.Active
 	}
-
-	// 配网方式与分享策略都是产品自身的配置，不做跨字段联动约束。
 	if v := strings.TrimSpace(req.NetConfigMode); v != "" {
 		if err := validateNetConfigMode(v); err != nil {
 			return "", err
@@ -170,10 +170,16 @@ func (s *ProductService) Update(ctx context.Context, id int64, req *request.Upda
 	if err := s.repo.Update(ctx, m); err != nil {
 		return "", err
 	}
+	// nil 表示不修改服务组；空数组表示清空；非空表示整体替换。
+	if req.ServiceGroupIDs != nil {
+		if _, err := s.BindServiceGroups(ctx, id, req.ServiceGroupIDs); err != nil {
+			return "", err
+		}
+	}
 	return "", nil
 }
 
-// Delete 删除产品（软删除）。
+// Delete 删除产品：清理产品-服务凭据、服务组绑定，再软删除产品。
 func (s *ProductService) Delete(ctx context.Context, id int64) error {
 	if _, err := s.repo.GetByID(ctx, id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -181,14 +187,26 @@ func (s *ProductService) Delete(ctx context.Context, id int64) error {
 		}
 		return err
 	}
+	rows, err := s.productService.ListByProduct(ctx, id)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		svc, err := s.group.GetService(ctx, row.ServiceID)
+		if err == nil {
+			s.turnUser.Delete(ctx, *svc, row)
+		}
+	}
+	if err := s.productService.DeleteByProduct(ctx, id); err != nil {
+		return err
+	}
+	if err := s.repo.ReplaceServiceGroups(ctx, id, nil); err != nil {
+		return err
+	}
 	return s.repo.Delete(ctx, id)
 }
 
 // GenerateShareQR 生成/刷新产品分享二维码内容。
-//
-// 内容存成 JSON 字符串而不是纯 URL：二维码本身只是载体，
-// 手机扫码后需要知道「这是哪个产品的分享、是否允许分享」，
-// 由客户端解析并决定跳转与鉴权，平台后续扩展字段也不会破坏兼容性。
 func (s *ProductService) GenerateShareQR(ctx context.Context, id int64) (*response.IotShareQRResp, error) {
 	m, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -196,6 +214,9 @@ func (s *ProductService) GenerateShareQR(ctx context.Context, id int64) (*respon
 			return nil, ErrProductNotFound
 		}
 		return nil, err
+	}
+	if !m.AllowShare {
+		return nil, ErrProductShareDisabled
 	}
 
 	payload := map[string]interface{}{
@@ -221,7 +242,7 @@ func (s *ProductService) GenerateShareQR(ctx context.Context, id int64) (*respon
 	}, nil
 }
 
-// GetServiceGroups 查询产品已绑定的服务组（密码脱敏）。
+// GetServiceGroups 查询产品已绑定的服务组。
 func (s *ProductService) GetServiceGroups(ctx context.Context, id int64) ([]model.IotServiceGroup, error) {
 	if _, err := s.Get(ctx, id); err != nil {
 		return nil, err
@@ -233,16 +254,12 @@ func (s *ProductService) GetServiceGroups(ctx context.Context, id int64) ([]mode
 	return maskGroups(items), nil
 }
 
-// BindServiceGroups 整体替换产品绑定的服务组。
-//
-// 服务组是设备 OTA 配置的来源；配网方式与协议由管理员在产品上配置，
-// 平台只校验引用的服务组真实存在。
+// BindServiceGroups 整体替换产品绑定的服务组，并同步产品×服务凭据。
 func (s *ProductService) BindServiceGroups(ctx context.Context, id int64, ids []int64) ([]model.IotServiceGroup, error) {
 	if _, err := s.Get(ctx, id); err != nil {
 		return nil, err
 	}
 
-	// 去重后校验存在性：不存在的 ID 静默忽略会掩盖前端传错 ID 的问题。
 	uniq := make([]int64, 0, len(ids))
 	seen := make(map[int64]struct{}, len(ids))
 	for _, gid := range ids {
@@ -263,13 +280,136 @@ func (s *ProductService) BindServiceGroups(ctx context.Context, id int64, ids []
 		if len(found) != len(uniq) {
 			return nil, errors.New("存在未找到的服务组，请刷新后重试")
 		}
-		// 服务组与产品的匹配由管理员在产品配置里决定（配网方式与协议都在产品上），
-		// 平台只校验引用的服务组真实存在。
 	}
 	if err := s.repo.ReplaceServiceGroups(ctx, id, uniq); err != nil {
 		return nil, err
 	}
+	if err := s.syncProductServices(ctx, id, uniq); err != nil {
+		return nil, err
+	}
 	return s.GetServiceGroups(ctx, id)
+}
+
+// syncProductServices 让产品×服务凭据与服务组下的服务保持一致：
+// 新增服务生成凭据，移除服务删除凭据；已有服务保留原凭据（避免设备配置漂移）。
+func (s *ProductService) syncProductServices(ctx context.Context, productID int64, groupIDs []int64) error {
+	services, err := s.group.ListServicesByGroupIDs(ctx, groupIDs)
+	if err != nil {
+		return err
+	}
+	desired := make(map[int64]model.IotService, len(services))
+	for _, svc := range services {
+		desired[svc.ID] = svc
+	}
+
+	existing, err := s.productService.ListByProduct(ctx, productID)
+	if err != nil {
+		return err
+	}
+	existingByService := make(map[int64]model.IotProductService, len(existing))
+	for _, row := range existing {
+		existingByService[row.ServiceID] = row
+	}
+
+	// 新增缺失凭据。
+	for serviceID, svc := range desired {
+		if _, ok := existingByService[serviceID]; ok {
+			continue
+		}
+		username, err := generateProductServiceUsername(ctx, s.productService, "svc_")
+		if err != nil {
+			return err
+		}
+		password, err := GenerateServicePassword()
+		if err != nil {
+			return err
+		}
+		row := &model.IotProductService{
+			Active:    boolOr(nil, true),
+			ProductID: productID,
+			ServiceID: serviceID,
+			Username:  username,
+			Password:  password,
+		}
+		if err := s.productService.Create(ctx, row); err != nil {
+			return err
+		}
+		if svc.Protocol == model.IotProtocolTURN {
+			if err := s.turnUser.Upsert(ctx, svc, *row); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 删除已移除服务的凭据。
+	for serviceID, row := range existingByService {
+		if _, ok := desired[serviceID]; ok {
+			continue
+		}
+		svc, err := s.group.GetService(ctx, serviceID)
+		if err == nil {
+			s.turnUser.Delete(ctx, *svc, row)
+		}
+		if err := s.productService.Delete(ctx, row.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetProductServices 产品下的服务凭据（密码脱敏）。
+func (s *ProductService) GetProductServices(ctx context.Context, id int64) ([]model.IotProductService, error) {
+	if _, err := s.Get(ctx, id); err != nil {
+		return nil, err
+	}
+	rows, err := s.productService.ListByProduct(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return maskProductServices(rows), nil
+}
+
+// ResetServiceCredentials 轮换产品在某个服务上的凭据，返回一次性明文。
+//
+// 这是产品×服务凭据的唯一轮换入口；TURN 服务会同步更新 coturn userdb。
+func (s *ProductService) ResetServiceCredentials(ctx context.Context, productID, serviceID int64) (*response.IotProductServiceCredentials, error) {
+	if _, err := s.Get(ctx, productID); err != nil {
+		return nil, err
+	}
+	row, err := s.productService.Get(ctx, productID, serviceID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrProductServiceNotFound
+		}
+		return nil, err
+	}
+	username, err := generateProductServiceUsername(ctx, s.productService, "svc_")
+	if err != nil {
+		return nil, err
+	}
+	password, err := GenerateServicePassword()
+	if err != nil {
+		return nil, err
+	}
+	old := *row
+	row.Username = username
+	row.Password = password
+	if err := s.productService.Update(ctx, row); err != nil {
+		return nil, err
+	}
+	svc, err := s.group.GetService(ctx, serviceID)
+	if err == nil && svc.Protocol == model.IotProtocolTURN {
+		s.turnUser.Delete(ctx, *svc, old)
+		if err := s.turnUser.Upsert(ctx, *svc, *row); err != nil {
+			return nil, err
+		}
+	}
+	return &response.IotProductServiceCredentials{
+		ProductID: productID,
+		ServiceID: serviceID,
+		Username:  username,
+		Password:  password,
+	}, nil
 }
 
 // netConfigLabel 配网方式的中文说明，用于错误信息。

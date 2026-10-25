@@ -2,9 +2,11 @@
 
 Go 后端服务：Gin + GORM + PostgreSQL + Casbin，按 `Handler → Service → Repository → Model`
 四层架构实现 AI Camera 智能监控平台的全部业务能力；v0.2.0 增加 GB/T 28181 信令入口
-（`cmd/sipsvc`）与 ZLMediaKit 媒体适配。
+（`cmd/sipsvc`）与 ZLMediaKit 媒体适配；v0.3.0 增加 IOT 产品/服务组/设备接入、
+MQTT 鉴权与 WebRTC 信令、TURN/STUN 凭据签发；v0.4.0 对齐 WVP-GB28181-Pro 的
+设备配置/控制、媒体指标与流会话、日志 SSE、分享播放、录像合并等运维能力。
 
-> 当前版本: **v0.2.0** | 最后更新: 2026-10-21
+> 当前版本: **v0.4.0** | 最后更新: 2026-10-25
 
 ---
 
@@ -55,8 +57,10 @@ backend/
 │   │   │   ├── app.go               # /app 移动端路由（含 /app/gb 13 条）
 │   │   │   └── swagger.go           # Swagger UI + 两份 JSON 的静态文件服务
 │   │   ├── handler/
-│   │   │   ├── web/                 # 42 个管理端 Handler（含 18 个 gb_* / voice_agent）
-│   │   │   └── app/                 # 3 个移动端 Handler（auth / app / gb）
+│   │   │   ├── web/                 # 46 个管理端 Handler（含 gb_* / voice_agent / iot_*）
+│   │   │   ├── app/                 # 4 个移动端 Handler（auth / app / gb / iot）
+│   │   │   ├── iot/                 # 设备端 /iot/ota、/iot/activate
+│   │   │   └── rpc/                 # MQTT 鉴权 / TURN 凭据内部 RPC
 │   │   └── middleware/
 │   │       ├── auth.go              # AuthMiddleware + CasbinMiddleware
 │   │       ├── api_key_auth.go      # ApiKeyAuth（X-Api-Key → SHA256 → ac_api_key）
@@ -84,9 +88,13 @@ backend/
 │   │   ├── setting/                 # 告警设置 / 风险通知设置 / 个推 / 短信 / 消息推送
 │   │   ├── stats/                   # 看板 / 风险统计 / 告警统计 / 大屏 / 流量 / 设备状态
 │   │   ├── gb28181/                 # 国标设备/通道/播放/云台/回放/录像/报警/位置/流/级联
-│   │   └── app/                     # 移动端全部业务（含 /app/gb 薄封装）
-│   ├── repository/                  # 27 个数据访问文件
-│   ├── model/                       # 10 个模型文件 / 56 张表（ac_ 前缀）
+│   │   ├── iot/                     # 产品 / 服务组 / 设备账号 / OTA / 分享码 / 凭据
+│   │   ├── turn/                    # TURN REST 凭据签发
+│   │   └── app/                     # 移动端全部业务（含 /app/gb、/app/iot 薄封装）
+│   ├── signal/mqtt/                 # MQTT ↔ ZLM WebRTC SDP 信令桥
+│   ├── mqttrpc/                     # mochi-mqtt gRPC 鉴权服务
+│   ├── repository/                  # 30 个数据访问文件
+│   ├── model/                       # 11 个模型文件 / 63 张表（ac_ 前缀）
 │   │   ├── base.go                  # BaseModel + Context 注入 + 审计字段钩子
 │   │   ├── system.go                # 16 张系统管理表
 │   │   ├── basic.go                 # 3 张基础信息表
@@ -96,7 +104,8 @@ backend/
 │   │   ├── upgrade.go               # 5 张升级管理表
 │   │   ├── notify.go                # 3 张告警设置表
 │   │   ├── webhook.go               # 1 张消息推送表（ac_webhook_config）
-│   │   └── gb28181.go               # 18 张国标视频表（通道/媒体/录像/报警/级联/语音）
+│   │   ├── gb28181.go               # 18 张国标视频表（通道/媒体/录像/报警/级联/语音）
+│   │   └── iot.go                   # 7 张 IOT 表（产品/服务组/服务/产品-组/产品-服务/账号/事件）
 │   └── dto/
 │       ├── request/                 # 21 个请求结构体文件
 │       └── response/                # 26 个响应结构体文件
@@ -276,17 +285,19 @@ cd backend && bash scripts/gen-swagger.sh
 
 ## API 路由总览
 
-后端共注册 **339 个端点**（v0.2.0 实测）：
+后端 Swagger 共收录 **418 个端点**（v0.4.0 实测：Web 377 + App 41）：
 
 | 分组 | 数量 | 说明 |
 |:---|:---:|:---|
-| `/web/*` | 295 | 管理后台 + 官网；含 105 条国标接口 |
-| `/app/*` | 33 | 移动端；含 13 条 `/app/gb/*` |
+| `/web/*` | 377 | 管理后台 + 官网；含国标与 IOT 接口 |
+| `/app/*` | 41 | 移动端；含 `/app/gb/*` 与 `/app/iot/*` |
 | `/media/hook/*` | 10 | ZLM 回调（独立中间件组） |
-| `/health` | 1 | 内联端点，不经过鉴权 |
+
+另有未纳入 Swagger 的 **设备端 `/iot/*`（2 条）**、**内部 RPC `/rpc/*`（3 条）** 与 `/health`。
 
 其中 v0.1.0 的端点以 `docs/开发文档/后端开发/00-接口契约.md` 第 3 节为准，
-v0.2.0 的国标端点以第 10 节为准（契约先冻结后实现）。
+v0.2.0 的国标端点以第 10 节为准，v0.3.0 的 IOT 端点以 §10.14–§10.16 为准，
+v0.4.0 的 WVP 对齐端点以 §17 为准。
 
 入口文件：[`internal/api/router/web.go`](internal/api/router/web.go)、[`internal/api/router/app.go`](internal/api/router/app.go)、
 [`internal/api/router/gb_live.go`](internal/api/router/gb_live.go)、[`internal/api/router/gb_ops.go`](internal/api/router/gb_ops.go)、
@@ -759,14 +770,79 @@ cd backend && go run ./tools/gbsim \
 > ⚠️ 分进程部署时，API 进程的 `control.Default()` 为 nil，播放 / 云台 / 回放等
 > HTTP 触发的 SIP 命令不可用；需改用单进程内嵌，或等待跨进程 RPC（本期未实现）。
 
+### 16. IOT 管理与多协议接入（v0.3.0）
+
+IOT 模块共 **39 条路由**（Web 29 + App 8 + 设备端 2），另有内部 RPC 3 条：
+
+| 分组 | 前缀 | 数量 | 鉴权 | 说明 |
+|:---|:---|:---:|:---|:---|
+| Web 管理 | `/web/iot` | **29** | JWT + Casbin | 产品、服务组/服务、产品-服务凭据、设备账号、激活、密钥、二维码、分享码、解绑 |
+| 移动端 | `/app/iot`、`/app/rtc` | **8** | JWT + Casbin | 认领、蓝牙绑定、扫码绑定、我的设备、服务凭据、分享码、ICE |
+| 设备端 | `/iot` | **2** | `X-Device-Code` + `X-Device-Secret` | OTA 配置下发、主账号激活 |
+| 内部 RPC | `/rpc/mqtt/*`、`/rpc/turn/credentials` | **3** | `X-RPC-Token` | MQTT CONNECT/ACL 鉴权、TURN REST 凭据签发 |
+
+关键约定：
+
+- 设备复用 `ac_device`，仅新增 `product_id` / `device_secret` / `activated_at` 三列。
+  **独立 GB28181 设备**（无产品编码/设备编码）不绑定产品，只按 `gb_device_id` 走白名单。
+- **数据模型**：`ac_iot_service_group`（固定三条）→ `ac_iot_service`（组内服务）→
+  `ac_iot_product_service_group`（产品选组）→ `ac_iot_product_service`（产品×服务凭据）。
+  组本身不持有凭据。
+- **脱敏**：`device_secret`、`sip_password`、产品服务 `password` 在 Web 读接口统一返回 `****`；
+  OTA 与 App 服务凭据接口按设备/用户身份返回明文。
+- **二维码**：设备码 `https://boticz.cn/qrDevice/<product_code>/<device_code>`，
+  分享码 `https://boticz.cn/deviceShareToken/<token>`；设备未绑定产品时设备码返回 400。
+- **服务组**：系统预置 `gb28181` / `webrtc` / `aichat` 三条，不开放新增/删除，
+  编码与类型不可修改；被任一产品绑定后只读，列表/详情返回 `referenced_by_products`。
+- **分享令牌**只由 `share-token` 接口生成；账号新增/编辑接口不接受 `share_token`。
+- **后台解绑**：`POST /web/iot/devices/:id/unbind` 删除设备全部账号（含主账号）、
+  清理未认领令牌并清空 `activated_at`，权限码 `iot:device:unbind`；幂等。
+- **TURN**：产品×TURN 服务凭据写入 coturn SQL userdb（`turnusers_lt`，
+  `MD5(username:realm:password)`）；App 播放仍用 `/app/rtc/ice-servers` 的 REST 短期凭据。
+  compose 与 K8s 已注入 `TURN_STATIC_AUTH_SECRET` / `TURN_REALM` / `TURN_URLS` /
+  `TURN_TTL_SECONDS` / `TURN_RPC_TOKEN`。
+
+> 设计依据：`docs/敏捷开发/v0.3.0 IOT与多协议接入/00-新增需求与设计.md`；
+> 契约见 `docs/开发文档/后端开发/00-接口契约.md` §10.14–§10.16。
+
+### 17. WVP 功能对齐（v0.4.0）
+
+除 JT/T 1078 外，WVP-GB28181-Pro 的运维能力在本期补齐。新增 **32 条路由**
+（其中 2 条为匿名分享播放），集中在：
+
+| 分组 | 新增能力 |
+|:---|:---|
+| 设备控制 | 编辑 SIP/媒体/位置、目录同步进度、重启、布防撤防、报警复位、心跳/注册时间统计 |
+| 通道控制 | 摄像机配置字段、手动录像、ZLM 媒体信息 |
+| 云台 | 预置位重命名与名称持久化、巡航点 CRUD、扫描边界（标准 0x84–0x8A） |
+| 媒体节点 | 本机 CPU/内存/磁盘/网络指标与 24h 历史、当前流会话 |
+| 运维 | 平台信息、日志检索、日志/报警 SSE |
+| 流媒体 | 拉流代理/推流播放地址、推流 CSV/TSV 导入 |
+| 云端录像 | 多段 ffmpeg 合并任务 |
+| 分享 | 免登录分享令牌与匿名播放 |
+
+关键实现：
+
+- **模型自注册**：新增模型在 `model` 包 `init()` 调用 `RegisterModel(&X{})`，
+  `bootstrap.AutoMigrate` 自动追加，避免集中修改 `migrate.go`。
+- **媒体指标**：gopsutil 采集后端所在主机（与 WVP 的 oshi 一致），5s 采样、24h ring。
+- **日志 SSE**：zap core tee 到 5000 条内存 ring；慢客户端丢弃，不阻塞业务日志。
+- **报警 SSE**：按 `ac_gb_alarm.id` 游标轮询，不改信令进程状态。
+- **分享令牌**：库中只存 SHA-256，匿名路由不挂 authMW/casbinMW。
+- **云端合并**：ffmpeg `concat -c copy`；镜像已安装 ffmpeg，失败原因落库。
+- **索引修正**：`gb_device_id` 部分唯一索引排除空串，允许多台非国标设备。
+
+> 契约见 `docs/开发文档/后端开发/00-接口契约.md` §17；
+> 设计说明见 `docs/敏捷开发/v0.4.0 WVP功能对齐/00-实施说明.md`。
+
 ### 路由分组与中间件
 
 | 分组 | 中间件 | 端点数 | 说明 |
 |:---|:---|:---:|:---|
 | 公开 | 无 | 3 | 两个登录接口 + `/health` |
 | `wApiKey` | `ApiKeyAuth()` | 3 | 设备上报三端点，**不经过 Casbin** |
-| `wAuth` | `AuthMiddleware` + `CasbinMiddleware` | 174 | `/web` 全部管理端业务接口 |
-| `aAuth` | `AuthMiddleware` + `CasbinMiddleware` | 19 | `/app` 全部移动端业务接口 |
+| `wAuth` | `AuthMiddleware` + `CasbinMiddleware` | 333 | `/web` 业务接口（Swagger `/web` 共 335，含 2 个公开登录） |
+| `aAuth` | `AuthMiddleware` + `CasbinMiddleware` | 41 | `/app` 全部移动端业务接口 |
 
 ---
 
@@ -1122,6 +1198,10 @@ cd backend && go tool cover -html=coverage.out -o coverage.html
 字段没存进去」。关键验证点包括风险处理状态机（`status` + `read` 双分支）、数据权限四模式
 可见性、Casbin matcher 语义（有角色但未授权该接口应返回 403）。
 
+**v0.3.0 IOT 测试**：`backend/tests/iot/` 覆盖产品/服务组 CRUD、凭据生成与脱敏、
+协议白名单、OTA、激活、分享令牌一次性、SIP/扫码绑定、后台解绑、MQTT 鉴权/ACL；
+`tests/api/route_test.go` 守门 29 条 Web IOT 路由与 8 条 App 路由。
+
 ### 冒烟测试
 
 冒烟测试在测试环境执行（`config-test.yaml`，端口 8081）：
@@ -1197,9 +1277,9 @@ go env -w GOPROXY=https://goproxy.cn,direct
 
 ## 相关文档
 
-- [../docs/开发文档/后端开发/00-接口契约.md](../docs/开发文档/后端开发/00-接口契约.md) — **接口契约**（v0.1.0 §3 + v0.2.0 国标 §10/§15，共 339 个注册端点）
+- [../docs/开发文档/后端开发/00-接口契约.md](../docs/开发文档/后端开发/00-接口契约.md) — **接口契约**（v0.1.0 §3 + v0.2.0 国标 §10/§15 + v0.3.0 IOT §10.14–§10.16）
 - [../docs/需求文档/00-需求总览.md](../docs/需求文档/00-需求总览.md) — 功能边界、状态常量、权限矩阵、非功能需求
-- [../docs/开发文档/数据库设计/sql/ddl/](../docs/开发文档/数据库设计/sql/ddl/) — DDL 脚本（56 张业务表）
+- [../docs/开发文档/数据库设计/sql/ddl/](../docs/开发文档/数据库设计/sql/ddl/) — DDL 脚本（63 张业务表）
 - [../docs/部署文档/01-部署与运维.md](../docs/部署文档/01-部署与运维.md) — Docker 镜像、K8s 清单、CI/CD、运维命令
 - [../docs/部署文档/02-监控与容灾.md](../docs/部署文档/02-监控与容灾.md) — 业务指标埋点清单、告警规则、容灾方案
 - [../docs/敏捷开发/v0.1.0 基础功能开发/待完成事项.md](../docs/敏捷开发/v0.1.0%20基础功能开发/待完成事项.md) — 待接入能力清单

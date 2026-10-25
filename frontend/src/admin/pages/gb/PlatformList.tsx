@@ -2,11 +2,13 @@ import React, {
   forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
 } from 'react'
 import {
-  Alert, Button, Form, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Transfer,
+  Alert, Button, Divider, Form, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Switch,
+  Table, Tag, Transfer,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  ApartmentOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, ShareAltOutlined,
+  ApartmentOutlined, CloudUploadOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined,
+  ShareAltOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 import PageContainer from '../../components/PageContainer'
@@ -50,12 +52,65 @@ interface PlatformFormValues {
   password?: string
   transport?: string
   enable?: boolean
+  // 注册与编码
+  register_way?: string
+  character_set?: string
+  expires?: number | null
+  keep_timeout?: number | null
+  civil_code?: string
+  as_message_channel?: boolean
+  ptz?: boolean
+  rtcp?: boolean
+  send_stream_ip?: string
+  // 本平台信息
+  device_gb_id?: string
+  device_ip?: string
+  device_port?: number | null
+  server_id?: string
+  manufacturer?: string
+  model?: string
+  address?: string
+  secrecy?: number | null
+  // 目录推送
+  catalog_with_platform?: boolean
+  catalog_with_group?: boolean
+  catalog_with_region?: boolean
+  auto_push_channel?: boolean
+  remark?: string
 }
+
+/** 注册方式（模型：local 本地 / remote 远程） */
+const REGISTER_WAY_OPTIONS = [
+  { label: '本地（local）', value: 'local' },
+  { label: '远程（remote）', value: 'remote' },
+]
+
+/** XML 编码（模型默认 GB2312） */
+const CHARACTER_SET_OPTIONS = [
+  { label: 'GB2312', value: 'GB2312' },
+  { label: 'UTF-8', value: 'UTF-8' },
+]
 
 /** 新建 / 编辑的初始值。 */
 function buildPlatformInitialValues(editing: GbPlatformItem | null): Partial<PlatformFormValues> {
   if (!editing) {
-    return { transport: 'UDP', server_port: 5060, enable: true }
+    return {
+      transport: 'UDP',
+      server_port: 5060,
+      enable: true,
+      register_way: 'local',
+      character_set: 'GB2312',
+      expires: 3600,
+      keep_timeout: 60,
+      as_message_channel: false,
+      ptz: true,
+      rtcp: false,
+      secrecy: 0,
+      catalog_with_platform: true,
+      catalog_with_group: false,
+      catalog_with_region: false,
+      auto_push_channel: false,
+    }
   }
   return {
     name: editing.name ?? '',
@@ -68,7 +123,41 @@ function buildPlatformInitialValues(editing: GbPlatformItem | null): Partial<Pla
     password: undefined,
     transport: editing.transport ?? 'UDP',
     enable: editing.enable ?? true,
+    register_way: editing.register_way || 'local',
+    character_set: editing.character_set || 'GB2312',
+    expires: editing.expires ?? 3600,
+    keep_timeout: editing.keep_timeout ?? 60,
+    civil_code: editing.civil_code ?? '',
+    as_message_channel: editing.as_message_channel ?? false,
+    ptz: editing.ptz ?? true,
+    rtcp: editing.rtcp ?? false,
+    send_stream_ip: editing.send_stream_ip ?? '',
+    device_gb_id: editing.device_gb_id ?? '',
+    device_ip: editing.device_ip ?? '',
+    device_port: editing.device_port ?? undefined,
+    server_id: editing.server_id ?? '',
+    manufacturer: editing.manufacturer ?? '',
+    model: editing.model ?? '',
+    address: editing.address ?? '',
+    secrecy: editing.secrecy ?? 0,
+    catalog_with_platform: editing.catalog_with_platform ?? true,
+    // 后端为 int64（0/1），表单用开关表达
+    catalog_with_group: (editing.catalog_with_group ?? 0) === 1,
+    catalog_with_region: (editing.catalog_with_region ?? 0) === 1,
+    auto_push_channel: editing.auto_push_channel ?? false,
+    remark: editing.remark ?? '',
   }
+}
+
+/** InputNumber 空值统一转 undefined */
+function num(v?: number | null): number | undefined {
+  return typeof v === 'number' && !Number.isNaN(v) ? v : undefined
+}
+
+/** 空串统一转 undefined，避免把空值写进请求体 */
+function text(v?: string | null): string | undefined {
+  const trimmed = v?.trim()
+  return trimmed ? trimmed : undefined
 }
 
 interface PlatformFormHandle {
@@ -104,6 +193,7 @@ const PlatformFormContent = forwardRef<PlatformFormHandle, PlatformFormContentPr
 
     return (
       <Form form={form} layout="vertical" initialValues={buildPlatformInitialValues(editing)}>
+        <Divider orientation="left" plain style={{ marginTop: 0 }}>上级平台</Divider>
         <Form.Item name="name" label="平台名称" rules={[{ required: true, message: '请输入平台名称' }]}>
           <Input placeholder="请输入上级平台名称" maxLength={100} />
         </Form.Item>
@@ -139,11 +229,100 @@ const PlatformFormContent = forwardRef<PlatformFormHandle, PlatformFormContentPr
             autoComplete="new-password"
           />
         </Form.Item>
-        <Form.Item name="transport" label="传输协议">
-          <Select options={TRANSPORT_OPTIONS} />
+        <Space size={16} style={{ display: 'flex' }}>
+          <Form.Item name="transport" label="传输协议" style={{ width: 220 }}>
+            <Select options={TRANSPORT_OPTIONS} />
+          </Form.Item>
+          <Form.Item name="enable" label="启用状态" valuePropName="checked" style={{ width: 220 }}>
+            <Switch checkedChildren="启用" unCheckedChildren="停用" />
+          </Form.Item>
+        </Space>
+
+        <Divider orientation="left" plain>注册与编码</Divider>
+        <Space size={16} style={{ display: 'flex', flexWrap: 'wrap' }}>
+          <Form.Item name="register_way" label="注册方式" style={{ width: 220 }}>
+            <Select options={REGISTER_WAY_OPTIONS} />
+          </Form.Item>
+          <Form.Item name="character_set" label="XML 字符集" style={{ width: 220 }}>
+            <Select options={CHARACTER_SET_OPTIONS} />
+          </Form.Item>
+          <Form.Item name="expires" label="注册有效期（秒）" style={{ width: 220 }}>
+            <InputNumber min={60} max={86400} style={{ width: '100%' }} placeholder="3600" />
+          </Form.Item>
+          <Form.Item name="keep_timeout" label="心跳超时（秒）" style={{ width: 220 }}>
+            <InputNumber min={5} max={3600} style={{ width: '100%' }} placeholder="60" />
+          </Form.Item>
+        </Space>
+        <Space size={16} style={{ display: 'flex', flexWrap: 'wrap' }}>
+          <Form.Item name="civil_code" label="行政区划代码" style={{ width: 220 }}>
+            <Input placeholder="如：330100" maxLength={20} />
+          </Form.Item>
+          <Form.Item name="send_stream_ip" label="推流使用 IP" style={{ width: 220 }}>
+            <Input placeholder="级联推流时使用的本端 IP" maxLength={50} />
+          </Form.Item>
+          <Form.Item name="as_message_channel" label="作为消息通道" valuePropName="checked" style={{ width: 220 }}>
+            <Switch />
+          </Form.Item>
+          <Form.Item name="ptz" label="支持云台" valuePropName="checked" style={{ width: 220 }}>
+            <Switch />
+          </Form.Item>
+          <Form.Item name="rtcp" label="使用 RTCP" valuePropName="checked" style={{ width: 220 }}>
+            <Switch />
+          </Form.Item>
+        </Space>
+
+        <Divider orientation="left" plain>本平台信息（可选）</Divider>
+        <Space size={16} style={{ display: 'flex', flexWrap: 'wrap' }}>
+          <Form.Item name="device_gb_id" label="本平台国标编码" style={{ width: 220 }}>
+            <Input placeholder="本平台在该上级的国标编码" maxLength={20} />
+          </Form.Item>
+          <Form.Item name="device_ip" label="本平台 IP" style={{ width: 220 }}>
+            <Input placeholder="本平台对上级可见的 IP" maxLength={50} />
+          </Form.Item>
+          <Form.Item name="device_port" label="本平台端口" style={{ width: 220 }}>
+            <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="5060" />
+          </Form.Item>
+          <Form.Item name="server_id" label="媒体节点" style={{ width: 220 }}>
+            <Input placeholder="级联点播使用的 mediaServerId" maxLength={50} />
+          </Form.Item>
+        </Space>
+        <Space size={16} style={{ display: 'flex', flexWrap: 'wrap' }}>
+          <Form.Item name="manufacturer" label="制造商" style={{ width: 220 }}>
+            <Input placeholder="如：AI Camera" maxLength={100} />
+          </Form.Item>
+          <Form.Item name="model" label="型号" style={{ width: 220 }}>
+            <Input placeholder="设备型号" maxLength={100} />
+          </Form.Item>
+          <Form.Item name="secrecy" label="保密属性" style={{ width: 220 }}>
+            <InputNumber min={0} max={1} style={{ width: '100%' }} placeholder="0" />
+          </Form.Item>
+        </Space>
+        <Form.Item name="address" label="安装地址">
+          <Input placeholder="设备安装地址" maxLength={255} />
         </Form.Item>
-        <Form.Item name="enable" label="启用状态" valuePropName="checked">
-          <Switch checkedChildren="启用" unCheckedChildren="停用" />
+
+        <Divider orientation="left" plain>目录推送</Divider>
+        <Space size={24} style={{ display: 'flex', flexWrap: 'wrap' }}>
+          <Form.Item name="catalog_with_platform" label="目录含平台" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="catalog_with_group" label="目录含分组" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="catalog_with_region" label="目录含区域" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            name="auto_push_channel"
+            label="自动推送通道"
+            valuePropName="checked"
+            extra="通道变更时自动向上级推送目录"
+          >
+            <Switch />
+          </Form.Item>
+        </Space>
+        <Form.Item name="remark" label="备注">
+          <Input.TextArea rows={2} maxLength={500} showCount placeholder="请输入备注" />
         </Form.Item>
       </Form>
     )
@@ -190,6 +369,8 @@ const PlatformList: React.FC = () => {
   const [scopeKeys, setScopeKeys] = useState<string[]>([])
   const [scopeLoading, setScopeLoading] = useState(false)
   const [scopeSaving, setScopeSaving] = useState(false)
+
+  const [pushingId, setPushingId] = useState<number | null>(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -239,6 +420,31 @@ const PlatformList: React.FC = () => {
       transport: values.transport,
       enable: values.enable,
       active: values.enable,
+      // 注册与编码
+      register_way: values.register_way,
+      character_set: values.character_set,
+      expires: num(values.expires),
+      keep_timeout: num(values.keep_timeout),
+      civil_code: text(values.civil_code),
+      as_message_channel: values.as_message_channel,
+      ptz: values.ptz,
+      rtcp: values.rtcp,
+      send_stream_ip: text(values.send_stream_ip),
+      // 本平台信息
+      device_gb_id: text(values.device_gb_id),
+      device_ip: text(values.device_ip),
+      device_port: num(values.device_port),
+      server_id: text(values.server_id),
+      manufacturer: text(values.manufacturer),
+      model: text(values.model),
+      address: text(values.address),
+      secrecy: num(values.secrecy),
+      // 目录推送
+      catalog_with_platform: values.catalog_with_platform,
+      catalog_with_group: values.catalog_with_group ? 1 : 0,
+      catalog_with_region: values.catalog_with_region ? 1 : 0,
+      auto_push_channel: values.auto_push_channel,
+      remark: values.remark,
     }
     setSaving(true)
     try {
@@ -271,6 +477,20 @@ const PlatformList: React.FC = () => {
       void fetchData()
     } catch (err) {
       message.error(apiErrorMessage(err, '删除上级平台失败'))
+    }
+  }
+
+  /** 手动推送目录：调用后端按当前可见范围向上级平台发送 Catalog。 */
+  const handlePushCatalog = async (row: GbPlatformItem) => {
+    if (!row.id) return
+    setPushingId(row.id)
+    try {
+      const res = await GbPlatformController.pushGbPlatformCatalog(row.id)
+      message.success(res.message || '目录推送已提交')
+    } catch (err) {
+      message.error(apiErrorMessage(err, '推送目录失败'))
+    } finally {
+      setPushingId(null)
     }
   }
 
@@ -377,10 +597,22 @@ const PlatformList: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 330,
+      width: 430,
       fixed: 'right',
       render: (_: unknown, row) => (
-        <ActionButtons maxWidth={330}>
+        <ActionButtons maxWidth={430}>
+          {canUpdate && (
+            <Button
+              className="e2e-gb-platform-push-catalog-btn"
+              type="link"
+              size="small"
+              icon={<CloudUploadOutlined />}
+              loading={pushingId === row.id}
+              onClick={() => void handlePushCatalog(row)}
+            >
+              推送目录
+            </Button>
+          )}
           {canSetGroups && (
             <Button type="link" size="small" icon={<ApartmentOutlined />} onClick={() => void openScope(row, 'groups')}>
               推送分组
@@ -474,7 +706,7 @@ const PlatformList: React.FC = () => {
         onOk={() => void formRef.current?.submit()}
         confirmLoading={saving}
         destroyOnHidden
-        width={720}
+        width={880}
       >
         <PlatformFormContent ref={formRef} editing={editing} onSubmit={submit} />
       </Modal>

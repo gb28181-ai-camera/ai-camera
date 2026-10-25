@@ -7,7 +7,6 @@ export type CreateIotDeviceAccountReq = Definition & {
 	password?: string;
 	phone?: string;
 	role?: string;
-	share_token?: string;
 	status?: string;
 	username?: string;
 }

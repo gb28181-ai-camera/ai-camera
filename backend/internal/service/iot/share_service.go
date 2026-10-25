@@ -138,10 +138,12 @@ func (s *ShareService) DeviceQR(ctx context.Context, deviceID int64) (*response.
 		}
 		return nil, err
 	}
-	productCode := ""
-	if d.Product != nil {
-		productCode = d.Product.Code
+	// 二维码路径必须同时包含产品编码与设备编码；没有产品的设备
+	// 只能生成 `qrDevice//<code>` 这种无法被 App 识别的地址，直接拒绝。
+	if d.Product == nil || strings.TrimSpace(d.Product.Code) == "" {
+		return nil, ErrDeviceProductRequired
 	}
+	productCode := d.Product.Code
 	return &response.IotDeviceQR{
 		DeviceID:    d.ID,
 		ProductCode: productCode,

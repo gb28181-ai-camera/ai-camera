@@ -228,29 +228,45 @@ class IotDevice {
   bool get canShare => isOwner && allowShare;
 }
 
-/// 服务组内的单个服务项。
+/// 服务组内的单个服务（含该产品在该服务上的凭据）。
+///
+/// 凭据是「产品 × 服务」维度：同一服务组下不同服务的用户名/密码互不相同。
 class IotServiceItem {
-  /// 构造服务项。
+  /// 构造服务。
   const IotServiceItem({
+    this.code = '',
+    this.name = '',
     required this.protocol,
     required this.host,
     required this.port,
     required this.path,
     required this.extra,
+    this.username = '',
+    this.password = '',
   });
 
   /// 从 JSON 构造。
   factory IotServiceItem.fromJson(Map<String, dynamic> json) {
     return IotServiceItem(
+      code: defStr(json['code']),
+      name: defStr(json['name']),
       protocol: defStr(json['protocol']),
       host: defStr(json['host']),
       port: defInt(json['port']),
       path: defStr(json['path']),
       extra: _parseExtra(json['extra']),
+      username: defStr(json['username']),
+      password: defStr(json['password']),
     );
   }
 
-  /// 协议（MQTT / WebRTC / RTSP / SIP / WebSocket）。
+  /// 服务编码（组内唯一）。
+  final String code;
+
+  /// 服务名称。
+  final String name;
+
+  /// 协议（MQTT / WebRTC / RTSP / SIP / WebSocket / TURN）。
   final String protocol;
 
   /// 主机名或 IP。
@@ -265,13 +281,17 @@ class IotServiceItem {
   /// 扩展参数（后端存 JSON 字符串，这里统一解析成 Map）。
   final Map<String, dynamic> extra;
 
-  /// 是否为 MQTT 服务项。
+  /// 该产品在该服务上的登录用户名。
+  final String username;
+
+  /// 该产品在该服务上的登录密码。
+  final String password;
+
+  /// 是否为 MQTT 服务。
   bool get isMqtt => protocol.toLowerCase().contains('mqtt');
 }
 
-/// IOT 服务组（含凭据与服务项）。
-///
-/// 服务组凭据是**组级**的：同一产品下的设备共用一套 username/password。
+/// IOT 服务组（含服务与产品级凭据）。
 class IotServiceGroup {
   /// 构造服务组。
   const IotServiceGroup({
@@ -279,10 +299,14 @@ class IotServiceGroup {
     required this.code,
     required this.name,
     required this.type,
-    required this.username,
-    required this.password,
-    required this.items,
-  });
+    this.services = const <IotServiceItem>[],
+    // ── 兼容旧响应/旧调用方：组级凭据与 items 字段 ──
+    List<IotServiceItem> items = const <IotServiceItem>[],
+    String username = '',
+    String password = '',
+  })  : _legacyItems = items,
+        _legacyUsername = username,
+        _legacyPassword = password;
 
   /// 从 JSON 构造。
   factory IotServiceGroup.fromJson(Map<String, dynamic> json) {
@@ -291,9 +315,8 @@ class IotServiceGroup {
       code: defStr(json['code']),
       name: defStr(json['name']),
       type: defStr(json['type']),
-      username: defStr(json['username']),
-      password: defStr(json['password']),
-      items: defMapList(json['items'])
+      // 新契约字段名为 services；兼容旧响应的 items。
+      services: defMapList(json['services'] ?? json['items'])
           .map(IotServiceItem.fromJson)
           .toList(growable: false),
     );
@@ -311,16 +334,24 @@ class IotServiceGroup {
   /// 组类型 gb28181 / webrtc / aichat。
   final String type;
 
-  /// 组级用户名。
-  final String username;
+  /// 服务列表。
+  final List<IotServiceItem> services;
 
-  /// 组级密码。
-  final String password;
+  final List<IotServiceItem> _legacyItems;
+  final String _legacyUsername;
+  final String _legacyPassword;
 
-  /// 服务项。
-  final List<IotServiceItem> items;
+  /// 服务列表（兼容旧字段 items）。
+  List<IotServiceItem> get items =>
+      services.isNotEmpty ? services : _legacyItems;
 
-  /// 第一个 MQTT 服务项；没有则返回 null。
+  /// 组级用户名（仅兼容旧响应；新契约凭据在服务上）。
+  String get username => _legacyUsername;
+
+  /// 组级密码（仅兼容旧响应；新契约凭据在服务上）。
+  String get password => _legacyPassword;
+
+  /// 第一个 MQTT 服务；没有则返回 null。
   IotServiceItem? get mqttItem {
     for (final IotServiceItem item in items) {
       if (item.isMqtt) return item;
@@ -374,8 +405,8 @@ class IotTurnInfo {
 
 /// `/app/iot/devices/:id/services` 返回的鉴权信息。
 ///
-/// 结构是 `{product, groups:[{...,items:[]}], mqtt, turn}`；
-/// `groups` 里的 `password` 是组级明文凭据（App 端登录 MQTT 必需）。
+/// 结构是 `{product, groups:[{...,services:[{username,password,...}]}], mqtt, turn}`；
+/// 每个服务携带该产品在该服务上的明文凭据（App 端登录 MQTT 必需）。
 class IotCredentials {
   /// 构造鉴权信息。
   const IotCredentials({
@@ -408,7 +439,7 @@ class IotCredentials {
   /// 产品编码。
   final String productCode;
 
-  /// 服务组（含凭据与服务项）。
+  /// 服务组（含服务与产品级凭据）。
   final List<IotServiceGroup> groups;
 
   /// MQTT 连接信息；未配置时为 null。
@@ -417,7 +448,7 @@ class IotCredentials {
   /// TURN 接入点；未配置时为 null。
   final IotTurnInfo? turn;
 
-  /// 带 MQTT 服务项的服务组；没有则返回第一个服务组。
+  /// 含 MQTT 服务的服务组；没有则返回第一个服务组。
   IotServiceGroup? get mqttGroup {
     for (final IotServiceGroup group in groups) {
       if (group.mqttItem != null) return group;
@@ -832,10 +863,10 @@ class IotAppController {
     return RIotDevice()..fromJson(response.data);
   }
 
-  /// 查询设备可用的服务组（含组级凭据与服务项）。
+  /// 查询设备可用的服务组（含服务与产品级凭据）。
   ///
-  /// 返回的 `password` 是**明文组凭据** —— 设备已通过 JWT 绑定到当前用户，
-  /// 服务组凭据是设备接入所必需的；这与 OTA 设备端接口的口径一致。
+  /// 每个服务上的 `password` 是**产品级明文凭据** —— 设备已通过 JWT 绑定到当前用户，
+  /// 产品服务凭据是设备接入所必需的；这与 OTA 设备端接口的口径一致。
   static Future<RIotServices> services(
     int id, [
     Map<String, dynamic>? headers,

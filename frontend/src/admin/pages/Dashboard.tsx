@@ -1,18 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Card, Col, Row, Spin, Statistic } from 'antd'
+import { Alert, Button, Card, Col, Row, Space, Spin, Statistic, Tag } from 'antd'
 import {
   AlertOutlined,
   CheckCircleOutlined,
   CloudServerOutlined,
   DashboardOutlined,
   DisconnectOutlined,
+  ReloadOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
+import { useNavigate } from 'react-router-dom'
 import { StatsController } from '../api/generated/StatsController'
 import type { DashboardData } from '../api/generated/StatsController'
+import { GbMediaServerController } from '../api/generated/GbMediaServerController'
+import { GbOpsController } from '../api/generated/GbOpsController'
+import type { GbMediaServerItem } from '../api/generated/definitions/GbMediaServerItem'
+import type { GbMediaStreamListResp } from '../api/generated/definitions/GbMediaStreamListResp'
 import PageContainer from '../components/PageContainer'
 import EmptyState from '../components/EmptyState'
+import { useAuthStore } from '../store/authStore'
 
 /* ── 图表配色 ──────────────────────────────────────────────────────────
    分类色板按固定顺序取用（不循环）；单序列图表只用 slot 1。
@@ -171,8 +179,19 @@ function ChartCard({
 
 /** 首页看板：`GET /web/stats/dashboard` */
 export default function Dashboard() {
+  const navigate = useNavigate()
+  const permCodes = useAuthStore((s) => s.permCodes)
+  // 无媒体节点流会话权限时隐藏该卡片，避免无权限账号触发 403
+  const canViewStreams = permCodes.includes('gb:media-server:streams')
+
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
+
+  /* ── 有流通道（默认媒体节点的当前流会话） ── */
+  const [streamServer, setStreamServer] = useState<GbMediaServerItem | null>(null)
+  const [streamData, setStreamData] = useState<GbMediaStreamListResp | null>(null)
+  const [streamLoading, setStreamLoading] = useState(false)
+  const [streamError, setStreamError] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -191,6 +210,43 @@ export default function Dashboard() {
   useEffect(() => {
     void load()
   }, [load])
+
+  /** 汇总默认媒体节点（无默认时取第一个在线节点）的当前流会话 */
+  const loadStreams = useCallback(async () => {
+    setStreamLoading(true)
+    try {
+      const servers = await GbMediaServerController.listGbMediaServers()
+      const list = servers.data ?? []
+      const preferred = list.find((item) => item.default_server)
+        ?? list.find((item) => item.online)
+        ?? list[0]
+      if (!preferred?.id) {
+        setStreamServer(null)
+        setStreamData(null)
+        setStreamError('')
+        return
+      }
+      setStreamServer(preferred)
+      // 节点明确离线时不请求流会话，避免 409 触发全局错误提示
+      if (preferred.online === false) {
+        setStreamData(null)
+        setStreamError('默认媒体节点离线，暂无流会话')
+        return
+      }
+      const res = await GbOpsController.listGbMediaServerStreams(preferred.id)
+      setStreamData(res.data ?? null)
+      setStreamError('')
+    } catch {
+      setStreamError('获取有流通道失败（媒体节点可能不可达）')
+      setStreamData(null)
+    } finally {
+      setStreamLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (canViewStreams) void loadStreams()
+  }, [canViewStreams, loadStreams])
 
   const deviceStat = data?.device_stat
   const riskTypePairs = useMemo(() => toPairs(data?.risk_type_stats), [data])
@@ -316,6 +372,92 @@ export default function Dashboard() {
           </Col>
         </Row>
       </Card>
+
+      {/* 有流通道：默认媒体节点的当前流会话（前 5 条） */}
+      {canViewStreams ? (
+      <Card
+        className="e2e-dashboard-streams-card"
+        size="small"
+        title="有流通道"
+        style={{ marginTop: 12 }}
+        extra={
+          <Space size={4}>
+            <Button
+              type="link"
+              size="small"
+              icon={<ReloadOutlined />}
+              loading={streamLoading}
+              onClick={() => void loadStreams()}
+            >
+              刷新
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              disabled={!streamServer?.id}
+              onClick={() => {
+                const id = streamServer?.id
+                navigate(id ? `/gb/ops/media-server?streamServerId=${id}` : '/gb/ops/media-server')
+              }}
+            >
+              查看全部
+            </Button>
+          </Space>
+        }
+      >
+        {streamError ? (
+          <Alert type="warning" showIcon message={streamError} style={{ marginBottom: 12 }} />
+        ) : null}
+        <Spin spinning={streamLoading}>
+          <Row gutter={16}>
+            <Col xs={24} sm={8}>
+              <Statistic
+                title="当前流数量"
+                value={streamData?.total ?? streamData?.items?.length ?? 0}
+                suffix="路"
+                prefix={<VideoCameraOutlined style={{ color: SERIES_COLORS[0] }} />}
+              />
+              <div style={{ color: TEXT_SECONDARY, marginTop: 4, fontSize: 12 }}>
+                节点：{streamServer?.name || '未配置默认节点'}
+              </div>
+            </Col>
+            <Col xs={24} sm={16}>
+              {(streamData?.items?.length ?? 0) === 0 ? (
+                <EmptyState description="当前没有流会话" />
+              ) : (
+                <div>
+                  {(streamData?.items ?? []).slice(0, 5).map((item) => (
+                    <div
+                      key={`${item.app ?? ''}-${item.stream ?? ''}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        padding: '4px 0',
+                        borderBottom: '1px solid #f0f0f0',
+                      }}
+                    >
+                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontFamily: 'Consolas, Monaco, monospace' }}>
+                          {item.app || '-'}/{item.stream || '-'}
+                        </span>
+                        <Tag style={{ marginLeft: 8 }}>{item.schema || '-'}</Tag>
+                        {item.codec ? <Tag>{item.codec}</Tag> : null}
+                      </span>
+                      <span style={{ color: TEXT_SECONDARY, flex: '0 0 auto', fontSize: 12 }}>
+                        {item.width && item.height ? `${item.width}×${item.height}` : '-'}
+                        {' · '}观看 {item.reader_count ?? 0}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Col>
+          </Row>
+        </Spin>
+      </Card>
+      ) : null}
 
       {/* 分析图表 */}
       <Row gutter={[12, 12]}>

@@ -100,7 +100,7 @@ func (h *GbPtzHandler) ListPresets(c *gin.Context) {
 // AddPreset 设置预置位
 //
 // @Summary      设置预置位
-// @Description  PTZCmd 0x81；preset_id 取值 1-255。name 本期仅前端展示，设备侧名称以设备为准
+// @Description  PTZCmd 0x81；preset_id 取值 1-255。name 会持久化到 ac_gb_ptz_preset 并在预置位列表返回
 // @Tags         GbPtz
 // @Accept       json
 // @Produce      json
@@ -122,7 +122,180 @@ func (h *GbPtzHandler) AddPreset(c *gin.Context) {
 		utils.BadRequest(c, "参数错误: "+err.Error())
 		return
 	}
-	if err := h.svc.AddPreset(c.Request.Context(), channelID, req.PresetID); err != nil {
+	if err := h.svc.AddPreset(c.Request.Context(), channelID, req.PresetID, req.Name); err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbChannelNotFound, gbsvc.ErrGbDeviceNotFound)
+		return
+	}
+	utils.Success(c, nil)
+}
+
+// RenamePreset 重命名预置位
+//
+// @Summary      重命名预置位
+// @Description  仅更新平台侧名称（ac_gb_ptz_preset），不下发设备指令；无需设备在线
+// @Tags         GbPtz
+// @Accept       json
+// @Produce      json
+// @Param        channelId  path      int                     true  "通道ID"
+// @Param        presetId   path      int                     true  "预置位编号"
+// @Param        body       body      request.GbPresetRenameReq true  "新名称"
+// @Success      200  {object}  response.BaseResponse
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/gb/ptz/{channelId}/presets/{presetId} [put]
+// @ID           renameGbPtzPreset
+func (h *GbPtzHandler) RenamePreset(c *gin.Context) {
+	channelID, ok := gbChannelIDParam(c)
+	if !ok {
+		return
+	}
+	presetID, ok := gbPresetIDParam(c)
+	if !ok {
+		return
+	}
+	var req request.GbPresetRenameReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	if err := h.svc.RenamePreset(c.Request.Context(), channelID, presetID, req.Name); err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbChannelNotFound)
+		return
+	}
+	utils.Success(c, nil)
+}
+
+// AddCruisePoint 加入巡航点
+//
+// @Summary      加入巡航点
+// @Description  PTZCmd 0x84；group_id=巡航组号 1-255，preset_id=预置位号 1-255。设备需先设置该预置位
+// @Tags         GbPtz
+// @Accept       json
+// @Produce      json
+// @Param        channelId  path      int                      true  "通道ID"
+// @Param        body       body      request.GbCruisePointReq true  "巡航点"
+// @Success      200  {object}  response.BaseResponse
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Failure      503  {object}  response.BaseResponse
+// @Router       /web/gb/ptz/{channelId}/cruise-points [post]
+// @ID           addGbPtzCruisePoint
+func (h *GbPtzHandler) AddCruisePoint(c *gin.Context) {
+	channelID, ok := gbChannelIDParam(c)
+	if !ok {
+		return
+	}
+	var req request.GbCruisePointReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	if err := h.svc.AddCruisePoint(c.Request.Context(), channelID, req.GroupID, req.PresetID); err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbChannelNotFound, gbsvc.ErrGbDeviceNotFound)
+		return
+	}
+	utils.Success(c, nil)
+}
+
+// SetCruisePoint 设置巡航参数
+//
+// @Summary      设置巡航速度/停留时间
+// @Description  PTZCmd 0x86 设置速度、0x87 设置停留时间；speed 与 stay_time 至少传一个（1-4095）
+// @Tags         GbPtz
+// @Accept       json
+// @Produce      json
+// @Param        channelId  path      int                         true  "通道ID"
+// @Param        body       body      request.GbCruisePointSetReq true  "巡航参数"
+// @Success      200  {object}  response.BaseResponse
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Failure      503  {object}  response.BaseResponse
+// @Router       /web/gb/ptz/{channelId}/cruise-points [put]
+// @ID           setGbPtzCruisePoint
+func (h *GbPtzHandler) SetCruisePoint(c *gin.Context) {
+	channelID, ok := gbChannelIDParam(c)
+	if !ok {
+		return
+	}
+	var req request.GbCruisePointSetReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	if err := h.svc.SetCruisePoint(c.Request.Context(), channelID, req.GroupID, req.Speed, req.StayTime); err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbChannelNotFound, gbsvc.ErrGbDeviceNotFound)
+		return
+	}
+	utils.Success(c, nil)
+}
+
+// DeleteCruisePoint 删除巡航点
+//
+// @Summary      删除巡航点
+// @Description  PTZCmd 0x85；group_id=巡航组号，preset_id=预置位号（传 0 删除整条巡航）
+// @Tags         GbPtz
+// @Accept       json
+// @Produce      json
+// @Param        channelId  path      int  true   "通道ID"
+// @Param        group_id   query     int  true   "巡航组号 1-255"
+// @Param        preset_id  query     int  false  "预置位号 0-255（0=删除整条巡航）" default(0)
+// @Success      200  {object}  response.BaseResponse
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Failure      503  {object}  response.BaseResponse
+// @Router       /web/gb/ptz/{channelId}/cruise-points [delete]
+// @ID           deleteGbPtzCruisePoint
+func (h *GbPtzHandler) DeleteCruisePoint(c *gin.Context) {
+	channelID, ok := gbChannelIDParam(c)
+	if !ok {
+		return
+	}
+	groupID, err := strconv.Atoi(c.Query("group_id"))
+	if err != nil || groupID < 1 || groupID > 255 {
+		utils.BadRequest(c, "无效的巡航组号（1-255）")
+		return
+	}
+	presetID := 0
+	if v := c.Query("preset_id"); v != "" {
+		presetID, err = strconv.Atoi(v)
+		if err != nil || presetID < 0 || presetID > 255 {
+			utils.BadRequest(c, "无效的预置位编号（0-255）")
+			return
+		}
+	}
+	if err := h.svc.DeleteCruisePoint(c.Request.Context(), channelID, groupID, presetID); err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbChannelNotFound, gbsvc.ErrGbDeviceNotFound)
+		return
+	}
+	utils.Success(c, nil)
+}
+
+// SetScanBounds 设置扫描边界
+//
+// @Summary      设置扫描边界/速度
+// @Description  PTZCmd 0x89 数据2=1 左边界 / 2 右边界（把当前位置记为边界，不带角度值），0x8A 设置速度 1-4095。设置后用 POST /ptz/{channelId}/scan 启动
+// @Tags         GbPtz
+// @Accept       json
+// @Produce      json
+// @Param        channelId  path      int                      true  "通道ID"
+// @Param        body       body      request.GbScanBoundsReq  true  "扫描参数"
+// @Success      200  {object}  response.BaseResponse
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Failure      503  {object}  response.BaseResponse
+// @Router       /web/gb/ptz/{channelId}/scan/bounds [put]
+// @ID           setGbPtzScanBounds
+func (h *GbPtzHandler) SetScanBounds(c *gin.Context) {
+	channelID, ok := gbChannelIDParam(c)
+	if !ok {
+		return
+	}
+	var req request.GbScanBoundsReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	if err := h.svc.SetScanBounds(c.Request.Context(), channelID, &req); err != nil {
 		respondGbErr(c, err, gbsvc.ErrGbChannelNotFound, gbsvc.ErrGbDeviceNotFound)
 		return
 	}

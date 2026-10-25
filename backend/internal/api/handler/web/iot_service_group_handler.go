@@ -17,16 +17,12 @@ import (
 
 // IotServiceGroupHandler 服务组处理器。
 type IotServiceGroupHandler struct {
-	svc  *iotsvc.ServiceGroupService
-	cred *iotsvc.CredentialsService
+	svc *iotsvc.ServiceGroupService
 }
 
 // NewIotServiceGroupHandler 构造服务组处理器。
 func NewIotServiceGroupHandler() *IotServiceGroupHandler {
-	return &IotServiceGroupHandler{
-		svc:  iotsvc.NewServiceGroupService(),
-		cred: iotsvc.NewCredentialsService(),
-	}
+	return &IotServiceGroupHandler{svc: iotsvc.NewServiceGroupService()}
 }
 
 // Page 服务组分页列表
@@ -167,86 +163,34 @@ func (h *IotServiceGroupHandler) Delete(c *gin.Context) {
 	utils.Success(c, nil)
 }
 
-// ResetCredentials 重置服务组凭据
+// ReplaceServices 替换服务
 //
-// @Summary      重置服务组用户名与密码
-// @Description  返回一次性明文凭据，供管理员同步到设备；下次 OTA 生效
+// @Summary      整体替换服务组服务
+// @Description  按服务组类型校验协议白名单；未列出的服务会被删除；被产品引用时只读
 // @Tags         IOT
 // @Accept       json
 // @Produce      json
-// @Param        id  path      int  true  "服务组ID"
-// @Success      200  {object}  response.RIotServiceGroupCredentials
+// @Param        id    path      int                            true  "服务组ID"
+// @Param        body  body      request.ReplaceIotServicesReq  true  "服务列表"
+// @Success      200  {object}  response.RIotServiceList
 // @Failure      400  {object}  response.BaseResponse
 // @Failure      404  {object}  response.BaseResponse
-// @Router       /web/iot/service-groups/{id}/reset-credentials [post]
-// @ID           resetIotServiceGroupCredentials
-func (h *IotServiceGroupHandler) ResetCredentials(c *gin.Context) {
+// @Router       /web/iot/service-groups/{id}/services [put]
+// @ID           replaceIotServiceGroupServices
+func (h *IotServiceGroupHandler) ReplaceServices(c *gin.Context) {
 	id, ok := iotServiceGroupPathID(c)
 	if !ok {
 		return
 	}
-	resp, err := h.svc.ResetCredentials(c.Request.Context(), id)
-	if err != nil {
-		respondIotErr(c, err, iotsvc.ErrServiceGroupNotFound)
-		return
-	}
-	utils.Success(c, resp)
-}
-
-// ReplaceItems 替换服务项
-//
-// @Summary      整体替换服务组服务项
-// @Description  按服务组类型校验协议白名单；未列出的服务项会被删除
-// @Tags         IOT
-// @Accept       json
-// @Produce      json
-// @Param        id    path      int                               true  "服务组ID"
-// @Param        body  body      request.ReplaceIotServiceItemsReq  true  "服务项列表"
-// @Success      200  {object}  response.RIotServiceItemList
-// @Failure      400  {object}  response.BaseResponse
-// @Failure      404  {object}  response.BaseResponse
-// @Router       /web/iot/service-groups/{id}/items [put]
-// @ID           replaceIotServiceGroupItems
-func (h *IotServiceGroupHandler) ReplaceItems(c *gin.Context) {
-	id, ok := iotServiceGroupPathID(c)
-	if !ok {
-		return
-	}
-	var req request.ReplaceIotServiceItemsReq
+	var req request.ReplaceIotServicesReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, "参数错误: "+err.Error())
 		return
 	}
-	items, err := h.svc.ReplaceItems(c.Request.Context(), id, &req)
+	services, err := h.svc.ReplaceServices(c.Request.Context(), id, &req)
 	if err != nil {
 		respondIotErr(c, err, iotsvc.ErrServiceGroupNotFound)
 		return
 	}
-	utils.Success(c, gin.H{"items": items})
-}
-
-// Credentials 服务组明文鉴权信息（复制用）
-//
-// @Summary      服务组明文鉴权信息
-// @Description  返回单个服务组的明文用户名/密码、服务项与 MQTT 连接地址；仅本接口返回明文
-// @Tags         IOT
-// @Accept       json
-// @Produce      json
-// @Param        id  path      int  true  "服务组ID"
-// @Success      200  {object}  response.RIotGroupCredentials
-// @Failure      400  {object}  response.BaseResponse
-// @Failure      404  {object}  response.BaseResponse
-// @Router       /web/iot/service-groups/{id}/credentials [get]
-// @ID           getIotServiceGroupCredentials
-func (h *IotServiceGroupHandler) Credentials(c *gin.Context) {
-	id, ok := iotServiceGroupPathID(c)
-	if !ok {
-		return
-	}
-	resp, err := h.cred.GroupCredentials(c.Request.Context(), id)
-	if err != nil {
-		respondIotErr(c, err, iotsvc.ErrServiceGroupNotFound)
-		return
-	}
-	utils.Success(c, resp)
+	utils.Success(c, gin.H{"services": services})
 }

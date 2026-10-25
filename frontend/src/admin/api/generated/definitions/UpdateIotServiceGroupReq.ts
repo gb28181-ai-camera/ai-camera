@@ -7,6 +7,5 @@ export type UpdateIotServiceGroupReq = Definition & {
 	code?: string;
 	description?: string;
 	name?: string;
-	password?: string;
 	type?: string;
 }

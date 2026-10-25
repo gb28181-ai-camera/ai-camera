@@ -94,15 +94,15 @@ func (r *IotProductRepo) UpdateShareQR(ctx context.Context, id int64, content st
 
 // ListServiceGroups 查询产品已绑定的服务组。
 //
-// 用显式 JOIN 而不是 Preload：ac_iot_product_service 是纯关联表，
+// 用显式 JOIN 而不是 Preload：ac_iot_product_service_group 是纯关联表，
 // 需要按服务组的 sequence 排序，JOIN 一次取回比两次查询更直接。
 func (r *IotProductRepo) ListServiceGroups(ctx context.Context, productID int64) ([]model.IotServiceGroup, error) {
 	var items []model.IotServiceGroup
 	err := bootstrap.DB().WithContext(ctx).
 		Table("ac_iot_service_group AS sg").
 		Select("sg.*").
-		Joins("JOIN ac_iot_product_service AS ps ON ps.service_group_id = sg.id").
-		Where("ps.product_id = ? AND ps.deleted_at IS NULL AND sg.deleted_at IS NULL", productID).
+		Joins("JOIN ac_iot_product_service_group AS psg ON psg.service_group_id = sg.id").
+		Where("psg.product_id = ? AND psg.deleted_at IS NULL AND sg.deleted_at IS NULL", productID).
 		Order("sg.id ASC").
 		Find(&items).Error
 	if err != nil {
@@ -113,26 +113,26 @@ func (r *IotProductRepo) ListServiceGroups(ctx context.Context, productID int64)
 
 // ReplaceServiceGroups 整体替换产品绑定的服务组。
 //
-// 采用**硬删除**后重建：ac_iot_product_service 上有 (product_id, service_group_id)
+// 采用**硬删除**后重建：关联表上有 (product_id, service_group_id)
 // 唯一索引，软删除的行仍会占用索引，导致解绑后无法再次绑定同一服务组。
 func (r *IotProductRepo) ReplaceServiceGroups(ctx context.Context, productID int64, groupIDs []int64) error {
 	return bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().
 			Where("product_id = ?", productID).
-			Delete(&model.IotProductService{}).Error; err != nil {
+			Delete(&model.IotProductServiceGroup{}).Error; err != nil {
 			return err
 		}
 		if len(groupIDs) == 0 {
 			return nil
 		}
-		rows := make([]model.IotProductService, 0, len(groupIDs))
+		rows := make([]model.IotProductServiceGroup, 0, len(groupIDs))
 		seen := make(map[int64]struct{}, len(groupIDs))
 		for _, gid := range groupIDs {
 			if _, ok := seen[gid]; ok {
 				continue // 请求里重复的 ID 去重，避免撞唯一索引
 			}
 			seen[gid] = struct{}{}
-			rows = append(rows, model.IotProductService{ProductID: productID, ServiceGroupID: gid})
+			rows = append(rows, model.IotProductServiceGroup{ProductID: productID, ServiceGroupID: gid})
 		}
 		return tx.Create(&rows).Error
 	})
@@ -155,8 +155,34 @@ func (r *IotProductRepo) CountDevices(ctx context.Context, productID int64) (int
 func (r *IotProductRepo) CountByGroup(ctx context.Context, groupID int64) (int64, error) {
 	var cnt int64
 	err := bootstrap.DB().WithContext(ctx).
-		Model(&model.IotProductService{}).
+		Model(&model.IotProductServiceGroup{}).
+		Joins("JOIN ac_iot_product p ON p.id = ac_iot_product_service_group.product_id AND p.deleted_at IS NULL").
 		Where("service_group_id = ?", groupID).
 		Count(&cnt).Error
 	return cnt, err
+}
+
+// ReferenceCountsByGroup 批量统计每个服务组被多少个产品引用。
+//
+// 服务组列表需要展示「是否已被产品引用」以决定能否编辑；
+// 一次聚合查询替代逐行 Count，避免列表 N+1。
+func (r *IotProductRepo) ReferenceCountsByGroup(ctx context.Context) (map[int64]int64, error) {
+	var rows []struct {
+		ServiceGroupID int64
+		Cnt            int64
+	}
+	err := bootstrap.DB().WithContext(ctx).
+		Model(&model.IotProductServiceGroup{}).
+		Joins("JOIN ac_iot_product p ON p.id = ac_iot_product_service_group.product_id AND p.deleted_at IS NULL").
+		Select("service_group_id, COUNT(*) AS cnt").
+		Group("service_group_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]int64, len(rows))
+	for _, row := range rows {
+		out[row.ServiceGroupID] = row.Cnt
+	}
+	return out, nil
 }

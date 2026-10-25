@@ -97,8 +97,8 @@ type RGbSnapshot struct {
 
 // GbPresetItem 云台预置位。
 //
-// 本期平台侧不落库：列表来自本进程缓存（AddPreset/DeletePreset 维护）。
-// 设备侧的真实预置位以设备为准，重启后端后缓存为空。
+// 名称来自 ac_gb_ptz_preset（DB 优先，进程缓存兜底）。预置位的**位置**
+// 仍以设备为准；本表只保存平台侧可读名称，因此设备重置后列表不会消失。
 type GbPresetItem struct {
 	PresetID int    `json:"preset_id" example:"1"`
 	Name     string `json:"name" example:"大门"`

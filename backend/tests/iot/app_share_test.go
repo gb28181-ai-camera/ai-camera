@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
+	"github.com/boticz/ai-camera-backend/internal/dto/response"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/internal/repository"
 	svciot "github.com/boticz/ai-camera-backend/internal/service/iot"
@@ -19,31 +20,32 @@ import (
 // IOT v0.3.1：复制鉴权信息 / 分享令牌 / App 认领与绑定 / ICE
 // ════════════════════════════════════════════════════════════════
 
-// setupProductWithMQTT 创建产品 + webrtc 服务组（MQTT/WebRTC 服务项）并绑定。
-func setupProductWithMQTT(t *testing.T, ctx context.Context) (*model.IotProduct, *model.IotServiceGroup, *model.IotServiceItem) {
+// setupProductWithMQTT 创建产品 + webrtc 服务组（MQTT/WebRTC 服务）并绑定。
+func setupProductWithMQTT(t *testing.T, ctx context.Context) (*model.IotProduct, *model.IotServiceGroup, *model.IotService) {
 	t.Helper()
 	p := mustProduct(t, ctx, uniq("CRED_P"))
 	g := mustGroup(t, ctx, uniq("CRED_G"), model.IotServiceGroupWebRTC)
-	if _, err := svciot.NewProductService().BindServiceGroups(ctx, p.ID, []int64{g.ID}); err != nil {
-		t.Fatalf("绑定服务组失败: %v", err)
-	}
-	items, err := svciot.NewServiceGroupService().ReplaceItems(ctx, g.ID, &request.ReplaceIotServiceItemsReq{
-		Items: []request.IotServiceItemReq{
-			{Protocol: model.IotProtocolMQTT, Host: "mqtt.example.com", Port: 1883},
-			{Protocol: model.IotProtocolWebRTC, Host: "rtc.example.com", Port: 443},
+	// 先配置服务再绑定：被产品引用后服务组进入只读状态。
+	services, err := svciot.NewServiceGroupService().ReplaceServices(ctx, g.ID, &request.ReplaceIotServicesReq{
+		Services: []request.IotServiceReq{
+			{Code: "mqtt", Name: "MQTT", Protocol: model.IotProtocolMQTT, Host: "mqtt.example.com", Port: 1883},
+			{Code: "webrtc", Name: "WebRTC", Protocol: model.IotProtocolWebRTC, Host: "rtc.example.com", Port: 443},
 		},
 	})
 	if err != nil {
-		t.Fatalf("替换服务项失败: %v", err)
+		t.Fatalf("替换服务失败: %v", err)
 	}
-	var mqtt *model.IotServiceItem
-	for i := range items {
-		if items[i].Protocol == model.IotProtocolMQTT {
-			mqtt = &items[i]
+	if _, err := svciot.NewProductService().BindServiceGroups(ctx, p.ID, []int64{g.ID}); err != nil {
+		t.Fatalf("绑定服务组失败: %v", err)
+	}
+	var mqtt *model.IotService
+	for i := range services {
+		if services[i].Protocol == model.IotProtocolMQTT {
+			mqtt = &services[i]
 		}
 	}
 	if mqtt == nil {
-		t.Fatal("未创建 MQTT 服务项")
+		t.Fatal("未创建 MQTT 服务")
 	}
 	return p, g, mqtt
 }
@@ -56,7 +58,14 @@ func TestCredentialsPlaintextAndMaskBoundary(t *testing.T) {
 		t.Setenv("TURN_REALM", "camera-test")
 
 		p, g, mqtt := setupProductWithMQTT(t, ctx)
-		raw := rawGroup(t, tx, g.ID) // 库中明文
+		rows, err := repository.NewIotProductServiceRepo().ListByProduct(ctx, p.ID)
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("产品服务凭据数量 = %d, 期望 2", len(rows))
+		}
+		rawByService := make(map[int64]model.IotProductService, len(rows))
+		for _, row := range rows {
+			rawByService[row.ServiceID] = row
+		}
 
 		cred := svciot.NewCredentialsService()
 		got, err := cred.ProductCredentials(ctx, p.ID)
@@ -70,17 +79,27 @@ func TestCredentialsPlaintextAndMaskBoundary(t *testing.T) {
 			t.Fatalf("服务组数量 = %d, 期望 1", len(got.Groups))
 		}
 		gr := got.Groups[0]
-		if gr.Code != g.Code || gr.Username != g.Username {
+		if gr.Code != g.Code {
 			t.Errorf("服务组标识异常: %+v", gr)
 		}
-		if gr.Password != raw.Password {
-			t.Errorf("应为明文密码；got %q, want %q", gr.Password, raw.Password)
+		if len(gr.Services) != 2 {
+			t.Errorf("服务数量 = %d, 期望 2", len(gr.Services))
 		}
-		if gr.Password == "****" || gr.Password == "" {
-			t.Errorf("明文接口不应返回脱敏/空密码: %q", gr.Password)
+		raw := rawByService[mqtt.ID]
+		var credMqtt *response.IotCredentialsService
+		for i := range gr.Services {
+			if gr.Services[i].Protocol == model.IotProtocolMQTT {
+				credMqtt = &gr.Services[i]
+			}
 		}
-		if len(gr.Items) != 2 {
-			t.Errorf("服务项数量 = %d, 期望 2", len(gr.Items))
+		if credMqtt == nil {
+			t.Fatal("凭据响应缺少 MQTT 服务")
+		}
+		if credMqtt.Username != raw.Username || credMqtt.Password != raw.Password {
+			t.Errorf("应为产品×服务的明文凭据: %+v", credMqtt)
+		}
+		if credMqtt.Password == "****" || credMqtt.Password == "" {
+			t.Errorf("明文接口不应返回脱敏/空密码: %q", credMqtt.Password)
 		}
 		if got.MQTT == nil || got.MQTT.URL != "mqtt://mqtt.example.com:1883" {
 			t.Errorf("MQTT 连接信息异常: %+v", got.MQTT)
@@ -92,35 +111,18 @@ func TestCredentialsPlaintextAndMaskBoundary(t *testing.T) {
 			t.Errorf("TURN 接入信息异常: %+v", got.Turn)
 		}
 
-		// 单服务组接口同样是明文
-		single, err := cred.GroupCredentials(ctx, g.ID)
-		if err != nil {
-			t.Fatalf("服务组鉴权信息失败: %v", err)
-		}
-		if single.Group.Password != raw.Password {
-			t.Errorf("单服务组应返回明文密码")
-		}
-		if single.MQTT == nil || single.MQTT.TopicPrefix != "iot/"+g.Code {
-			t.Errorf("单服务组 MQTT 信息异常: %+v", single.MQTT)
-		}
-		if len(single.Group.Items) != 2 || mqtt.Protocol != model.IotProtocolMQTT {
-			t.Errorf("单服务组服务项异常")
-		}
-
 		// 边界：普通读接口仍必须脱敏
-		list, err := svciot.NewProductService().GetServiceGroups(ctx, p.ID)
+		list, err := svciot.NewProductService().GetProductServices(ctx, p.ID)
 		if err != nil {
-			t.Fatalf("产品服务组列表失败: %v", err)
+			t.Fatalf("产品服务凭据列表失败: %v", err)
 		}
-		if len(list) != 1 || list[0].Password != "****" {
-			t.Errorf("普通读接口必须脱敏，got %+v", list)
+		if len(list) != 2 {
+			t.Fatalf("普通读接口服务数量 = %d, 期望 2", len(list))
 		}
-		detail, err := svciot.NewServiceGroupService().Get(ctx, g.ID)
-		if err != nil {
-			t.Fatalf("服务组详情失败: %v", err)
-		}
-		if detail.Password != "****" {
-			t.Errorf("服务组详情必须脱敏，got %q", detail.Password)
+		for _, row := range list {
+			if row.Password != "****" {
+				t.Errorf("普通读接口必须脱敏，got %+v", row)
+			}
 		}
 	})
 }
@@ -389,8 +391,13 @@ func TestAppDeviceListAndScope(t *testing.T) {
 		if err != nil {
 			t.Fatalf("服务组凭据失败: %v", err)
 		}
-		if len(svc.Groups) != 1 || svc.Groups[0].Password == "****" || svc.Groups[0].Password == "" {
-			t.Errorf("App 服务组应返回明文: %+v", svc.Groups)
+		if len(svc.Groups) != 1 || len(svc.Groups[0].Services) != 2 {
+			t.Fatalf("App 服务组/服务数量异常: %+v", svc.Groups)
+		}
+		for _, item := range svc.Groups[0].Services {
+			if item.Username == "" || item.Password == "****" || item.Password == "" {
+				t.Errorf("App 服务应返回明文凭据: %+v", item)
+			}
 		}
 		if svc.MQTT == nil || svc.MQTT.TopicPrefix != "iot/"+g.Code {
 			t.Errorf("App MQTT 信息异常: %+v", svc.MQTT)
@@ -466,6 +473,12 @@ func TestIceServers(t *testing.T) {
 func TestDeviceQRAndDetail(t *testing.T) {
 	testutil.WithTx(t, func(ctx context.Context, tx *gorm.DB) {
 		ctx = testCtx()
+		// 未绑定产品：不允许拼出空产品编码的二维码。
+		unbound := mustDevice(t, ctx, uniq("QR_NO_P"))
+		if _, err := svciot.NewShareService().DeviceQR(ctx, unbound.ID); !errors.Is(err, svciot.ErrDeviceProductRequired) {
+			t.Errorf("未绑定产品应返回 ErrDeviceProductRequired，got %v", err)
+		}
+
 		p := mustProduct(t, ctx, uniq("QR_P"))
 		dev := mustDevice(t, ctx, uniq("QR_D"))
 		if err := svciot.NewDeviceService().SetProduct(ctx, dev.ID, &p.ID); err != nil {
@@ -505,6 +518,21 @@ func TestBindBySIP(t *testing.T) {
 		p := mustProduct(t, ctx, uniq("SIP_P"))
 		other := mustProduct(t, ctx, uniq("SIP_OTHER"))
 		dev := mustDevice(t, ctx, uniq("SIP_D"))
+		// 独立国标设备：没有产品编码/设备编码，不参与产品绑定。
+		independent := mustDevice(t, ctx, uniq("SIP_INDEP"))
+		if got, err := svciot.NewDeviceService().BindBySIP(ctx, "", "", "34020000001320000009"); got != nil || err != nil {
+			t.Errorf("无产品/设备编码时不应绑定: got=%v err=%v", got, err)
+		}
+		if got, err := svciot.NewDeviceService().BindBySIP(ctx, p.Code, "", "34020000001320000009"); got != nil || err != nil {
+			t.Errorf("只带产品编码时不应绑定: got=%v err=%v", got, err)
+		}
+		var untouched model.Device
+		if err := tx.First(&untouched, independent.ID).Error; err != nil {
+			t.Fatalf("读取独立设备失败: %v", err)
+		}
+		if untouched.GbDeviceID != "" || untouched.ProductID != nil {
+			t.Errorf("独立设备不应被改动: gb=%q product=%v", untouched.GbDeviceID, untouched.ProductID)
+		}
 		svc := svciot.NewDeviceService()
 		if err := svc.SetProduct(ctx, dev.ID, &p.ID); err != nil {
 			t.Fatalf("设置产品失败: %v", err)

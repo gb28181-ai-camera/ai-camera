@@ -6,7 +6,9 @@ import request from '../request';
 import type { BaseResponse } from './definitions/BaseResponse';
 import type { GbChannelGroupReq } from './definitions/GbChannelGroupReq';
 import type { GbChannelRegionReq } from './definitions/GbChannelRegionReq';
+import type { GbRecordControlReq } from './definitions/GbRecordControlReq';
 import type { RGbChannel } from './definitions/RGbChannel';
+import type { RGbMediaInfo } from './definitions/RGbMediaInfo';
 import type { ROptionList } from './definitions/ROptionList';
 import type { RPageGbChannel } from './definitions/RPageGbChannel';
 import type { UpdateGbChannelReq } from './definitions/UpdateGbChannelReq';
@@ -19,6 +21,27 @@ export class GbChannelController {
       return request(`/web/gb/channels?page=${page ?? "" }&page_size=${page_size ?? "" }&keyword=${keyword ?? "" }&device_id=${device_id ?? "" }&region_id=${region_id ?? "" }&group_id=${group_id ?? "" }&status=${status ?? "" }&gb_device_id=${gb_device_id ?? "" }`, {
         baseURL: import.meta.env.VITE_API_BASE,
         method: "GET",
+        headers,
+      });
+    }
+
+    static getGbChannelMediaInfoPath: string = "/web/gb/channels/{channelId}/media-info";
+    /// 通道媒体信息
+    static async getGbChannelMediaInfo(channelId: string | number, headers?: any): Promise<RGbMediaInfo> {
+      return request(`/web/gb/channels/${channelId}/media-info`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "GET",
+        headers,
+      });
+    }
+
+    static recordControlGbChannelPath: string = "/web/gb/channels/{channelId}/record-control";
+    /// 通道录像控制
+    static async recordControlGbChannel(channelId: string | number, data: GbRecordControlReq, headers?: any): Promise<BaseResponse> {
+      return request(`/web/gb/channels/${channelId}/record-control`, {
+        baseURL: import.meta.env.VITE_API_BASE,
+        method: "POST",
+        data: JSON.stringify(data),
         headers,
       });
     }

@@ -10,6 +10,7 @@ export type GbDeviceItem = Definition & {
 	device_code?: string;
 	/** ── 国标接入 13 列 ── */
 	gb_device_id?: string;
+	gb_version?: string;
 	id?: number;
 	latitude?: string;
 	local_ip?: string;

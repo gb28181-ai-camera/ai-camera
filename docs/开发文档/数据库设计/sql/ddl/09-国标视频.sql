@@ -53,9 +53,12 @@ ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS channel_count     BIGINT       DE
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS local_ip          VARCHAR(50);
 ALTER TABLE ac_device ADD COLUMN IF NOT EXISTS sdp_ip            VARCHAR(50);
 
--- gb_device_id 为 NULL 的设备（未配置国标接入）不参与 SIP，故用部分唯一索引
+-- gb_device_id 为空/NULL 的设备（未配置国标接入）不参与 SIP，故用部分唯一索引。
+-- ★ 必须同时排除空串：Go 的 string 字段未赋值时写入 '' 而非 NULL，
+--   只排除 NULL 会让第二台非国标设备在 '' 上撞唯一键（v0.4.0 修正）。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ac_device_gb_device_id
-    ON ac_device (gb_device_id) WHERE gb_device_id IS NOT NULL AND deleted_at IS NULL;
+    ON ac_device (gb_device_id)
+    WHERE gb_device_id IS NOT NULL AND gb_device_id <> '' AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_ac_device_register_status ON ac_device (register_status);
 CREATE INDEX IF NOT EXISTS idx_ac_device_sip_expires     ON ac_device (sip_expires);
 
@@ -901,6 +904,102 @@ CREATE INDEX IF NOT EXISTS idx_ac_gb_platform_region_deleted_at ON ac_gb_platfor
 COMMENT ON TABLE  ac_gb_platform_region             IS '级联平台与区域的可见范围映射';
 COMMENT ON COLUMN ac_gb_platform_region.platform_id IS '上级平台 ID（ac_gb_platform）';
 COMMENT ON COLUMN ac_gb_platform_region.region_id   IS '区域 ID（ac_region）';
+
+
+-- ----------------------------------------------------------------
+-- ac_gb_ptz_preset 预置位名称（v0.4.0）
+-- 设备侧只保存编号；平台侧名称必须持久化，否则重启后丢失。
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ac_gb_ptz_preset (
+    id                BIGSERIAL     PRIMARY KEY,
+    deleted_at        TIMESTAMPTZ,
+    created_by        VARCHAR(50),
+    created_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    updated_by        VARCHAR(50),
+    updated_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    channel_id        BIGINT        NOT NULL,
+    preset_id         INTEGER       NOT NULL,
+    name              VARCHAR(255)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_ac_gb_ptz_preset_channel_preset
+    ON ac_gb_ptz_preset (channel_id, preset_id);
+CREATE INDEX IF NOT EXISTS idx_ac_gb_ptz_preset_channel_id ON ac_gb_ptz_preset (channel_id);
+CREATE INDEX IF NOT EXISTS idx_ac_gb_ptz_preset_deleted_at ON ac_gb_ptz_preset (deleted_at);
+
+COMMENT ON TABLE  ac_gb_ptz_preset            IS '国标云台预置位名称（平台侧持久化）';
+COMMENT ON COLUMN ac_gb_ptz_preset.channel_id IS '归属通道 ID（ac_gb_channel）';
+COMMENT ON COLUMN ac_gb_ptz_preset.preset_id  IS '预置位编号 1-255';
+COMMENT ON COLUMN ac_gb_ptz_preset.name       IS '平台侧预置位名称';
+
+
+-- ----------------------------------------------------------------
+-- ac_gb_record_merge_task 云端录像合并任务（v0.4.0）
+-- 合并依赖 ffmpeg；只记录任务状态与产物，不存二进制。
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ac_gb_record_merge_task (
+    id                BIGSERIAL     PRIMARY KEY,
+    deleted_at        TIMESTAMPTZ,
+    created_by        VARCHAR(50),
+    created_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    updated_by        VARCHAR(50),
+    updated_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    name              VARCHAR(255),
+    status            VARCHAR(20)   DEFAULT 'pending',
+    record_ids        TEXT,
+    record_count      INTEGER       DEFAULT 0,
+    file_name         VARCHAR(255),
+    file_path         VARCHAR(1000),
+    file_size         BIGINT,
+    duration_sec      BIGINT,
+    error_msg         VARCHAR(2000),
+    started_dt        TIMESTAMPTZ,
+    finished_dt       TIMESTAMPTZ,
+    dept_id           BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ac_gb_record_merge_task_status     ON ac_gb_record_merge_task (status);
+CREATE INDEX IF NOT EXISTS idx_ac_gb_record_merge_task_dept_id    ON ac_gb_record_merge_task (dept_id);
+CREATE INDEX IF NOT EXISTS idx_ac_gb_record_merge_task_deleted_at ON ac_gb_record_merge_task (deleted_at);
+
+COMMENT ON TABLE  ac_gb_record_merge_task              IS '云端录像多段合并任务';
+COMMENT ON COLUMN ac_gb_record_merge_task.status       IS 'pending/running/success/failed';
+COMMENT ON COLUMN ac_gb_record_merge_task.record_ids   IS 'ac_gb_cloud_record.id 列表（逗号分隔，顺序即合并顺序）';
+COMMENT ON COLUMN ac_gb_record_merge_task.error_msg    IS '失败原因（如未安装 ffmpeg）';
+
+
+-- ----------------------------------------------------------------
+-- ac_gb_share_token 通道免登录分享令牌（v0.4.0）
+-- 只存 SHA-256，明文仅在创建响应返回一次；匿名播放不复用用户 JWT。
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ac_gb_share_token (
+    id                BIGSERIAL     PRIMARY KEY,
+    deleted_at        TIMESTAMPTZ,
+    created_by        VARCHAR(50),
+    created_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    updated_by        VARCHAR(50),
+    updated_dt        TIMESTAMPTZ   DEFAULT CURRENT_TIMESTAMP,
+    channel_id        BIGINT        NOT NULL,
+    token_hash        VARCHAR(64)   NOT NULL,
+    token_prefix      VARCHAR(16),
+    expires_dt        TIMESTAMPTZ   NOT NULL,
+    revoked           BOOLEAN       DEFAULT FALSE,
+    revoked_dt        TIMESTAMPTZ,
+    use_count         BIGINT        DEFAULT 0,
+    last_used_dt      TIMESTAMPTZ,
+    remark            VARCHAR(500),
+    dept_id           BIGINT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ac_gb_share_token_hash       ON ac_gb_share_token (token_hash);
+CREATE INDEX IF NOT EXISTS idx_ac_gb_share_token_channel_id        ON ac_gb_share_token (channel_id);
+CREATE INDEX IF NOT EXISTS idx_ac_gb_share_token_expires_dt        ON ac_gb_share_token (expires_dt);
+CREATE INDEX IF NOT EXISTS idx_ac_gb_share_token_deleted_at        ON ac_gb_share_token (deleted_at);
+
+COMMENT ON TABLE  ac_gb_share_token               IS '国标通道免登录分享令牌';
+COMMENT ON COLUMN ac_gb_share_token.token_hash    IS '令牌 SHA-256（明文不落库）';
+COMMENT ON COLUMN ac_gb_share_token.token_prefix  IS '明文前缀，仅用于管理页辨认';
+COMMENT ON COLUMN ac_gb_share_token.expires_dt    IS '过期时间；默认 1 小时，最长 24 小时';
 
 
 -- ================================================================

@@ -123,6 +123,33 @@ func (r *IotDeviceRepo) SetActivatedAt(ctx context.Context, id int64, t time.Tim
 		Update("activated_at", t).Error
 }
 
+// UnbindAll 解绑设备：删除全部设备账号并清空激活时间。
+//
+// 账号使用**硬删除**：软删除的行仍会占用 username / share_token 唯一索引，
+// 使解绑后无法重新使用同一登录名或生成同值令牌。解绑本身有
+// ac_iot_device_event 留痕，不依赖账号行的软删除状态做审计。
+// 只清理「平台用户 ↔ 设备」的绑定关系；product_id / device_secret /
+// gb_device_id 属于设备接入配置与国标身份，保持不变。
+func (r *IotDeviceRepo) UnbindAll(ctx context.Context, deviceID int64) (int64, error) {
+	var removed int64
+	err := bootstrap.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Unscoped().
+			Where("device_id = ?", deviceID).
+			Delete(&model.IotDeviceAccount{})
+		if res.Error != nil {
+			return res.Error
+		}
+		removed = res.RowsAffected
+		return tx.Model(&model.Device{}).
+			Where("id = ?", deviceID).
+			Update("activated_at", nil).Error
+	})
+	if err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
 // ── 设备账号 ──────────────────────────────────────────────────
 
 // ListAccounts 查询设备账号（按角色、ID 排序，owner 在前）。

@@ -39,6 +39,7 @@ type GbDeviceItem struct {
 
 	// ── 国标接入 13 列 ──
 	GbDeviceID     string     `json:"gb_device_id" example:"34020000001320000001"`
+	GbVersion      string     `json:"gb_version" example:"2016"`
 	SipPassword    string     `json:"sip_password" example:"****"`
 	SipRealm       string     `json:"sip_realm"`
 	SipTransport   string     `json:"sip_transport" example:"UDP"`
@@ -146,6 +147,16 @@ type GbChannelItem struct {
 	RecordPlanID    *int64 `json:"record_plan_id"`
 	RecordPlanName  string `json:"record_plan_name"`
 	EnableBroadcast *bool  `json:"enable_broadcast"`
+
+	// 设备参数扩展（WVP 对齐）。
+	Longitude       float64 `json:"longitude" example:"116.397128"`
+	Latitude        float64 `json:"latitude" example:"39.916527"`
+	DirectionType   int64   `json:"direction_type" example:"1"`
+	PositionType    int64   `json:"position_type" example:"1"`
+	RoomType        int64   `json:"room_type" example:"1"`
+	UseType         int64   `json:"use_type" example:"1"`
+	SupplyLightType int64   `json:"supply_light_type" example:"1"`
+	Secrecy         int64   `json:"secrecy" example:"0"`
 
 	IsCustom  *bool      `json:"is_custom"`
 	SyncDT    *time.Time `json:"sync_dt"`
@@ -400,4 +411,95 @@ type GbSipLogStatsResp struct {
 type RGbSipLogStats struct {
 	BaseResponse
 	Data GbSipLogStatsResp `json:"data"`
+}
+
+// ── 设备控制与运维（WVP 对齐）─────────────────────────────────
+
+// GbDeviceSyncStatusResp 目录同步进度。
+//
+// 状态是**进程内**的：同步由信令进程接收目录分片并重组，HTTP 进程通过
+// device 包的进程级状态读取。分进程部署或进程重启后可能读不到（返回 idle），
+// 这是明确接受的语义，不是缺陷。
+type GbDeviceSyncStatusResp struct {
+	DeviceID   int64  `json:"device_id"`
+	GbDeviceID string `json:"gb_device_id" example:"34020000001320000001"`
+	// Status idle（无同步记录）/ syncing / success / failed。
+	Status  string `json:"status" example:"syncing"`
+	Total   int    `json:"total" example:"32"`
+	Current int    `json:"current" example:"20"`
+	Error   string `json:"error"`
+	// StartedDT 本轮同步开始时间（收到第一个分片时）。
+	StartedDT *time.Time `json:"started_dt"`
+	// FinishedDT 本轮同步结束时间（成功落库或失败/超时）。
+	FinishedDT *time.Time `json:"finished_dt"`
+}
+
+// RGbDeviceSyncStatus 目录同步进度响应。
+type RGbDeviceSyncStatus struct {
+	BaseResponse
+	Data GbDeviceSyncStatusResp `json:"data"`
+}
+
+// GbTimeStatisticsPoint 相邻两条心跳/注册报文的时间点。
+type GbTimeStatisticsPoint struct {
+	// Time 本条报文时间（本地时区，yyyy-MM-dd HH:mm:ss）。
+	Time string `json:"time" example:"2026-10-21 10:00:00"`
+	// IntervalSeconds 与上一条报文的间隔（秒）；首条为空序列时不产生点。
+	IntervalSeconds int64 `json:"interval_seconds" example:"60"`
+}
+
+// GbTimeStatisticsResp 心跳/注册间隔统计。
+//
+// 相邻间隔由 ac_gb_sip_log 实时聚合，不建新表：日志表保留 30 天，
+// 最长可回溯的时间窗与排障需求一致。
+type GbTimeStatisticsResp struct {
+	// Type keepalive | register。
+	Type string `json:"type" example:"keepalive"`
+	// Count 参与统计的间隔数（报文数 - 1）。
+	Count  int                     `json:"count" example:"49"`
+	Points []GbTimeStatisticsPoint `json:"points"`
+	// AverageSeconds / MaxSeconds / MinSeconds 间隔统计（秒）。
+	AverageSeconds float64 `json:"average_seconds" example:"60.2"`
+	MaxSeconds     int64   `json:"max_seconds" example:"65"`
+	MinSeconds     int64   `json:"min_seconds" example:"58"`
+}
+
+// RGbTimeStatistics 心跳/注册间隔统计响应。
+type RGbTimeStatistics struct {
+	BaseResponse
+	Data GbTimeStatisticsResp `json:"data"`
+}
+
+// GbMediaInfoResp 通道当前在线流的媒体信息。
+//
+// 没有在线播放会话时接口返回 404（ErrGbNoActiveStream），而不是空对象：
+// 「从未点播」与「点播了但 ZLM 查不到」对前端是两种不同的提示。
+type GbMediaInfoResp struct {
+	App    string `json:"app" example:"rtp"`
+	Stream string `json:"stream" example:"3B9ACA01"`
+	Schema string `json:"schema" example:"rtsp"`
+
+	// 视频轨信息（无视频轨时为空/0）。
+	Codec  string  `json:"codec" example:"H264"`
+	Width  int     `json:"width" example:"1920"`
+	Height int     `json:"height" example:"1080"`
+	FPS    float64 `json:"fps" example:"25"`
+	// Bitrate 码率（bit/s）= ZLM bytesSpeed × 8。
+	Bitrate int64 `json:"bitrate" example:"2048000"`
+	// AudioCodec / HasAudio 音频轨信息。
+	AudioCodec string `json:"audio_codec" example:"AAC"`
+	HasAudio   bool   `json:"has_audio" example:"true"`
+
+	ReaderCount      int   `json:"reader_count" example:"1"`
+	TotalReaderCount int   `json:"total_reader_count" example:"1"`
+	AliveSecond      int64 `json:"alive_second" example:"120"`
+
+	MediaServerID string `json:"media_server_id" example:"zlm-1"`
+	StreamID      string `json:"stream_id"` // 播放会话 Call-ID
+}
+
+// RGbMediaInfo 通道媒体信息响应。
+type RGbMediaInfo struct {
+	BaseResponse
+	Data GbMediaInfoResp `json:"data"`
 }

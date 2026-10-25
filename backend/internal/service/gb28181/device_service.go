@@ -3,12 +3,16 @@ package gb28181
 import (
 	"context"
 	"errors"
+	"net"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/boticz/ai-camera-backend/internal/bootstrap"
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
 	"github.com/boticz/ai-camera-backend/internal/dto/response"
 	"github.com/boticz/ai-camera-backend/internal/gb28181/control"
+	"github.com/boticz/ai-camera-backend/internal/gb28181/device"
 	"github.com/boticz/ai-camera-backend/internal/model"
 	"github.com/boticz/ai-camera-backend/internal/repository"
 	"github.com/boticz/ai-camera-backend/pkg/utils"
@@ -23,6 +27,7 @@ import (
 type GbDeviceService struct {
 	repo        *repository.GbDeviceRepo
 	channelRepo *repository.GbChannelRepo
+	extraRepo   *repository.GbDeviceExtraRepo
 }
 
 // NewGbDeviceService 构造国标设备服务。
@@ -30,6 +35,7 @@ func NewGbDeviceService() *GbDeviceService {
 	return &GbDeviceService{
 		repo:        repository.NewGbDeviceRepo(),
 		channelRepo: repository.NewGbChannelRepo(),
+		extraRepo:   repository.NewGbDeviceExtraRepo(),
 	}
 }
 
@@ -79,7 +85,9 @@ func (s *GbDeviceService) Page(ctx context.Context, req *request.PageGbDeviceReq
 
 	items := make([]response.GbDeviceItem, 0, len(devices))
 	for _, d := range devices {
-		items = append(items, toGbDeviceItem(d))
+		item := toGbDeviceItem(d)
+		applyGbDeviceExtra(&item, d)
+		items = append(items, item)
 	}
 
 	return &response.PageGbDeviceResp{
@@ -109,6 +117,7 @@ func (s *GbDeviceService) Get(ctx context.Context, id int64) (*response.GbDevice
 	}
 
 	item := toGbDeviceItem(*d)
+	applyGbDeviceExtra(&item, *d)
 	return &response.GbDeviceDetailResp{
 		GbDeviceItem:    item,
 		MediaServerName: mediaServerName,
@@ -128,7 +137,9 @@ func (s *GbDeviceService) SyncChannel(ctx context.Context, id int64) error {
 	if ctl == nil {
 		return ErrSipServiceUnavailable
 	}
+	device.MarkCatalogSyncRequested(d.GbDeviceID, time.Now())
 	if err := ctl.QueryCatalog(ctx, d); err != nil {
+		device.MarkCatalogSyncFailed(d.GbDeviceID, "下发 Catalog 查询失败："+err.Error(), time.Now())
 		return err
 	}
 	utils.Info("国标设备目录同步已下发 gb_device_id=" + d.GbDeviceID)
@@ -257,6 +268,206 @@ func (s *GbDeviceService) Delete(ctx context.Context, id int64) error {
 		}
 		return tx.Delete(&model.Device{}, id).Error
 	})
+}
+
+// Update 编辑国标设备档案（WVP 对齐的设备编辑）。
+//
+// 增量语义：DTO 字段为指针，非 nil 才覆盖；字符串指针允许传空串清空
+// （name 除外，设备名称不允许为空）。所有格式校验都在写库前完成，
+// 避免「部分字段写进去、另一个字段报错」的半更新状态。
+func (s *GbDeviceService) Update(ctx context.Context, id int64, req *request.UpdateGbDeviceReq) error {
+	if req == nil {
+		return errors.New("参数不能为空")
+	}
+	d, err := s.extraRepo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrGbDeviceNotFound
+		}
+		return err
+	}
+
+	fields := map[string]interface{}{}
+
+	if req.Name != nil {
+		name := trim(*req.Name)
+		if name == "" {
+			return errors.New("设备名称不能为空")
+		}
+		if len([]rune(name)) > 255 {
+			return errors.New("设备名称不能超过 255 个字符")
+		}
+		fields["name"] = name
+	}
+	if req.Location != nil {
+		fields["location"] = trim(*req.Location)
+	}
+	if req.Remark != nil {
+		fields["remark"] = trim(*req.Remark)
+	}
+	if req.Active != nil {
+		fields["active"] = *req.Active
+	}
+
+	if req.GbDeviceID != nil {
+		gbID := trim(*req.GbDeviceID)
+		if !isGBDeviceID(gbID) {
+			return errors.New("国标编码必须是 20 位数字")
+		}
+		if gbID != trim(d.GbDeviceID) {
+			// 在线设备换编码会立即失去 SIP 身份，设备侧仍在用旧编码注册，
+			// 表现为「改完就离线且再也注册不上」。先下线再改才是安全路径。
+			if strings.EqualFold(trim(d.Status), model.DeviceStatusOnline) {
+				return errors.New("设备在线时不能修改国标编码，请先让设备离线")
+			}
+			exists, err := s.repo.ExistsByGbDeviceID(ctx, gbID, id)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return ErrGbDeviceIDExists
+			}
+			fields["gb_device_id"] = gbID
+		}
+	}
+
+	if req.SipRealm != nil {
+		realm := trim(*req.SipRealm)
+		if !isDigits(realm) || len(realm) != 10 {
+			return errors.New("SIP 域必须是 10 位数字")
+		}
+		fields["sip_realm"] = realm
+	}
+
+	if req.SipTransport != nil {
+		v := strings.ToUpper(trim(*req.SipTransport))
+		switch v {
+		case model.GbSipTransportUDP, model.GbSipTransportTCP:
+			fields["sip_transport"] = v
+		default:
+			return errors.New("SIP 传输方式仅支持 UDP 或 TCP")
+		}
+	}
+
+	if req.StreamMode != nil {
+		v := strings.ToUpper(trim(*req.StreamMode))
+		switch v {
+		case model.GbStreamModeUDP, model.GbStreamModeTCPPassive, model.GbStreamModeTCPActive:
+			fields["stream_mode"] = v
+		default:
+			return errors.New("媒体传输方式仅支持 UDP / TCP-PASSIVE / TCP-ACTIVE")
+		}
+	}
+
+	if req.Charset != nil {
+		v, ok := normalizeGbCharset(*req.Charset)
+		if !ok {
+			return errors.New("字符集仅支持 GB2312 或 UTF-8")
+		}
+		fields["charset"] = v
+	}
+
+	if req.GbVersion != nil {
+		v := trim(*req.GbVersion)
+		switch v {
+		case model.GbVersion2016, model.GbVersion2022:
+			fields["gb_version"] = v
+		default:
+			return errors.New("国标协议版本仅支持 2016 或 2022")
+		}
+	}
+
+	if req.MediaServerID != nil {
+		v := trim(*req.MediaServerID)
+		if v == "" || strings.EqualFold(v, "auto") {
+			v = "auto"
+		} else {
+			ok, err := s.extraRepo.MediaServerExists(ctx, v)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return ErrGbMediaServerNotFound
+			}
+		}
+		fields["media_server_id"] = v
+	}
+
+	if req.LocalIP != nil {
+		v := trim(*req.LocalIP)
+		if v != "" && net.ParseIP(v) == nil {
+			return errors.New("local_ip 不是合法的 IP 地址")
+		}
+		fields["local_ip"] = v
+	}
+	if req.SDPIP != nil {
+		v := trim(*req.SDPIP)
+		if v != "" && net.ParseIP(v) == nil {
+			return errors.New("sdp_ip 不是合法的 IP 地址")
+		}
+		fields["sdp_ip"] = v
+	}
+
+	if req.Latitude != nil {
+		v := trim(*req.Latitude)
+		if v != "" {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil || f < -90 || f > 90 {
+				return errors.New("纬度必须在 -90 到 90 之间")
+			}
+		}
+		fields["latitude"] = v
+	}
+	if req.Longitude != nil {
+		v := trim(*req.Longitude)
+		if v != "" {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil || f < -180 || f > 180 {
+				return errors.New("经度必须在 -180 到 180 之间")
+			}
+		}
+		fields["longitude"] = v
+	}
+
+	return s.extraRepo.UpdateProfile(ctx, id, fields)
+}
+
+// applyGbDeviceExtra 补充 common.go 的 toGbDeviceItem 未覆盖的字段。
+//
+// common.go 由其他模块维护，不便在这里改映射；扩展字段在此统一补齐，
+// 避免列表与详情的字段集不一致。
+func applyGbDeviceExtra(item *response.GbDeviceItem, d model.Device) {
+	item.GbVersion = d.GbVersion
+}
+
+// isGBDeviceID 判断是否为 20 位数字国标编码。
+func isGBDeviceID(s string) bool {
+	return len(s) == 20 && isDigits(s)
+}
+
+// isDigits 判断字符串是否全为 ASCII 数字。
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeGbCharset 归一化字符集取值。
+func normalizeGbCharset(s string) (string, bool) {
+	switch strings.ToUpper(strings.ReplaceAll(trim(s), "_", "-")) {
+	case "UTF-8", "UTF8":
+		return model.GbCharsetUTF8, true
+	case "GB2312", "GB-2312", "GBK", "GB18030":
+		return model.GbCharsetGB2312, true
+	default:
+		return "", false
+	}
 }
 
 // ── 内部工具 ──────────────────────────────────────────────────

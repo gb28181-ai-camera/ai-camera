@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"strconv"
+
 	"github.com/boticz/ai-camera-backend/internal/dto/request"
 	"github.com/boticz/ai-camera-backend/internal/dto/response"
 
@@ -248,6 +250,64 @@ func (h *IotProductHandler) BindServiceGroups(c *gin.Context) {
 		return
 	}
 	utils.Success(c, items)
+}
+
+// GetServices 产品下的服务凭据（密码脱敏）
+//
+// @Summary      产品服务凭据列表
+// @Description  返回产品在各服务上的用户名与脱敏密码；明文请使用 credentials 接口
+// @Tags         IOT
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "产品ID"
+// @Success      200  {object}  response.RIotProductServiceList
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/iot/products/{id}/services [get]
+// @ID           getIotProductServices
+func (h *IotProductHandler) GetServices(c *gin.Context) {
+	id, ok := iotProductPathID(c)
+	if !ok {
+		return
+	}
+	rows, err := h.svc.GetProductServices(c.Request.Context(), id)
+	if err != nil {
+		respondIotErr(c, err, iotsvc.ErrProductNotFound)
+		return
+	}
+	utils.Success(c, response.IotProductServiceListResp{Services: rows})
+}
+
+// ResetServiceCredentials 轮换产品在某个服务上的凭据
+//
+// @Summary      重置产品服务凭据
+// @Description  轮换指定产品×服务的用户名与密码，返回一次性明文；TURN 服务会同步 coturn
+// @Tags         IOT
+// @Accept       json
+// @Produce      json
+// @Param        id         path  int  true  "产品ID"
+// @Param        serviceId  path  int  true  "服务ID"
+// @Success      200  {object}  response.RIotProductServiceCredentials
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/iot/products/{id}/services/{serviceId}/reset-credentials [post]
+// @ID           resetIotProductServiceCredentials
+func (h *IotProductHandler) ResetServiceCredentials(c *gin.Context) {
+	id, ok := iotProductPathID(c)
+	if !ok {
+		return
+	}
+	serviceID, err := strconv.ParseInt(c.Param("serviceId"), 10, 64)
+	if err != nil || serviceID <= 0 {
+		utils.BadRequest(c, "无效的服务ID")
+		return
+	}
+	resp, err := h.svc.ResetServiceCredentials(c.Request.Context(), id, serviceID)
+	if err != nil {
+		respondIotErr(c, err, iotsvc.ErrProductNotFound, iotsvc.ErrProductServiceNotFound)
+		return
+	}
+	utils.Success(c, resp)
 }
 
 // Credentials 产品明文鉴权信息（复制用）

@@ -2,18 +2,24 @@ import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
 } from 'react'
 import {
-  Button, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Switch, Table, Tag, message,
+  Alert, Button, Col, Divider, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Spin, Switch,
+  Table, Tag, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   DeleteOutlined, EditOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import axios from 'axios'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
+import LivePlayerTabs from '../../components/LivePlayerTabs'
 import { GbStreamProxyController } from '../../api/generated/GbStreamProxyController'
+import { GbMediaServerController } from '../../api/generated/GbMediaServerController'
+import { GbOpsController } from '../../api/generated/GbOpsController'
 import type { GbStreamProxyItem } from '../../api/generated/definitions/GbStreamProxyItem'
+import type { GbStreamPlayResp } from '../../api/generated/definitions/GbStreamPlayResp'
 import type { CreateGbStreamProxyReq } from '../../api/generated/definitions/CreateGbStreamProxyReq'
 import type { UpdateGbStreamProxyReq } from '../../api/generated/definitions/UpdateGbStreamProxyReq'
 import { useAuthStore } from '../../store/authStore'
@@ -25,15 +31,53 @@ interface StreamProxyFormValues {
   stream: string
   src_url: string
   timeout_ms?: number | null
+  type?: string
+  ffmpeg_cmd_key?: string
+  rtsp_type?: number
+  media_server_id?: string
   enable_audio?: boolean
   enable_mp4?: boolean
   enable?: boolean
+  enable_disable_none_reader?: boolean
+  enable_remove_none_reader?: boolean
   remark?: string
 }
+
+/** RTSP 拉流方式（模型注释：0 TCP / 1 UDP） */
+const RTSP_TYPE_OPTIONS = [
+  { label: 'TCP', value: 0 },
+  { label: 'UDP', value: 1 },
+]
 
 /** InputNumber 空值统一转 undefined */
 function num(v?: number | null): number | undefined {
   return typeof v === 'number' && !Number.isNaN(v) ? v : undefined
+}
+
+/** 空串统一转 undefined，避免把空值写进请求体 */
+function text(v?: string | null): string | undefined {
+  const trimmed = v?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+/** 请求失败提示：优先展示后端 message（409 会说明流未启动 / 节点不可达） */
+function apiErrorMessage(err: unknown, fallback: string): string {
+  if (axios.isAxiosError<{ message?: string }>(err)) {
+    return err.response?.data?.message || err.message || fallback
+  }
+  return err instanceof Error ? err.message : fallback
+}
+
+/** 播放地址：只透出实际返回的协议地址，空值不占用引擎位 */
+function buildPlayUrls(
+  info: GbStreamPlayResp | null,
+): Partial<Record<'webrtc' | 'flv' | 'hls', string>> | undefined {
+  if (!info) return undefined
+  const urls: Partial<Record<'webrtc' | 'flv' | 'hls', string>> = {}
+  if (info.webrtc) urls.webrtc = info.webrtc
+  if (info.flv) urls.flv = info.flv
+  if (info.hls) urls.hls = info.hls
+  return urls
 }
 
 /** 时间格式化 */
@@ -49,9 +93,13 @@ function buildStreamProxyInitialValues(editing: GbStreamProxyItem | null): Parti
     return {
       app: 'proxy',
       timeout_ms: 10000,
+      type: 'default',
+      rtsp_type: 0,
       enable_audio: true,
       enable_mp4: false,
       enable: true,
+      enable_disable_none_reader: false,
+      enable_remove_none_reader: false,
     }
   }
   return {
@@ -60,9 +108,15 @@ function buildStreamProxyInitialValues(editing: GbStreamProxyItem | null): Parti
     stream: editing.stream ?? '',
     src_url: editing.src_url ?? '',
     timeout_ms: editing.timeout_ms ?? 10000,
+    type: editing.type ?? 'default',
+    ffmpeg_cmd_key: editing.ffmpeg_cmd_key ?? '',
+    rtsp_type: editing.rtsp_type ?? 0,
+    media_server_id: editing.media_server_id ?? undefined,
     enable_audio: editing.enable_audio ?? true,
     enable_mp4: editing.enable_mp4 ?? false,
     enable: editing.enable ?? true,
+    enable_disable_none_reader: editing.enable_disable_none_reader ?? false,
+    enable_remove_none_reader: editing.enable_remove_none_reader ?? false,
     remark: editing.remark ?? '',
   }
 }
@@ -71,8 +125,14 @@ interface StreamProxyFormHandle {
   submit: () => Promise<void>
 }
 
+interface MediaServerOption {
+  label: string
+  value: string
+}
+
 interface StreamProxyFormContentProps {
   editing: GbStreamProxyItem | null
+  mediaServerOptions: MediaServerOption[]
   onSubmit: (values: StreamProxyFormValues) => Promise<void>
 }
 
@@ -81,7 +141,7 @@ interface StreamProxyFormContentProps {
  * 避免父组件在 Form 渲染前调用 useForm 方法产生告警。
  */
 const StreamProxyFormContent = forwardRef<StreamProxyFormHandle, StreamProxyFormContentProps>(
-  function StreamProxyFormContent({ editing, onSubmit }, ref) {
+  function StreamProxyFormContent({ editing, mediaServerOptions, onSubmit }, ref) {
     const [form] = Form.useForm<StreamProxyFormValues>()
 
     useImperativeHandle(ref, () => ({
@@ -137,6 +197,37 @@ const StreamProxyFormContent = forwardRef<StreamProxyFormHandle, StreamProxyForm
               <Input placeholder="如：rtsp://10.0.0.9:554/live" maxLength={500} />
             </Form.Item>
           </Col>
+          <Col span={24}>
+            <Divider orientation="left" plain style={{ margin: '0 0 12px' }}>
+              拉流与转封装
+            </Divider>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="type" label="代理类型" extra="留空或 default 表示标准拉流代理">
+              <Input placeholder="default" maxLength={20} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="media_server_id" label="媒体节点" extra="留空由后端自动分配（默认节点）">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="自动分配"
+                options={mediaServerOptions}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="rtsp_type" label="RTSP 拉流方式">
+              <Select options={RTSP_TYPE_OPTIONS} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="ffmpeg_cmd_key" label="ffmpeg 命令模板键" extra="源需要 ffmpeg 转封装时填写，留空使用默认模板">
+              <Input placeholder="留空使用默认模板" maxLength={50} />
+            </Form.Item>
+          </Col>
           <Col span={8}>
             <Form.Item name="enable" label="启用" valuePropName="checked">
               <Switch />
@@ -149,6 +240,26 @@ const StreamProxyFormContent = forwardRef<StreamProxyFormHandle, StreamProxyForm
           </Col>
           <Col span={8}>
             <Form.Item name="enable_mp4" label="录制 MP4" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item
+              name="enable_disable_none_reader"
+              label="无人观看时禁用"
+              valuePropName="checked"
+              extra="ZLM 无观看者时暂停拉流"
+            >
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item
+              name="enable_remove_none_reader"
+              label="无人观看时移除"
+              valuePropName="checked"
+              extra="ZLM 无观看者时释放该流"
+            >
               <Switch />
             </Form.Item>
           </Col>
@@ -174,6 +285,24 @@ export default function StreamProxyList() {
   const canDelete = permCodes.includes('gb:stream-proxy:delete')
   const canStart = permCodes.includes('gb:stream-proxy:start')
   const canStop = permCodes.includes('gb:stream-proxy:stop')
+  const canPlay = permCodes.includes('gb:stream-proxy:play')
+
+  /** 媒体节点下拉（server_id 为接口入参） */
+  const [mediaServerOptions, setMediaServerOptions] = useState<MediaServerOption[]>([])
+
+  useEffect(() => {
+    void GbMediaServerController.listGbMediaServers()
+      .then((res) => {
+        setMediaServerOptions((res.data ?? []).flatMap((item) => (
+          item.server_id
+            ? [{ label: `${item.name || item.server_id}（${item.server_id}）`, value: item.server_id }]
+            : []
+        )))
+      })
+      .catch(() => {
+        /* 拦截器已提示；下拉为空时仍可留空自动分配 */
+      })
+  }, [])
 
   const [data, setData] = useState<GbStreamProxyItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -188,6 +317,13 @@ export default function StreamProxyList() {
   const [saving, setSaving] = useState(false)
   const [actingId, setActingId] = useState<number | null>(null)
   const formRef = useRef<StreamProxyFormHandle>(null)
+
+  /* ── 内嵌播放 ── */
+  const [playOpen, setPlayOpen] = useState(false)
+  const [playLoading, setPlayLoading] = useState(false)
+  const [playInfo, setPlayInfo] = useState<GbStreamPlayResp | null>(null)
+  const [playError, setPlayError] = useState('')
+  const [playTitle, setPlayTitle] = useState('')
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -246,9 +382,15 @@ export default function StreamProxyList() {
       stream: values.stream.trim(),
       src_url: values.src_url.trim(),
       timeout_ms: num(values.timeout_ms),
+      type: text(values.type),
+      ffmpeg_cmd_key: text(values.ffmpeg_cmd_key),
+      rtsp_type: num(values.rtsp_type),
+      media_server_id: text(values.media_server_id),
       enable_audio: values.enable_audio,
       enable_mp4: values.enable_mp4,
       enable: values.enable,
+      enable_disable_none_reader: values.enable_disable_none_reader,
+      enable_remove_none_reader: values.enable_remove_none_reader,
       remark: values.remark,
     }
 
@@ -335,6 +477,28 @@ export default function StreamProxyList() {
     }
   }
 
+  /** 播放：流未启动 / 节点不可达时后端返回 409，弹窗内展示其后端 message */
+  const handlePlay = async (row: GbStreamProxyItem) => {
+    if (!row.id) return
+    setPlayTitle(row.name || row.stream || '拉流代理')
+    setPlayOpen(true)
+    setPlayLoading(true)
+    setPlayInfo(null)
+    setPlayError('')
+    try {
+      const res = await GbOpsController.playGbStreamProxy(String(row.id))
+      if (res.data) {
+        setPlayInfo(res.data)
+      } else {
+        setPlayError(res.message || '后端未返回播放地址')
+      }
+    } catch (err) {
+      setPlayError(apiErrorMessage(err, '获取播放地址失败（请先启动拉流代理）'))
+    } finally {
+      setPlayLoading(false)
+    }
+  }
+
   const columns: ColumnsType<GbStreamProxyItem> = [
     { title: '名称', dataIndex: 'name', width: 180, ellipsis: true, render: (v?: string) => v || '-' },
     { title: '应用名', dataIndex: 'app', width: 120, render: (v?: string) => v || '-' },
@@ -344,6 +508,14 @@ export default function StreamProxyList() {
       render: (v?: string) => (
         <span style={{ fontFamily: 'Consolas, Monaco, monospace' }} title={v}>{v || '-'}</span>
       ),
+    },
+    {
+      title: '媒体节点', dataIndex: 'media_server_id', width: 160, ellipsis: true,
+      render: (v?: string) => v || <span style={{ color: '#999' }}>自动分配</span>,
+    },
+    {
+      title: 'RTSP 方式', dataIndex: 'rtsp_type', width: 100,
+      render: (v?: number) => (v === 1 ? 'UDP' : 'TCP'),
     },
     {
       title: '启用', dataIndex: 'enable', width: 90,
@@ -358,9 +530,20 @@ export default function StreamProxyList() {
     { title: '备注', dataIndex: 'remark', width: 180, ellipsis: true, render: (v?: string) => v || '-' },
     { title: '更新时间', dataIndex: 'updated_dt', width: 170, render: (v?: string) => fmtDT(v) },
     {
-      title: '操作', key: 'action', width: 300, fixed: 'right',
+      title: '操作', key: 'action', width: 380, fixed: 'right',
       render: (_, row) => (
-        <ActionButtons maxWidth={300}>
+        <ActionButtons maxWidth={380}>
+          {canPlay && (
+            <Button
+              className="e2e-gb-stream-proxy-play-btn"
+              type="link"
+              size="small"
+              icon={<PlayCircleOutlined />}
+              onClick={() => void handlePlay(row)}
+            >
+              播放
+            </Button>
+          )}
           {canStart && !row.pulling && (
             <Button
               type="link"
@@ -459,9 +642,65 @@ export default function StreamProxyList() {
         onOk={() => void formRef.current?.submit()}
         confirmLoading={saving}
         destroyOnHidden
-        width={680}
+        width={760}
       >
-        <StreamProxyFormContent ref={formRef} editing={editing} onSubmit={handleSave} />
+        <StreamProxyFormContent
+          ref={formRef}
+          editing={editing}
+          mediaServerOptions={mediaServerOptions}
+          onSubmit={handleSave}
+        />
+      </Modal>
+
+      {/* 内嵌播放：地址来自 playGbStreamProxy，409 时展示后端 message */}
+      <Modal
+        className="e2e-gb-stream-proxy-play-modal"
+        title={`播放 - ${playTitle}`}
+        open={playOpen}
+        footer={null}
+        width={900}
+        destroyOnHidden
+        onCancel={() => {
+          setPlayOpen(false)
+          setPlayInfo(null)
+          setPlayError('')
+        }}
+      >
+        {playError ? (
+          <Alert
+            type="error"
+            showIcon
+            message="无法播放"
+            description={playError}
+            style={{ marginBottom: 8 }}
+          />
+        ) : null}
+        <div
+          style={{
+            height: 480,
+            background: '#000',
+            borderRadius: 6,
+            overflow: 'hidden',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {playLoading ? (
+            <Spin />
+          ) : playInfo ? (
+            <LivePlayerTabs
+              app={playInfo.app}
+              stream={playInfo.stream}
+              urls={buildPlayUrls(playInfo)}
+              objectFit="contain"
+              style={{ width: '100%', height: '100%' }}
+              onError={(error) => setPlayError(error.message)}
+            />
+          ) : (
+            <span style={{ color: '#8c8c8c' }}>暂无播放地址</span>
+          )}
+        </div>
       </Modal>
     </PageContainer>
   )

@@ -84,6 +84,9 @@ app/coverage/
 backend/docs/web/
 backend/docs/app/
 frontend/e2e/screenshots/
+# 云端录像合并产物与联调样例（运行时生成，不入库）
+backend/data/
+backend/gb_merge/
 
 # Python（deploy/pipecat）
 __pycache__/

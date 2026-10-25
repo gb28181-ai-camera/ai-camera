@@ -2,11 +2,13 @@ import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
 } from 'react'
 import {
-  Button, Col, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Switch, Table, Tag, Typography, message,
+  Alert, Button, Col, Descriptions, Divider, Empty, Form, Input, InputNumber, Modal, Popconfirm, Row, Select,
+  Space, Spin, Switch, Table, Tag, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  DeleteOutlined, EditOutlined, FolderOutlined, GlobalOutlined, ReloadOutlined,
+  DeleteOutlined, EditOutlined, FolderOutlined, GlobalOutlined, InfoCircleOutlined, ReloadOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons'
 import axios from 'axios'
 import PageContainer from '../../components/PageContainer'
@@ -14,12 +16,14 @@ import SearchBar from '../../components/SearchBar'
 import ActionButtons from '../../components/ActionButtons'
 import RegionSelect from '../../components/RegionSelect'
 import { GbChannelController } from '../../api/generated/GbChannelController'
+import { GbPlayController } from '../../api/generated/GbPlayController'
 import { GbGroupController } from '../../api/generated/GbGroupController'
 import { GbRecordPlanController } from '../../api/generated/GbRecordPlanController'
 import { DeviceController } from '../../api/generated/DeviceController'
 import { RegionController } from '../../api/generated/RegionController'
 import type { GbChannelItem } from '../../api/generated/definitions/GbChannelItem'
 import type { GbChannelDetailResp } from '../../api/generated/definitions/GbChannelDetailResp'
+import type { GbMediaInfoResp } from '../../api/generated/definitions/GbMediaInfoResp'
 import type { UpdateGbChannelReq } from '../../api/generated/definitions/UpdateGbChannelReq'
 import { useAuthStore } from '../../store/authStore'
 
@@ -27,6 +31,27 @@ import { useAuthStore } from '../../store/authStore'
 const CHANNEL_STATUS_OPTIONS = [
   { label: '在线', value: 'ON' },
   { label: '离线', value: 'OFF' },
+]
+
+/**
+ * 通道类型字典 —— 与后端 `model.GbChannel.ChannelType` 的列注释一致：
+ * 0 普通 / 1 球机 / 2 半球 / 3 固定枪机（GB/T 28181 目录项的 ChannelType）。
+ */
+const CHANNEL_TYPE_OPTIONS = [
+  { label: '普通', value: 0 },
+  { label: '球机', value: 1 },
+  { label: '半球', value: 2 },
+  { label: '固定枪机', value: 3 },
+]
+
+/**
+ * 云台类型字典 —— 与后端 `model.GbChannel.PtzType` 的列注释一致：
+ * 0 不支持 / 1 球机 / 2 半球（GB/T 28181 目录项的 PTZType）。
+ */
+const PTZ_TYPE_OPTIONS = [
+  { label: '不支持', value: 0 },
+  { label: '球机', value: 1 },
+  { label: '半球', value: 2 },
 ]
 
 /** 通道编辑表单值 */
@@ -47,6 +72,15 @@ interface ChannelFormValues {
   active?: boolean
   record_plan_id?: number | null
   remark?: string
+  // 设备参数扩展（WVP 对齐）
+  longitude?: number | null
+  latitude?: number | null
+  direction_type?: number | null
+  position_type?: number | null
+  room_type?: number | null
+  use_type?: number | null
+  supply_light_type?: number | null
+  secrecy?: number | null
 }
 
 /** 编辑通道的初始值（详情在打开弹窗前已拉取）。 */
@@ -69,6 +103,14 @@ function buildChannelInitialValues(editing: GbChannelDetailResp | null): Partial
     active: editing.active !== false,
     record_plan_id: editing.record_plan_id ?? null,
     remark: editing.remark ?? '',
+    longitude: editing.longitude ?? null,
+    latitude: editing.latitude ?? null,
+    direction_type: editing.direction_type ?? null,
+    position_type: editing.position_type ?? null,
+    room_type: editing.room_type ?? null,
+    use_type: editing.use_type ?? null,
+    supply_light_type: editing.supply_light_type ?? null,
+    secrecy: editing.secrecy ?? null,
   }
 }
 
@@ -148,13 +190,27 @@ const ChannelFormContent = forwardRef<ChannelFormHandle, ChannelFormContentProps
             </Form.Item>
           </Col>
           <Col span={12}>
-            <Form.Item name="channel_type" label="通道类型">
-              <InputNumber min={0} style={{ width: '100%' }} placeholder="GB/T 28181 通道类型" />
+            <Form.Item
+              name="channel_type"
+              label="摄像机类型（通道类型）"
+              tooltip="GB/T 28181 目录项 ChannelType：0 普通 / 1 球机 / 2 半球 / 3 固定枪机"
+            >
+              <Select
+                className="e2e-gb-channel-type"
+                allowClear
+                placeholder="请选择通道类型"
+                options={CHANNEL_TYPE_OPTIONS}
+              />
             </Form.Item>
           </Col>
           <Col span={12}>
             <Form.Item name="ptz_type" label="云台类型">
-              <InputNumber min={0} style={{ width: '100%' }} placeholder="GB/T 28181 云台类型" />
+              <Select
+                className="e2e-gb-channel-ptz-type"
+                allowClear
+                placeholder="请选择云台类型"
+                options={PTZ_TYPE_OPTIONS}
+              />
             </Form.Item>
           </Col>
           <Col span={12}>
@@ -169,9 +225,115 @@ const ChannelFormContent = forwardRef<ChannelFormHandle, ChannelFormContentProps
             </Form.Item>
           </Col>
           <Col span={24}>
+            <Divider orientation="left" style={{ margin: '0 0 12px' }}>位置信息</Divider>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="longitude" label="经度">
+              <InputNumber
+                className="e2e-gb-channel-longitude"
+                style={{ width: '100%' }}
+                min={-180}
+                max={180}
+                step={0.000001}
+                precision={6}
+                placeholder="例如 116.397128"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="latitude" label="纬度">
+              <InputNumber
+                className="e2e-gb-channel-latitude"
+                style={{ width: '100%' }}
+                min={-90}
+                max={90}
+                step={0.000001}
+                precision={6}
+                placeholder="例如 39.916527"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="direction_type"
+              label="监视方位"
+              tooltip="GB/T 28181 监视方位编码（后端校验 0–8）"
+            >
+              <InputNumber
+                className="e2e-gb-channel-direction-type"
+                style={{ width: '100%' }}
+                min={0}
+                max={8}
+                precision={0}
+                placeholder="0–8"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
             <Form.Item name="address" label="安装地址">
               <Input placeholder="请输入安装地址" maxLength={255} />
             </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Divider orientation="left" style={{ margin: '0 0 12px' }}>设备扩展</Divider>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="position_type" label="位置类型" tooltip="GB/T 28181 位置类型编码（≥0）">
+              <InputNumber
+                className="e2e-gb-channel-position-type"
+                style={{ width: '100%' }}
+                min={0}
+                precision={0}
+                placeholder="位置类型"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="room_type" label="房间类型" tooltip="GB/T 28181 房间类型编码（≥0）">
+              <InputNumber
+                className="e2e-gb-channel-room-type"
+                style={{ width: '100%' }}
+                min={0}
+                precision={0}
+                placeholder="房间类型"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="use_type" label="用途类型" tooltip="GB/T 28181 用途类型编码（≥0）">
+              <InputNumber
+                className="e2e-gb-channel-use-type"
+                style={{ width: '100%' }}
+                min={0}
+                precision={0}
+                placeholder="用途类型"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="supply_light_type" label="补光类型" tooltip="GB/T 28181 补光类型编码（≥0）">
+              <InputNumber
+                className="e2e-gb-channel-supply-light-type"
+                style={{ width: '100%' }}
+                min={0}
+                precision={0}
+                placeholder="补光类型"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="secrecy" label="保密属性" tooltip="GB/T 28181 保密属性编码（≥0）">
+              <InputNumber
+                className="e2e-gb-channel-secrecy"
+                style={{ width: '100%' }}
+                min={0}
+                precision={0}
+                placeholder="保密属性"
+              />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Divider orientation="left" style={{ margin: '0 0 12px' }}>其他</Divider>
           </Col>
           <Col span={8}>
             <Form.Item name="has_audio" label="含音频" valuePropName="checked">
@@ -234,6 +396,10 @@ export default function GbChannelList() {
   const canGroup = permCodes.includes('gb:channel:group')
   const canReset = permCodes.includes('gb:channel:reset')
   const canDelete = permCodes.includes('gb:channel:delete')
+  const canRecordControl = permCodes.includes('gb:channel:record-control')
+  const canMediaInfo = permCodes.includes('gb:channel:media-info')
+  /** 有实时播放权限时才有 /web/gb/play/:id/status 的 API 授权（用于无流空态预判） */
+  const canLivePlay = permCodes.includes('gb:live:play')
 
   const [data, setData] = useState<GbChannelItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -265,6 +431,18 @@ export default function GbChannelList() {
   const [groupTarget, setGroupTarget] = useState<GbChannelItem | null>(null)
   const [groupValue, setGroupValue] = useState<number | undefined>()
   const [setting, setSetting] = useState(false)
+
+  // 手动录像控制（按行 loading）
+  const [recordLoading, setRecordLoading] = useState<number | null>(null)
+
+  // 媒体信息
+  const [mediaOpen, setMediaOpen] = useState(false)
+  const [mediaTarget, setMediaTarget] = useState<GbChannelItem | null>(null)
+  const [mediaLoading, setMediaLoading] = useState(false)
+  const [mediaInfo, setMediaInfo] = useState<GbMediaInfoResp | null>(null)
+  /** 无在线流（后端 404）是正常空态，不是错误 */
+  const [mediaEmpty, setMediaEmpty] = useState(false)
+  const [mediaError, setMediaError] = useState('')
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -373,6 +551,15 @@ export default function GbChannelList() {
       parent_id: values.parent_id ?? '',
       channel_type: values.channel_type ?? undefined,
       ptz_type: values.ptz_type ?? undefined,
+      // 扩展字段：0 是合法值，仅 null/undefined 时省略（后端用指针区分「未传」与「传 0」）
+      longitude: values.longitude ?? undefined,
+      latitude: values.latitude ?? undefined,
+      direction_type: values.direction_type ?? undefined,
+      position_type: values.position_type ?? undefined,
+      room_type: values.room_type ?? undefined,
+      use_type: values.use_type ?? undefined,
+      supply_light_type: values.supply_light_type ?? undefined,
+      secrecy: values.secrecy ?? undefined,
       status: values.status ?? '',
       stream_id: values.stream_id ?? '',
       has_audio: values.has_audio,
@@ -484,6 +671,86 @@ export default function GbChannelList() {
     }
   }
 
+  /** 手动录像开始 / 停止（MANSCDP RecordCmd） */
+  const handleRecordControl = async (row: GbChannelItem, action: 'start' | 'stop') => {
+    if (!row.id) return
+    if (!canRecordControl) {
+      message.warning('当前账号没有录像控制权限')
+      return
+    }
+    setRecordLoading(row.id)
+    try {
+      const res = await GbChannelController.recordControlGbChannel(row.id, { action })
+      if (res.code === 200) {
+        message.success(action === 'start' ? '开始录像指令已下发' : '停止录像指令已下发')
+      } else {
+        message.error(res.message || '录像控制失败')
+      }
+    } catch (err) {
+      notifyError(err, '录像控制失败')
+    } finally {
+      setRecordLoading(null)
+    }
+  }
+
+  /**
+   * 媒体信息：后端在无在线流时返回 404（ErrGbNoActiveStream）。
+   * 404 属于「还没有流」的正常空态，面板显示 Empty；其他错误才提示。
+   */
+  const openMediaInfo = async (row: GbChannelItem) => {
+    if (!row.id) return
+    setMediaTarget(row)
+    setMediaInfo(null)
+    setMediaEmpty(false)
+    setMediaError('')
+    setMediaOpen(true)
+    setMediaLoading(true)
+    try {
+      // 先查播放会话：无会话时直接展示空态，避免 media-info 的 404 触发全局错误 toast。
+      // 状态接口本身失败（权限 / 网络）时不阻断媒体信息查询，继续走 media-info。
+      // 只有具备实时播放权限（同一 API 授权范围）时才做预判，避免无权限账号收到 403 toast。
+      let playing: boolean | null = null
+      if (canLivePlay) {
+        try {
+          const statusRes = await GbPlayController.getGbPlayStatus(row.id)
+          playing = Boolean(statusRes.data?.playing && statusRes.data?.stream)
+        } catch {
+          playing = null
+        }
+      }
+      if (playing === false) {
+        setMediaEmpty(true)
+        return
+      }
+      const res = await GbChannelController.getGbChannelMediaInfo(row.id)
+      if (res.data) {
+        setMediaInfo(res.data)
+      } else {
+        setMediaEmpty(true)
+      }
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setMediaEmpty(true)
+      } else {
+        notifyError(err, '获取媒体信息失败')
+        if (axios.isAxiosError<{ message?: string }>(err)) {
+          setMediaError(err.response?.data?.message || err.message || '获取媒体信息失败')
+        } else {
+          setMediaError('获取媒体信息失败')
+        }
+      }
+    } finally {
+      setMediaLoading(false)
+    }
+  }
+
+  /** 码率 bit/s → 可读文本 */
+  const formatBitrate = (value?: number): string => {
+    if (typeof value !== 'number' || value <= 0) return '-'
+    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} Mbps`
+    return `${Math.round(value / 1000)} kbps`
+  }
+
   const columns: ColumnsType<GbChannelItem> = [
     { title: '通道名称', dataIndex: 'name', width: 180, ellipsis: true, render: (v?: string) => v || '-' },
     {
@@ -504,13 +771,49 @@ export default function GbChannelList() {
     {
       title: '操作',
       key: 'action',
-      width: 360,
+      width: 460,
       fixed: 'right',
       render: (_, row) => (
-        <ActionButtons maxWidth={340}>
+        <ActionButtons maxWidth={380}>
           {canUpdate && (
             <Button type="link" size="small" icon={<EditOutlined />} onClick={() => void openEdit(row)}>
               编辑
+            </Button>
+          )}
+          {canMediaInfo && (
+            <Button
+              type="link"
+              size="small"
+              icon={<InfoCircleOutlined />}
+              className="e2e-gb-channel-media-info-btn"
+              onClick={() => void openMediaInfo(row)}
+            >
+              媒体信息
+            </Button>
+          )}
+          {canRecordControl && (
+            <Button
+              type="link"
+              size="small"
+              icon={<VideoCameraOutlined />}
+              className="e2e-gb-channel-record-start"
+              loading={recordLoading === row.id}
+              onClick={() => void handleRecordControl(row, 'start')}
+            >
+              开始录像
+            </Button>
+          )}
+          {canRecordControl && (
+            <Button
+              type="link"
+              size="small"
+              danger
+              icon={<VideoCameraOutlined />}
+              className="e2e-gb-channel-record-stop"
+              loading={recordLoading === row.id}
+              onClick={() => void handleRecordControl(row, 'stop')}
+            >
+              停止录像
             </Button>
           )}
           {canRegion && (
@@ -652,6 +955,67 @@ export default function GbChannelList() {
         <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
           清空选择表示解除分组归属。
         </Typography.Text>
+      </Modal>
+
+      {/* 媒体信息：来自 ZLM getMediaInfo；无在线流时后端 404，前端展示空态 */}
+      <Modal
+        className="e2e-gb-channel-media-modal"
+        title={`媒体信息${mediaTarget?.name ? ` - ${mediaTarget.name}` : ''}`}
+        open={mediaOpen}
+        loading={mediaLoading}
+        onCancel={() => setMediaOpen(false)}
+        footer={<Button onClick={() => setMediaOpen(false)}>关闭</Button>}
+        width={640}
+        destroyOnHidden
+      >
+        {mediaLoading ? (
+          <div style={{ padding: 32, textAlign: 'center' }}>
+            <Spin size="small" />
+          </div>
+        ) : mediaError ? (
+          <Alert type="error" showIcon message="获取媒体信息失败" description={mediaError} />
+        ) : mediaEmpty ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="当前通道没有在线流，无法获取媒体信息；请先在「实时播放」中播放该通道"
+          />
+        ) : mediaInfo ? (
+          <Descriptions
+            className="e2e-gb-channel-media-descriptions"
+            bordered
+            size="small"
+            column={2}
+            items={[
+              { key: 'codec', label: '视频编码', children: mediaInfo.codec || '-' },
+              {
+                key: 'resolution',
+                label: '分辨率',
+                children:
+                  mediaInfo.width && mediaInfo.height
+                    ? `${mediaInfo.width} × ${mediaInfo.height}`
+                    : '-',
+              },
+              { key: 'fps', label: '帧率', children: mediaInfo.fps !== undefined ? `${mediaInfo.fps} fps` : '-' },
+              { key: 'bitrate', label: '码率', children: formatBitrate(mediaInfo.bitrate) },
+              {
+                key: 'audio',
+                label: '音频',
+                children: mediaInfo.has_audio
+                  ? mediaInfo.audio_codec || '有音频轨'
+                  : '无',
+              },
+              { key: 'readers', label: '读者数', children: mediaInfo.reader_count ?? '-' },
+              {
+                key: 'alive',
+                label: '存活时长',
+                children: mediaInfo.alive_second !== undefined ? `${mediaInfo.alive_second} 秒` : '-',
+              },
+              { key: 'media_server', label: '媒体节点', children: mediaInfo.media_server_id || '-' },
+              { key: 'app', label: 'ZLM app', children: mediaInfo.app || '-' },
+              { key: 'stream', label: '流名（stream）', children: mediaInfo.stream || '-' },
+            ]}
+          />
+        ) : null}
       </Modal>
     </PageContainer>
   )

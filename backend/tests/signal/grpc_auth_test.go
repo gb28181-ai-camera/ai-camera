@@ -16,15 +16,27 @@ func TestGRPCMqttAuth(t *testing.T) {
 	testutil.WithTx(t, func(ctx context.Context, tx *gorm.DB) {
 		active := true
 		g := &model.IotServiceGroup{
-			Name: "grpc组", Code: "grpc-group", Type: model.IotServiceGroupWebRTC,
-			Username: "grpc_user", Password: "grpc_pass", Active: &active,
+			Name: "grpc组", Code: "grpc-group", Type: model.IotServiceGroupWebRTC, Active: &active,
 		}
 		if err := tx.Create(g).Error; err != nil {
 			t.Fatalf("创建服务组失败: %v", err)
 		}
-		item := &model.IotServiceItem{GroupID: g.ID, Protocol: model.IotProtocolMQTT, Host: "mqtt", Port: 1883, Active: &active}
-		if err := tx.Create(item).Error; err != nil {
-			t.Fatalf("创建服务项失败: %v", err)
+		svc := &model.IotService{
+			GroupID: g.ID, Code: "mqtt", Name: "MQTT",
+			Protocol: model.IotProtocolMQTT, Host: "mqtt", Port: 1883, Active: &active,
+		}
+		if err := tx.Create(svc).Error; err != nil {
+			t.Fatalf("创建服务失败: %v", err)
+		}
+		product := &model.IotProduct{Name: "grpc产品", Code: "grpc-product", Active: &active}
+		if err := tx.Create(product).Error; err != nil {
+			t.Fatalf("创建产品失败: %v", err)
+		}
+		if err := tx.Create(&model.IotProductService{
+			Active: &active, ProductID: product.ID, ServiceID: svc.ID,
+			Username: "grpc_user", Password: "grpc_pass",
+		}).Error; err != nil {
+			t.Fatalf("创建产品服务凭据失败: %v", err)
 		}
 
 		srv := mqttrpc.New(nil)

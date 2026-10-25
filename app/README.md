@@ -6,6 +6,8 @@ AI Camera 智能监控平台的移动端 App，供**巡检人、区域负责人�
 后端接口统一挂在 `/app` 前缀下，响应格式 `{code, message, data}`，
 鉴权使用 `Authorization: Bearer <token>`。
 
+> 当前版本: **v0.4.0** | 最后更新: 2026-10-25
+
 ---
 
 ## 技术栈
@@ -27,9 +29,9 @@ AI Camera 智能监控平台的移动端 App，供**巡检人、区域负责人�
 | 权限 | `permission_handler` **12.x** | 蓝牙、定位（Android ≤11）、相机。13.x 要求 compileSdk 37，当前工程为 36 |
 | E2E | 未引入 `patrol` | 后续版本补充 |
 
-> **注意**：`pubspec.yaml` 中虽声明了 `fluttertoast ^8.2.8`，但 `lib/` 下**无任何调用**，
-> 全仓提示统一使用 `ScaffoldMessenger` + `SnackBar`（见 `lib/utils/Extensions.dart` 的
-> `showToast` 扩展与 `lib/utils/AppNavigator.dart` 的 `AppNavigator.showToast`）。
+> **注意**：`fluttertoast` 已从依赖中移除；全仓提示统一使用 `ScaffoldMessenger` + `SnackBar`
+> （见 `lib/utils/Extensions.dart` 的 `showToast` 扩展与 `lib/utils/AppNavigator.dart`
+> 的 `AppNavigator.showToast`）。
 
 `ApiService.getHeaders()` 的返回类型为 `Map<String, dynamic>`（非 `Map<String, String>`），
 以便同时容纳 `Authorization` 字符串头与调用方传入的自定义头。
@@ -239,9 +241,11 @@ flutter analyze                               # 静态检查（要求 0 error 0 
 - `devices` 同时接受 `data: []` 与 `data: {total, items}` 两种形态，
   避免后端「分页/列表」二选一实现时列表页空白；认领/绑定/详情响应里的
   `{device, account, ...}` 包装由 `IotDevice.fromJson` 统一拆解。
-- 服务组返回的 `password` 是**明文组凭据**（App 已通过 JWT 鉴权，MQTT 登录所必需）。
+- 响应结构是 `{product, groups:[{...,services:[...]}], mqtt, turn}`；凭据在
+  **每个服务**上（产品×服务级），MQTT 使用该服务自己的 `username`/`password`
+  （App 已通过 JWT 鉴权，明文是登录所必需）。
 - MQTT 连接优先使用后端下发的 `mqtt.url` 与 `mqtt.topic_prefix`
-  （ACL 隔离边界，客户端不自行拼接）；缺失时才回退到服务组里的 MQTT 服务项。
+  （ACL 隔离边界，客户端不自行拼接）；缺失时才回退到服务里的 MQTT 地址。
 - `ice-servers` 未配置 TURN 时返回空数组 → App 按直连处理，不视为失败。
 
 ### 调用规范
@@ -435,14 +439,14 @@ boticz.cn/deviceShareToken/{token}                → POST /app/iot/devices/clai
 流程：
 
 1. 调 `POST /app/gb/play/:channelId` 拿 `stream`；
-2. 用设备服务组里的 MQTT 服务项（host/port）与组凭据连接 Broker；
+2. 用设备服务组里的 MQTT 服务（host/port）与产品×服务凭据连接 Broker；
 3. `GET /app/rtc/ice-servers` 取 ICE 配置（为空则直连）；
 4. `createOffer` → `setLocalDescription` → 等 ICE gathering；
 5. 发布 offer，等待**同一 `request_id`** 的 answer（10 秒超时）；
 6. `setRemoteDescription(answer)`，等 `onTrack` 收到视频轨才判定成功。
 
 **为什么 MQTT 失败要回退 HTTP WHEP**：MQTT 只承载信令，媒体面仍是 WebRTC。
-失败通常与媒体无关（broker 不可达、服务组凭据过期、后端未部署 MQTT 转发），
+失败通常与媒体无关（broker 不可达、产品服务凭据失效、后端未部署 MQTT 转发），
 而设备/媒体节点往往仍提供 WHEP 地址。回退可以避免一条信令链路故障导致完全看不到画面。
 播放页的尝试顺序为 **MQTT → WHEP → HTTP-FLV**，每层失败都记录具体原因并展示。
 
@@ -457,13 +461,14 @@ boticz.cn/deviceShareToken/{token}                → POST /app/iot/devices/clai
    避免「看起来自动填了实际是错的」。
 3. **MQTT 媒体面依赖后端实现**：App 只实现信令与 WebRTC 协商；
    `iot/<group>/signal/backend` 的转发、answer 生成需后端配合。
-4. **ICE 直连为主**：`/app/rtc/ice-servers` 为空时不做 NAT 穿透，
-   跨公网场景需要后端下发 STUN/TURN。
+4. **ICE 配置**：MQTT 与 WHEP 两条 WebRTC 路径都会请求 `/app/rtc/ice-servers`；
+   未配置 TURN 时后端返回空数组，App 按直连处理（跨公网需运维配置 TURN）。
 5. **播放页 MQTT 模式需要 `deviceId`**：从「我的设备」进入时会自动带上；
-   从国标监控入口进入仍走原有 WHEP/FLV 路径。
-6. **iOS 权限描述未改动**：需要在 `ios/Runner/Info.plist` 补
-   `NSCameraUsageDescription`、`NSBluetoothAlwaysUsageDescription`
-   与（如需本地网络发现）`NSLocalNetworkUsageDescription`，否则 iOS 真机首次调用会被系统拒绝。
+   从国标监控入口进入仍走 WHEP/FLV 路径（WHEP 同样使用下发的 TURN 凭据）。
+6. **iOS 权限**：`Info.plist` 已包含相机、麦克风、蓝牙配网
+   （`NSBluetoothAlwaysUsageDescription`）与局域网（`NSLocalNetworkUsageDescription`）用途说明。
+7. **分享码展示形态**：分享页展示 `qr_content` 链接 + 复制按钮，未引入二维码图形库
+   （沿用“不新增依赖”的取舍）；家人可通过复制的链接在 App 内扫码/识别。
 
 ## 实现说明与已知取舍
 
@@ -507,8 +512,9 @@ boticz.cn/deviceShareToken/{token}                → POST /app/iot/devices/clai
 3. **报警页只读**：不提供抓图、处理、删除 —— 这些操作在 Web 后台完成。
 4. **回放页的播放器代码是实时页的最小副本**：实时页的播放内核与云台/对讲/抓图强耦合，
    在未做统一抽取前先复制一份并保持同步；后续重构时应抽成公共组件并删除副本。
-5. **iOS 工程未改动**：`flutter_webrtc` 通常需要 `NSCameraUsageDescription` /
-   `NSMicrophoneUsageDescription`，按项目约定 iOS 侧由用户自行处理。
+5. **iOS 权限已声明**：`NSCameraUsageDescription` / `NSMicrophoneUsageDescription` /
+   `NSBluetoothAlwaysUsageDescription` / `NSLocalNetworkUsageDescription` 均在
+   `ios/Runner/Info.plist` 中；真机首次调用仍会弹出系统授权。
 
 ---
 

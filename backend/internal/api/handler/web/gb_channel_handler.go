@@ -131,6 +131,64 @@ func (h *GbChannelHandler) Update(c *gin.Context) {
 	utils.Success(c, nil)
 }
 
+// RecordControl 设备侧录像控制
+//
+// @Summary      通道录像控制
+// @Description  action=start|stop，发送 MANSCDP DeviceControl / RecordCmd 给设备侧本地录像（不是云端 ZLM 录像）。SIP 服务未启动时返回 503
+// @Tags         GbChannel
+// @Accept       json
+// @Produce      json
+// @Param        id    path      int                       true  "通道ID"
+// @Param        body  body      request.GbRecordControlReq true  "录像控制"
+// @Success      200  {object}  response.BaseResponse
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Failure      503  {object}  response.BaseResponse
+// @Router       /web/gb/channels/{channelId}/record-control [post]
+// @ID           recordControlGbChannel
+func (h *GbChannelHandler) RecordControl(c *gin.Context) {
+	id, ok := gbPathID(c, "通道")
+	if !ok {
+		return
+	}
+	var req request.GbRecordControlReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数错误: "+err.Error())
+		return
+	}
+	if err := h.svc.RecordControl(c.Request.Context(), id, req.Action); err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbChannelNotFound, gbsvc.ErrGbDeviceNotFound)
+		return
+	}
+	utils.Success(c, nil)
+}
+
+// MediaInfo 通道媒体信息
+//
+// @Summary      通道媒体信息
+// @Description  优先按当前在线播放会话找到 app/stream，再调用 ZLM getMediaInfo 返回 codec/width/height/fps/bitrate/reader_count/alive_second。没有在线流时返回 404
+// @Tags         GbChannel
+// @Accept       json
+// @Produce      json
+// @Param        id  path      int  true  "通道ID"
+// @Success      200  {object}  response.RGbMediaInfo
+// @Failure      400  {object}  response.BaseResponse
+// @Failure      404  {object}  response.BaseResponse
+// @Router       /web/gb/channels/{channelId}/media-info [get]
+// @ID           getGbChannelMediaInfo
+func (h *GbChannelHandler) MediaInfo(c *gin.Context) {
+	id, ok := gbPathID(c, "通道")
+	if !ok {
+		return
+	}
+	resp, err := h.svc.MediaInfo(c.Request.Context(), id)
+	if err != nil {
+		respondGbErr(c, err, gbsvc.ErrGbChannelNotFound, gbsvc.ErrGbNoActiveStream)
+		return
+	}
+	utils.Success(c, resp)
+}
+
 // Delete 删除国标通道
 //
 // @Summary      删除国标通道

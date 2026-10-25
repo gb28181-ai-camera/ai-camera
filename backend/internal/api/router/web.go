@@ -78,6 +78,7 @@ func registerWebRoutes(r *gin.Engine) {
 
 	// 国标视频（GB/T 28181）业务 CRUD 层
 	gbDeviceH := handler.NewGbDeviceHandler()
+	gbDeviceCtlH := handler.NewGbDeviceControlHandler()
 	gbChannelH := handler.NewGbChannelHandler()
 	gbMediaServerH := handler.NewGbMediaServerHandler()
 	gbGroupH := handler.NewGbGroupHandler()
@@ -395,7 +396,15 @@ func registerWebRoutes(r *gin.Engine) {
 			// 国标设备
 			gb.GET("/devices", gbDeviceH.Page)
 			gb.GET("/devices/:id", gbDeviceH.Get)
+			gb.PUT("/devices/:id", gbDeviceH.Update)
 			gb.POST("/devices/:id/sync-channel", gbDeviceH.SyncChannel)
+			// 目录同步进度 / 心跳注册时间统计（WVP 对齐）
+			gb.GET("/devices/:id/sync-status", gbDeviceCtlH.SyncStatus)
+			gb.GET("/devices/:id/time-statistics", gbDeviceCtlH.TimeStatistics)
+			// 设备控制（带外 MANSCDP DeviceControl）
+			gb.POST("/devices/:id/reboot", gbDeviceCtlH.Reboot)
+			gb.POST("/devices/:id/guard", gbDeviceCtlH.Guard)
+			gb.POST("/devices/:id/alarm-reset", gbDeviceCtlH.AlarmReset)
 			// 可达性 / NAT 诊断：只读 + 一条标准 DeviceInfo 查询，不修改设备状态。
 			gb.POST("/devices/:id/diagnose", gbDeviceH.Diagnose)
 			gb.POST("/devices/:id/subscribe", gbDeviceH.Subscribe)
@@ -412,6 +421,9 @@ func registerWebRoutes(r *gin.Engine) {
 			gb.PUT("/channels/:id/region", gbChannelH.UpdateRegion)
 			gb.PUT("/channels/:id/group", gbChannelH.UpdateGroup)
 			gb.POST("/channels/:id/reset", gbChannelH.Reset)
+			// 设备侧录像控制 / 当前在线流媒体信息（WVP 对齐）
+			gb.POST("/channels/:id/record-control", gbChannelH.RecordControl)
+			gb.GET("/channels/:id/media-info", gbChannelH.MediaInfo)
 
 			// 媒体节点（简单列表，非分页）
 			gb.GET("/media-servers", gbMediaServerH.List)
@@ -457,18 +469,18 @@ func registerWebRoutes(r *gin.Engine) {
 			wiot.DELETE("/products/:id", iotProductH.Delete)
 			wiot.POST("/products/:id/share-qr", iotProductH.GenerateShareQR)
 			wiot.GET("/products/:id/credentials", iotProductH.Credentials)
+			wiot.GET("/products/:id/services", iotProductH.GetServices)
+			wiot.POST("/products/:id/services/:serviceId/reset-credentials", iotProductH.ResetServiceCredentials)
 			wiot.GET("/products/:id/service-groups", iotProductH.GetServiceGroups)
 			wiot.PUT("/products/:id/service-groups", iotProductH.BindServiceGroups)
 
-			// 服务组
+			// 服务组（固定三条，不开放新增/删除）
 			wiot.GET("/service-groups", iotServiceGroupH.Page)
 			wiot.GET("/service-groups/:id", iotServiceGroupH.Get)
 			wiot.POST("/service-groups", iotServiceGroupH.Create)
 			wiot.PUT("/service-groups/:id", iotServiceGroupH.Update)
 			wiot.DELETE("/service-groups/:id", iotServiceGroupH.Delete)
-			wiot.POST("/service-groups/:id/reset-credentials", iotServiceGroupH.ResetCredentials)
-			wiot.GET("/service-groups/:id/credentials", iotServiceGroupH.Credentials)
-			wiot.PUT("/service-groups/:id/items", iotServiceGroupH.ReplaceItems)
+			wiot.PUT("/service-groups/:id/services", iotServiceGroupH.ReplaceServices)
 
 			// 设备与账号
 			wiot.GET("/devices", iotDeviceH.Page)
@@ -484,6 +496,8 @@ func registerWebRoutes(r *gin.Engine) {
 			// 分享令牌：生成一次、App 认领后失效；DELETE 只撤销未认领的令牌。
 			wiot.POST("/devices/:id/share-token", iotDeviceH.CreateShareToken)
 			wiot.DELETE("/devices/:id/share-token", iotDeviceH.RevokeShareToken)
+			// 解绑：删除全部账号（含主账号）并清除激活状态，用于收回分享/认领。
+			wiot.POST("/devices/:id/unbind", iotDeviceH.Unbind)
 		}
 	}
 }

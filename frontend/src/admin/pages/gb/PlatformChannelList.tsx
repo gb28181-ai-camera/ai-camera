@@ -5,7 +5,9 @@ import {
   Alert, Button, Empty, Form, Input, message, Modal, Popconfirm, Select, Space, Table, Tag,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import {
+  ApartmentOutlined, ClusterOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined,
+} from '@ant-design/icons'
 import axios from 'axios'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
@@ -14,6 +16,8 @@ import SelectorModal from '../../components/SelectorModal'
 import type { SelectorFetchParams, SelectorFetchResult } from '../../components/SelectorModal'
 import { GbPlatformController } from '../../api/generated/GbPlatformController'
 import { GbChannelController } from '../../api/generated/GbChannelController'
+import { GbGroupController } from '../../api/generated/GbGroupController'
+import { BasicController } from '../../api/generated/BasicController'
 import type { GbPlatformItem } from '../../api/generated/definitions/GbPlatformItem'
 import type { GbPlatformChannelItem } from '../../api/generated/definitions/GbPlatformChannelItem'
 import type { GbChannelItem } from '../../api/generated/definitions/GbChannelItem'
@@ -130,6 +134,15 @@ const PlatformChannelList: React.FC = () => {
 
   const [addOpen, setAddOpen] = useState(false)
   const [adding, setAdding] = useState(false)
+  /** 添加通道时的分组 / 区域过滤（来自「按分组 / 按区域批量选择」入口） */
+  const [addGroupId, setAddGroupId] = useState<number | undefined>()
+  const [addRegionId, setAddRegionId] = useState<number | undefined>()
+
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchKind, setBatchKind] = useState<'group' | 'region'>('group')
+  const [batchOptions, setBatchOptions] = useState<{ label: string; value: number }[]>([])
+  const [batchValue, setBatchValue] = useState<number | undefined>()
+  const [batchLoading, setBatchLoading] = useState(false)
 
   const [customOpen, setCustomOpen] = useState(false)
   const [customTarget, setCustomTarget] = useState<GbPlatformChannelItem | null>(null)
@@ -188,9 +201,76 @@ const PlatformChannelList: React.FC = () => {
   const fetchGbChannels = useCallback(async ({
     page: p, page_size, keyword: kw,
   }: SelectorFetchParams): Promise<SelectorFetchResult<GbChannelItem>> => {
-    const res = await GbChannelController.pageGbChannels(p, page_size, kw)
+    const res = await GbChannelController.pageGbChannels(
+      p, page_size, kw, undefined, addRegionId, addGroupId,
+    )
     return { items: res.data?.items ?? [], total: Number(res.data?.total ?? 0) }
-  }, [])
+  }, [addGroupId, addRegionId])
+
+  /** 普通「添加通道」：不继承上一次的分组 / 区域过滤。 */
+  const openAddAll = () => {
+    setAddGroupId(undefined)
+    setAddRegionId(undefined)
+    setAddOpen(true)
+  }
+
+  /** 打开「按分组 / 按区域批量选择」入口（筛选条件复用现有下拉与选择弹窗）。 */
+  const openBatch = async (kind: 'group' | 'region') => {
+    setBatchKind(kind)
+    setBatchValue(undefined)
+    setBatchOptions([])
+    setBatchOpen(true)
+    setBatchLoading(true)
+    try {
+      if (kind === 'group') {
+        const res = await GbGroupController.listGbGroups()
+        setBatchOptions((res.data ?? []).flatMap((item) => (
+          item.id === undefined
+            ? []
+            : [{ label: item.name || String(item.id), value: item.id }]
+        )))
+      } else {
+        const res = await BasicController.pageRegions(1, 200)
+        setBatchOptions((res.data?.items ?? []).flatMap((item) => (
+          item.id === undefined
+            ? []
+            : [{ label: item.name || String(item.id), value: item.id }]
+        )))
+      }
+    } catch (err) {
+      message.error(apiErrorMessage(err, '加载筛选选项失败'))
+    } finally {
+      setBatchLoading(false)
+    }
+  }
+
+  const submitBatch = () => {
+    if (batchValue === undefined) {
+      message.warning(batchKind === 'group' ? '请选择业务分组' : '请选择所属区域')
+      return
+    }
+    if (batchKind === 'group') {
+      setAddGroupId(batchValue)
+      setAddRegionId(undefined)
+    } else {
+      setAddRegionId(batchValue)
+      setAddGroupId(undefined)
+    }
+    setBatchOpen(false)
+    setAddOpen(true)
+  }
+
+  const closeAdd = () => {
+    setAddOpen(false)
+    setAddGroupId(undefined)
+    setAddRegionId(undefined)
+  }
+
+  const addModalTitle = addGroupId
+    ? '按分组添加通道'
+    : addRegionId
+      ? '按区域添加通道'
+      : '添加通道到上级平台'
 
   const submitAdd = async (selected: GbChannelItem[]) => {
     if (!platformId) return
@@ -307,14 +387,32 @@ const PlatformChannelList: React.FC = () => {
             刷新
           </Button>
           {canAdd && (
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              disabled={!platformId}
-              onClick={() => setAddOpen(true)}
-            >
-              添加通道
-            </Button>
+            <>
+              <Button
+                className="e2e-gb-platform-channel-batch-group-btn"
+                icon={<ApartmentOutlined />}
+                disabled={!platformId}
+                onClick={() => void openBatch('group')}
+              >
+                按分组添加
+              </Button>
+              <Button
+                className="e2e-gb-platform-channel-batch-region-btn"
+                icon={<ClusterOutlined />}
+                disabled={!platformId}
+                onClick={() => void openBatch('region')}
+              >
+                按区域添加
+              </Button>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                disabled={!platformId}
+                onClick={openAddAll}
+              >
+                添加通道
+              </Button>
+            </>
           )}
         </Space>
       }
@@ -370,13 +468,48 @@ const PlatformChannelList: React.FC = () => {
         </>
       )}
 
+      {/* 按分组 / 按区域批量选择：先选筛选条件，再复用通道多选弹窗 */}
+      <Modal
+        className="e2e-gb-platform-channel-batch-modal"
+        title={batchKind === 'group' ? '按分组批量选择通道' : '按区域批量选择通道'}
+        open={batchOpen}
+        onCancel={() => setBatchOpen(false)}
+        onOk={submitBatch}
+        okText="选择通道"
+        destroyOnHidden
+        width={560}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="先选择范围，再在通道列表中勾选"
+          description={
+            batchKind === 'group'
+              ? '下一步会在通道多选弹窗中只列出该业务分组下的通道。'
+              : '下一步会在通道多选弹窗中只列出该区域下的通道。'
+          }
+        />
+        <Select<number>
+          style={{ width: '100%' }}
+          showSearch
+          optionFilterProp="label"
+          loading={batchLoading}
+          value={batchValue}
+          onChange={(value) => setBatchValue(value)}
+          placeholder={batchKind === 'group' ? '请选择业务分组' : '请选择所属区域'}
+          options={batchOptions}
+          notFoundContent={batchLoading ? undefined : '暂无可选数据'}
+        />
+      </Modal>
+
       {/* 添加通道（多选） */}
       <SelectorModal<GbChannelItem>
         className="e2e-gb-platform-channel-add-modal"
-        title="添加通道到上级平台"
+        title={addModalTitle}
         mode="multiple"
         open={addOpen}
-        onCancel={() => setAddOpen(false)}
+        onCancel={closeAdd}
         onOk={(selected) => void submitAdd(selected)}
         columns={channelColumns}
         fetchData={fetchGbChannels}

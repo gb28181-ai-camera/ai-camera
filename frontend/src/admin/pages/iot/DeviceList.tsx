@@ -5,8 +5,8 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  ApiOutlined, DeleteOutlined, EditOutlined, LinkOutlined, PlusOutlined, QrcodeOutlined,
-  SafetyOutlined, ShareAltOutlined, StopOutlined, UserOutlined,
+  ApiOutlined, ClusterOutlined, DeleteOutlined, DisconnectOutlined, EditOutlined, LinkOutlined,
+  PlusOutlined, QrcodeOutlined, SafetyOutlined, ShareAltOutlined, StopOutlined, UserOutlined,
 } from '@ant-design/icons'
 import PageContainer from '../../components/PageContainer'
 import SearchBar from '../../components/SearchBar'
@@ -20,6 +20,7 @@ import type { IotDeviceActivated } from '../../api/generated/definitions/IotDevi
 import type { IotDeviceSecret } from '../../api/generated/definitions/IotDeviceSecret'
 import type { IotDeviceQR } from '../../api/generated/definitions/IotDeviceQR'
 import type { IotDeviceShareToken } from '../../api/generated/definitions/IotDeviceShareToken'
+import type { IotServiceGroupDetail } from '../../api/generated/definitions/IotServiceGroupDetail'
 import type { CreateIotDeviceAccountReq } from '../../api/generated/definitions/CreateIotDeviceAccountReq'
 import type { UpdateIotDeviceAccountReq } from '../../api/generated/definitions/UpdateIotDeviceAccountReq'
 import { useAuthStore } from '../../store/authStore'
@@ -66,6 +67,7 @@ export default function DeviceList() {
   const canUpdate = permCodes.includes('iot:device:update')
   const canActivate = permCodes.includes('iot:device:activate')
   const canResetSecret = permCodes.includes('iot:device:secret-reset')
+  const canUnbind = permCodes.includes('iot:device:unbind')
   const canAccountCreate = permCodes.includes('iot:device:account:create')
   const canAccountUpdate = permCodes.includes('iot:device:account:update')
   const canAccountDelete = permCodes.includes('iot:device:account:delete')
@@ -113,6 +115,12 @@ export default function DeviceList() {
   const [shareQrDevice, setShareQrDevice] = useState<Device | null>(null)
   const [shareQrData, setShareQrData] = useState<IotDeviceShareToken | null>(null)
   const [revoking, setRevoking] = useState<number | null>(null)
+  const [unbinding, setUnbinding] = useState<number | null>(null)
+
+  const [servicesOpen, setServicesOpen] = useState(false)
+  const [servicesLoading, setServicesLoading] = useState<number | null>(null)
+  const [servicesDevice, setServicesDevice] = useState<Device | null>(null)
+  const [services, setServices] = useState<IotServiceGroupDetail[]>([])
 
   const productOptions = products.flatMap((product) => (
     product.id == null
@@ -458,6 +466,42 @@ export default function DeviceList() {
     }
   }
 
+  /** 查看设备已授权的服务组（来自产品绑定，OTA 下发同一份数据）。 */
+  const openServices = async (row: Device) => {
+    if (row.id == null) return
+    setServicesDevice(row)
+    setServices([])
+    setServicesOpen(true)
+    setServicesLoading(row.id)
+    try {
+      const res = await IOTController.getIotDevice(row.id)
+      setServices(res.data?.service_groups ?? [])
+    } catch (err) {
+      notifyError(err, '获取设备服务授权失败')
+    } finally {
+      setServicesLoading(null)
+    }
+  }
+
+  /** 后台解绑：删除全部账号（含主账号）并清除激活状态。 */
+  const handleUnbind = async (row: Device) => {
+    if (row.id == null) return
+    setUnbinding(row.id)
+    try {
+      const res = await IOTController.unbindIotDevice(row.id)
+      if (res.code === 200) {
+        message.success(`已解绑，删除 ${res.data?.accounts ?? 0} 个账号`)
+        void fetchData()
+      } else {
+        message.error(res.message || '解绑失败')
+      }
+    } catch (err) {
+      notifyError(err, '解绑失败')
+    } finally {
+      setUnbinding(null)
+    }
+  }
+
   // ── 表格 ──────────────────────────────────────────────────
 
   const columns: ColumnsType<Device> = [
@@ -494,34 +538,52 @@ export default function DeviceList() {
       render: (v?: boolean) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
     },
     {
-      title: '操作', key: 'action', width: 620, fixed: 'right',
-      render: (_, row) => (
-        <ActionButtons maxWidth={620}>
-          <Button type="link" size="small" icon={<UserOutlined />} onClick={() => openAccounts(row)}>
-            账号管理
-          </Button>
-          {canUpdate && (
+      title: '操作', key: 'action', width: 760, fixed: 'right',
+      render: (_, row) => {
+        // 产品关闭分享时后端会拒绝生成分享码；按钮同步禁用，避免无效点击。
+        // 未绑定产品（历史设备）不阻断，遵循后端规则。
+        const shareAllowed = row.product?.allow_share !== false
+        return (
+          <ActionButtons maxWidth={760}>
+            <Button type="link" size="small" icon={<UserOutlined />} onClick={() => openAccounts(row)}>
+              账号管理
+            </Button>
             <Button
               type="link"
               size="small"
-              icon={<QrcodeOutlined />}
-              loading={qrLoading === row.id}
-              onClick={() => void handleDeviceQR(row)}
+              icon={<ClusterOutlined />}
+              loading={servicesLoading === row.id}
+              onClick={() => void openServices(row)}
             >
-              设备二维码
+              服务授权
             </Button>
-          )}
-          {canAccountCreate && (
-            <Button
-              type="link"
-              size="small"
-              icon={<ShareAltOutlined />}
-              loading={shareLoading === row.id}
-              onClick={() => void handleCreateShare(row)}
-            >
-              分享码
-            </Button>
-          )}
+            {canUpdate && (
+              <Button
+                type="link"
+                size="small"
+                icon={<QrcodeOutlined />}
+                loading={qrLoading === row.id}
+                onClick={() => void handleDeviceQR(row)}
+              >
+                设备二维码
+              </Button>
+            )}
+            {canAccountCreate && (
+              <Tooltip title={shareAllowed ? undefined : '该产品未开启允许分享'}>
+                <span>
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<ShareAltOutlined />}
+                    disabled={!shareAllowed}
+                    loading={shareLoading === row.id}
+                    onClick={() => void handleCreateShare(row)}
+                  >
+                    分享码
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           {canAccountDelete && (
             <Popconfirm
               title="撤销后该设备所有未认领的分享码立即失效，已认领的分享账号不受影响。确定撤销?"
@@ -557,18 +619,35 @@ export default function DeviceList() {
               </span>
             </Tooltip>
           )}
-          {canResetSecret && (
-            <Popconfirm
-              title="重置后旧密钥立即失效，设备需重新配置新密钥。确定重置?"
-              onConfirm={() => void handleResetSecret(row)}
-            >
-              <Button type="link" size="small" danger icon={<SafetyOutlined />}>
-                重置密钥
-              </Button>
-            </Popconfirm>
-          )}
-        </ActionButtons>
-      ),
+            {canResetSecret && (
+              <Popconfirm
+                title="重置后旧密钥立即失效，设备需重新配置新密钥。确定重置?"
+                onConfirm={() => void handleResetSecret(row)}
+              >
+                <Button type="link" size="small" danger icon={<SafetyOutlined />}>
+                  重置密钥
+                </Button>
+              </Popconfirm>
+            )}
+            {canUnbind && (
+              <Popconfirm
+                title="解绑将删除该设备全部账号（含主账号）并清除激活状态，设备需重新激活。确定?"
+                onConfirm={() => void handleUnbind(row)}
+              >
+                <Button
+                  type="link"
+                  size="small"
+                  danger
+                  icon={<DisconnectOutlined />}
+                  loading={unbinding === row.id}
+                >
+                  解绑设备
+                </Button>
+              </Popconfirm>
+            )}
+          </ActionButtons>
+        )
+      },
     },
   ]
 
@@ -794,6 +873,60 @@ export default function DeviceList() {
         data={shareQrData}
         onClose={() => setShareQrOpen(false)}
       />
+
+      <Modal
+        className="e2e-iot-device-services-modal"
+        title={servicesDevice ? `服务授权 - ${servicesDevice.name ?? servicesDevice.device_code ?? ''}` : '服务授权'}
+        open={servicesOpen}
+        onCancel={() => setServicesOpen(false)}
+        footer={<Button onClick={() => setServicesOpen(false)}>关闭</Button>}
+        width={820}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+          设备通过所属产品获得服务组授权；OTA 下发的服务项与这里展示的一致。
+        </Typography.Paragraph>
+        <Table<IotServiceGroupDetail>
+          className="e2e-iot-device-services-table"
+          rowKey={(row) => String(row.id ?? row.code ?? '')}
+          size="small"
+          loading={servicesLoading != null}
+          dataSource={services}
+          pagination={false}
+          scroll={{ x: 'max-content' }}
+          locale={{ emptyText: '设备未绑定产品，或产品尚未绑定服务组' }}
+          columns={[
+            { title: '服务组名称', dataIndex: 'name', width: 180, render: (v?: string) => v || '-' },
+            { title: '编码', dataIndex: 'code', width: 170, render: (v?: string) => v || '-' },
+            {
+              title: '类型', dataIndex: 'type', width: 110,
+              render: (v?: string) => <Tag color="geekblue">{v || '-'}</Tag>,
+            },
+            {
+              title: '服务', key: 'services',
+              render: (_, row) => {
+                const services = row.services ?? []
+                if (services.length === 0) return <Typography.Text type="secondary">未配置</Typography.Text>
+                return (
+                  <Space size={[4, 4]} wrap>
+                    {services.map((item, index) => (
+                      <Tag key={`${item.id ?? item.code ?? index}`} color={item.active ? 'blue' : 'default'}>
+                        {item.name || item.protocol}
+                        {item.host ? ` ${item.host}` : ''}
+                        {item.port ? `:${item.port}` : ''}
+                      </Tag>
+                    ))}
+                  </Space>
+                )
+              },
+            },
+            {
+              title: '启用', dataIndex: 'active', width: 90,
+              render: (v?: boolean) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
+            },
+          ]}
+        />
+      </Modal>
     </PageContainer>
   )
 }

@@ -40,13 +40,34 @@ const (
 	IotServiceGroupAIChat  = "aichat"
 )
 
-// IOT 服务项协议。
+// IotFixedServiceGroupCodes 系统预置的服务组编码。
+//
+// 服务组不是自由字典，而是三条固定数据：gb28181 / webrtc / aichat。
+// 编码同时决定类型与协议白名单；不开放新增/删除，编码与类型不可修改。
+var IotFixedServiceGroupCodes = []string{
+	IotServiceGroupGb28181,
+	IotServiceGroupWebRTC,
+	IotServiceGroupAIChat,
+}
+
+// IsFixedServiceGroupCode 判断编码是否为系统预置的服务组。
+func IsFixedServiceGroupCode(code string) bool {
+	for _, c := range IotFixedServiceGroupCodes {
+		if c == code {
+			return true
+		}
+	}
+	return false
+}
+
+// IOT 服务协议。
 const (
 	IotProtocolSIP       = "SIP"
 	IotProtocolRTSP      = "RTSP"
 	IotProtocolWebRTC    = "WebRTC"
 	IotProtocolMQTT      = "MQTT"
 	IotProtocolWebSocket = "WebSocket"
+	IotProtocolTURN      = "TURN"
 )
 
 // IotGroupAllowedProtocols 服务组类型 → 允许的协议白名单。
@@ -56,7 +77,7 @@ const (
 // 创建/更新服务项时校验；读取时不再校验（历史数据保持可读）。
 var IotGroupAllowedProtocols = map[string][]string{
 	IotServiceGroupGb28181: {IotProtocolSIP, IotProtocolRTSP},
-	IotServiceGroupWebRTC:  {IotProtocolWebRTC, IotProtocolMQTT, IotProtocolRTSP},
+	IotServiceGroupWebRTC:  {IotProtocolWebRTC, IotProtocolMQTT, IotProtocolRTSP, IotProtocolTURN},
 	IotServiceGroupAIChat:  {IotProtocolWebSocket},
 }
 
@@ -78,6 +99,7 @@ const (
 	IotEventActivate      = "activate"
 	IotEventAccountCreate = "account-create"
 	IotEventSecretReset   = "secret-reset"
+	IotEventUnbind        = "unbind"
 )
 
 // IotProduct IOT 产品。表 ac_iot_product。
@@ -102,32 +124,36 @@ func (IotProduct) TableName() string { return "ac_iot_product" }
 
 // IotServiceGroup IOT 服务组。表 ac_iot_service_group。
 //
-// username/password 为**组级**凭据，由平台自动生成，供设备登录服务使用。
-// Web 读接口一律脱敏（utils.MaskSecret），仅设备端 OTA 返回明文 ——
-// 因为设备已经用 device_secret 完成了身份确认，再脱敏会让它无法登录。
+// 服务组是**固定三条分类数据**（gb28181 / webrtc / aichat），只描述分类，
+// 不持有凭据；具体接入服务与凭据分别落在 ac_iot_service / ac_iot_product_service。
 type IotServiceGroup struct {
 	BaseModel
 	Active      *bool  `gorm:"column:active;default:true" json:"active"`
 	Name        string `gorm:"column:name;size:255;not null;comment:服务组名称" json:"name"`
 	Code        string `gorm:"column:code;size:100;not null;uniqueIndex:idx_ac_iot_service_group_code;comment:服务组编码" json:"code"`
 	Type        string `gorm:"column:type;size:20;not null;comment:服务组类型 gb28181/webrtc/aichat" json:"type"`
-	Username    string `gorm:"column:username;size:100;not null;uniqueIndex:idx_ac_iot_service_group_username;comment:组级登录用户名(自动生成)" json:"username"`
-	Password    string `gorm:"column:password;size:255;not null;comment:组级登录密码(自动生成,敏感)" json:"password"`
 	Description string `gorm:"column:description;type:text;comment:描述" json:"description"`
+
+	// ReferencedByProducts 引用该服务组的产品数量（非数据库列）。
+	//
+	// 服务组一旦被产品绑定就进入**只读**状态：设备 OTA 正在使用它下面的服务，
+	// 修改服务或地址会让已联网设备拿到不一致的配置。必须先在产品上解绑。
+	ReferencedByProducts int64 `gorm:"-" json:"referenced_by_products"`
 }
 
 func (IotServiceGroup) TableName() string { return "ac_iot_service_group" }
 
-// IotServiceItem IOT 服务项。表 ac_iot_service_item。
+// IotService IOT 服务。表 ac_iot_service。
 //
-// 服务组 → 服务项是 1:N；同一组内协议唯一（一个组不会有两条 SIP 配置），
-// 由 (group_id, protocol) 唯一索引保证。整体替换时使用硬删除，
-// 否则软删除的行仍会占用唯一索引，导致相同的协议无法重新加入。
-type IotServiceItem struct {
+// 服务组 → 服务是 1:N；服务是具体接入项（SIP / RTSP / WebRTC / MQTT / TURN / WebSocket）。
+// 同一组内按 code 唯一；整体替换时硬删除，避免软删除行占用唯一索引。
+type IotService struct {
 	BaseModel
 	Active   *bool  `gorm:"column:active;default:true" json:"active"`
-	GroupID  int64  `gorm:"column:group_id;not null;uniqueIndex:idx_ac_iot_service_item_group_protocol;comment:服务组ID" json:"group_id"`
-	Protocol string `gorm:"column:protocol;size:20;not null;uniqueIndex:idx_ac_iot_service_item_group_protocol;comment:协议 SIP/RTSP/WebRTC/MQTT/WebSocket" json:"protocol"`
+	GroupID  int64  `gorm:"column:group_id;not null;uniqueIndex:idx_ac_iot_service_grp_code;comment:服务组ID" json:"group_id"`
+	Code     string `gorm:"column:code;size:50;not null;uniqueIndex:idx_ac_iot_service_grp_code;comment:服务编码(组内唯一)" json:"code"`
+	Name     string `gorm:"column:name;size:100;not null;comment:服务名称" json:"name"`
+	Protocol string `gorm:"column:protocol;size:20;not null;comment:协议 SIP/RTSP/WebRTC/MQTT/WebSocket/TURN" json:"protocol"`
 	Host     string `gorm:"column:host;size:255;comment:服务地址" json:"host"`
 	Port     int    `gorm:"column:port;comment:服务端口" json:"port"`
 	Path     string `gorm:"column:path;size:500;comment:服务路径" json:"path"`
@@ -135,19 +161,56 @@ type IotServiceItem struct {
 	Sequence int    `gorm:"column:sequence;default:10;comment:排序" json:"sequence"`
 }
 
-func (IotServiceItem) TableName() string { return "ac_iot_service_item" }
+func (IotService) TableName() string { return "ac_iot_service" }
 
-// IotProductService 产品-服务组绑定。表 ac_iot_product_service。
+// IotProductServiceGroup 产品-服务组绑定。表 ac_iot_product_service_group。
 //
 // 纯关联表：无 active / 无审计语义，整体替换时硬删除后重建。
-// 保留 BaseModel 是为了与全库表结构一致（id / 时间戳 / 软删除列存在但基本不用）。
+type IotProductServiceGroup struct {
+	BaseModel
+	ProductID      int64 `gorm:"column:product_id;not null;uniqueIndex:idx_ac_iot_product_service_group;comment:产品ID" json:"product_id"`
+	ServiceGroupID int64 `gorm:"column:service_group_id;not null;uniqueIndex:idx_ac_iot_product_service_group;comment:服务组ID" json:"service_group_id"`
+}
+
+func (IotProductServiceGroup) TableName() string { return "ac_iot_product_service_group" }
+
+// IotProductService 产品-服务绑定（含该产品在该服务上的鉴权信息）。
+//
+// 凭据是**产品 × 服务**级：同一服务组下不同产品、同一产品的不同服务都有独立账号。
+// 设备端 OTA 按产品读取本表下发；MQTT/TURN 鉴权也以这里的 username/password 为准。
+// 密码为明文入库（设备端必须拿到可直接登录的凭据），Web 读接口统一脱敏。
 type IotProductService struct {
 	BaseModel
-	ProductID      int64 `gorm:"column:product_id;not null;uniqueIndex:idx_ac_iot_product_service;comment:产品ID" json:"product_id"`
-	ServiceGroupID int64 `gorm:"column:service_group_id;not null;uniqueIndex:idx_ac_iot_product_service;comment:服务组ID" json:"service_group_id"`
+	Active    *bool  `gorm:"column:active;default:true" json:"active"`
+	ProductID int64  `gorm:"column:product_id;not null;uniqueIndex:idx_ac_iot_product_service;comment:产品ID" json:"product_id"`
+	ServiceID int64  `gorm:"column:service_id;not null;uniqueIndex:idx_ac_iot_product_service;comment:服务ID" json:"service_id"`
+	Username  string `gorm:"column:username;size:100;not null;uniqueIndex:idx_ac_iot_product_service_username;comment:服务登录用户名(自动生成,全局唯一)" json:"username"`
+	Password  string `gorm:"column:password;size:255;not null;comment:服务登录密码(自动生成,敏感)" json:"password"`
+	Extra     string `gorm:"column:extra;type:text;comment:扩展配置(JSON字符串)" json:"extra"`
 }
 
 func (IotProductService) TableName() string { return "ac_iot_product_service" }
+
+// TurnUserLT coturn 长期凭据用户表（与 coturn SQL userdb 共用）。
+//
+// coturn 没有 HTTP/RPC 认证回调；使用 --userdb 指向本库后，
+// 它直接查询 turnusers_lt。hmackey = MD5(username:realm:password)。
+// 该表不由业务接口直接暴露，只由产品×TURN 服务凭据同步写入。
+type TurnUserLT struct {
+	Realm   string `gorm:"column:realm;size:127;primaryKey" json:"realm"`
+	Name    string `gorm:"column:name;size:512;primaryKey" json:"name"`
+	Hmackey string `gorm:"column:hmackey;size:128;not null" json:"hmackey"`
+}
+
+func (TurnUserLT) TableName() string { return "turnusers_lt" }
+
+// TurnSecret coturn SQL userdb 的 REST 密钥表（结构兼容，业务不写入）。
+type TurnSecret struct {
+	Realm string `gorm:"column:realm;size:127;primaryKey" json:"realm"`
+	Value string `gorm:"column:value;size:256;primaryKey" json:"value"`
+}
+
+func (TurnSecret) TableName() string { return "turn_secret" }
 
 // IotDeviceAccount 设备账号。表 ac_iot_device_account。
 //
@@ -184,7 +247,7 @@ func (IotDeviceAccount) TableName() string { return "ac_iot_device_account" }
 type IotDeviceEvent struct {
 	BaseModel
 	DeviceID int64  `gorm:"column:device_id;not null;index:idx_ac_iot_device_event_device;comment:设备ID" json:"device_id"`
-	Event    string `gorm:"column:event;size:30;not null;comment:ota/activate/account-create/secret-reset" json:"event"`
+	Event    string `gorm:"column:event;size:30;not null;comment:ota/activate/account-create/secret-reset/unbind" json:"event"`
 	Detail   string `gorm:"column:detail;type:text;comment:事件详情(JSON字符串)" json:"detail"`
 	IP       string `gorm:"column:ip;size:64;comment:来源IP" json:"ip"`
 }

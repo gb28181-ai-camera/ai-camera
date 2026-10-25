@@ -6,12 +6,13 @@ export type UpdateIotProductReq = Definition & {
 	active?: boolean;
 	allow_share?: boolean;
 	auto_network?: boolean;
+	/** 配网方式为空表示不修改。 */
 	category?: string;
 	code?: string;
 	description?: string;
-	/** DeviceType 为空表示不修改；非空时必须是 security / elderly。 */
-	device_type?: string;
 	name?: string;
 	net_config_mode?: string;
 	sequence?: number;
+	/** nil 表示不修改服务组绑定；空数组表示清空；非空表示整体替换。 */
+	service_group_ids?: number[];
 }

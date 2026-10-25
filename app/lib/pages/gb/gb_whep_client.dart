@@ -40,6 +40,7 @@ class GbWhepClient {
   Future<void> connect({
     required String url,
     required RTCVideoRenderer renderer,
+    List<Map<String, dynamic>> iceServers = const <Map<String, dynamic>>[],
     Duration connectTimeout = const Duration(seconds: 10),
     Duration iceGatherTimeout = const Duration(seconds: 3),
   }) async {
@@ -50,8 +51,9 @@ class GbWhepClient {
     _renderer = renderer;
     final RTCPeerConnection pc = await createPeerConnection(
       <String, dynamic>{
-        // 局域网/内网 ZLM 不需要 STUN/TURN；留空避免依赖公网服务。
-        'iceServers': <dynamic>[],
+        // TURN/STUN 由 /app/rtc/ice-servers 签发；为空时退化为直连，
+        // 内网 ZLM 仍可工作，受限网络则依赖调用方传入的中继地址。
+        'iceServers': iceServers,
         // flutter_webrtc 的 Unified Plan 实现，与 ZLM 的 WHEP 兼容。
         'sdpSemantics': 'unified-plan',
       },

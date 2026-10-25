@@ -140,6 +140,42 @@ var contractGbRoutes = []string{
 	"POST /web/gb/stream-pushes/:id/start",
 	"POST /web/gb/stream-pushes/:id/stop",
 
+	// ── v0.4.0 WVP 对齐：设备/通道/云台控制 ──
+	"PUT /web/gb/devices/:id",
+	"GET /web/gb/devices/:id/sync-status",
+	"GET /web/gb/devices/:id/time-statistics",
+	"POST /web/gb/devices/:id/reboot",
+	"POST /web/gb/devices/:id/guard",
+	"POST /web/gb/devices/:id/alarm-reset",
+	"POST /web/gb/channels/:id/record-control",
+	"GET /web/gb/channels/:id/media-info",
+	"PUT /web/gb/ptz/:channelId/presets/:presetId",
+	"POST /web/gb/ptz/:channelId/cruise-points",
+	"PUT /web/gb/ptz/:channelId/cruise-points",
+	"DELETE /web/gb/ptz/:channelId/cruise-points",
+	"PUT /web/gb/ptz/:channelId/scan/bounds",
+
+	// ── v0.4.0 WVP 对齐：运维/媒体/日志/分享 ──
+	"GET /web/gb/media-servers/:id/metrics",
+	"GET /web/gb/media-servers/:id/metrics/history",
+	"GET /web/gb/media-servers/:id/streams",
+	"GET /web/gb/platform-info",
+	"GET /web/gb/logs",
+	"GET /web/gb/logs/stream",
+	"GET /web/gb/alarms/stream",
+	"GET /web/gb/stream-proxies/:id/play",
+	"GET /web/gb/stream-pushes/:id/play",
+	"POST /web/gb/stream-pushes/import",
+	"POST /web/gb/cloud-records/merge-tasks",
+	"GET /web/gb/cloud-records/merge-tasks",
+	"GET /web/gb/cloud-records/merge-tasks/:id",
+	"GET /web/gb/cloud-records/merge-tasks/:id/download",
+	"POST /web/gb/channels/:id/share-tokens",
+	"GET /web/gb/channels/:id/share-tokens",
+	"DELETE /web/gb/channels/:id/share-tokens/:tokenId",
+	"GET /public/gb/shares/:token",
+	"POST /public/gb/shares/:token/play",
+
 	// ── §10.7 国标级联（配置面）──
 	"GET /web/gb/platforms",
 	"GET /web/gb/platforms/:id",
@@ -205,6 +241,8 @@ var contractIotRoutes = []string{
 	"DELETE /web/iot/products/:id",
 	"POST /web/iot/products/:id/share-qr",
 	"GET /web/iot/products/:id/credentials",
+	"GET /web/iot/products/:id/services",
+	"POST /web/iot/products/:id/services/:serviceId/reset-credentials",
 	"GET /web/iot/products/:id/service-groups",
 	"PUT /web/iot/products/:id/service-groups",
 
@@ -214,9 +252,7 @@ var contractIotRoutes = []string{
 	"POST /web/iot/service-groups",
 	"PUT /web/iot/service-groups/:id",
 	"DELETE /web/iot/service-groups/:id",
-	"POST /web/iot/service-groups/:id/reset-credentials",
-	"GET /web/iot/service-groups/:id/credentials",
-	"PUT /web/iot/service-groups/:id/items",
+	"PUT /web/iot/service-groups/:id/services",
 
 	// ── 设备与账号 ──
 	"GET /web/iot/devices",
@@ -230,6 +266,7 @@ var contractIotRoutes = []string{
 	"POST /web/iot/devices/:id/qr",
 	"POST /web/iot/devices/:id/share-token",
 	"DELETE /web/iot/devices/:id/share-token",
+	"POST /web/iot/devices/:id/unbind",
 }
 
 // contractAppIotRoutes 契约 §10.16「移动端 IOT / RTC」的端点。

@@ -24,9 +24,11 @@ RUN go build -ldflags="-w -s" -o /app/ai-camera-api ./cmd/server/main.go && \
 # ── 运行阶段 ──
 FROM alpine:latest
 
-# 切换 apk 镜像源并安装运行时依赖
+# 切换 apk 镜像源并安装运行时依赖。
+# ffmpeg 供「云端录像多段合并」使用（-c copy 无损拼接）；缺少时合并任务
+# 会明确落为 failed，但镜像自带可避免部署后才发现能力缺失。
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk add --no-cache ca-certificates tzdata wget
+    apk add --no-cache ca-certificates tzdata wget ffmpeg
 
 ENV TZ=Asia/Shanghai
 

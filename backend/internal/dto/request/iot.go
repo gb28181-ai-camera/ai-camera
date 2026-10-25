@@ -25,6 +25,8 @@ type CreateIotProductReq struct {
 	AllowShare    *bool  `json:"allow_share" example:"true"`
 	Sequence      int    `json:"sequence" example:"10"`
 	Active        *bool  `json:"active" example:"true"`
+	// 产品可选的服务组（系统预置三条）。创建时同步绑定，并为组内服务生成凭据。
+	ServiceGroupIDs []int64 `json:"service_group_ids"`
 }
 
 // UpdateIotProductReq 更新产品。
@@ -42,6 +44,8 @@ type UpdateIotProductReq struct {
 	AllowShare    *bool  `json:"allow_share"`
 	Sequence      int    `json:"sequence"`
 	Active        *bool  `json:"active"`
+	// nil 表示不修改服务组绑定；空数组表示清空；非空表示整体替换。
+	ServiceGroupIDs []int64 `json:"service_group_ids"`
 }
 
 // BindIotProductServiceGroupsReq 绑定产品可用服务组（整体替换）。
@@ -73,33 +77,34 @@ type CreateIotServiceGroupReq struct {
 
 // UpdateIotServiceGroupReq 更新服务组。
 //
-// Password 为空或含 **** 时保持原密码（复用 utils.ApplyMaskedUpdate）。
-// 常规轮换请使用 reset-credentials，它会同时更换用户名与密码。
+// 服务组是系统预置数据：编码与类型不可修改，只允许名称/描述/启用状态；
+// 被产品引用时只读。
 type UpdateIotServiceGroupReq struct {
 	Name        string `json:"name"`
 	Code        string `json:"code"`
 	Type        string `json:"type"`
 	Description string `json:"description"`
-	Password    string `json:"password" example:"****"`
 	Active      *bool  `json:"active"`
 }
 
-// IotServiceItemReq 单个服务项。
-type IotServiceItemReq struct {
-	Protocol string `json:"protocol" example:"SIP"`
-	Host     string `json:"host" example:"sip.example.com"`
-	Port     int    `json:"port" example:"5060"`
+// IotServiceReq 单个服务。
+type IotServiceReq struct {
+	Code     string `json:"code" binding:"required" example:"mqtt"`
+	Name     string `json:"name" binding:"required" example:"MQTT 接入"`
+	Protocol string `json:"protocol" binding:"required" example:"MQTT"`
+	Host     string `json:"host" example:"mqtt.example.com"`
+	Port     int    `json:"port" example:"1883"`
 	Path     string `json:"path"`
-	Extra    string `json:"extra" example:"{\"transport\":\"UDP\"}"`
+	Extra    string `json:"extra" example:"{\"tls\":true}"`
 	Sequence int    `json:"sequence" example:"10"`
 	Active   *bool  `json:"active" example:"true"`
 }
 
-// ReplaceIotServiceItemsReq 整体替换服务组的服务项。
+// ReplaceIotServicesReq 整体替换服务组的服务。
 //
-// 语义是替换而非增量：未列出的协议会被删除，便于前端用一张表格提交全量配置。
-type ReplaceIotServiceItemsReq struct {
-	Items []IotServiceItemReq `json:"items"`
+// 语义是替换而非增量：未列出的服务会被删除，便于前端用一张表格提交全量配置。
+type ReplaceIotServicesReq struct {
+	Services []IotServiceReq `json:"services"`
 }
 
 // ── 设备与账号 ────────────────────────────────────────────────
@@ -118,13 +123,14 @@ type PageIotDeviceReq struct {
 // 常规的主账号创建走 /devices/:id/activate 或设备端 /iot/activate。
 // Password 留空时由服务端生成 16 位随机密码并一次性返回。
 type CreateIotDeviceAccountReq struct {
-	Username   string `json:"username" example:"family01"`
-	Password   string `json:"password"`
-	Role       string `json:"role" example:"shared"`
-	Nickname   string `json:"nickname" example:"家人账号"`
-	Phone      string `json:"phone"`
-	Status     string `json:"status" example:"active"`
-	ShareToken string `json:"share_token"`
+	Username string `json:"username" example:"family01"`
+	Password string `json:"password"`
+	Role     string `json:"role" example:"shared"`
+	Nickname string `json:"nickname" example:"家人账号"`
+	Phone    string `json:"phone"`
+	Status   string `json:"status" example:"active"`
+	// 分享令牌不由本接口写入：需要分享码时调用
+	// POST /web/iot/devices/:id/share-token，由服务端生成一次性令牌。
 }
 
 // UpdateIotDeviceAccountReq 更新设备账号。
@@ -132,12 +138,13 @@ type CreateIotDeviceAccountReq struct {
 // Role 不可修改：主账号与分享账号的权限边界不同，静默允许改角色
 // 会让「分享」变成「主账号」，属于越权风险。密码为空则保持原值。
 type UpdateIotDeviceAccountReq struct {
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	Nickname   string `json:"nickname"`
-	Phone      string `json:"phone"`
-	Status     string `json:"status"`
-	ShareToken string `json:"share_token"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Nickname string `json:"nickname"`
+	Phone    string `json:"phone"`
+	Status   string `json:"status"`
+	// share_token 不在此接口接受：令牌只能由 share-token 接口生成，
+	// 否则管理员可写入任意令牌，绕过「一次性、可撤销」的约束。
 }
 
 // UpdateIotDeviceProductReq 设置设备所属产品（product_id 为空表示解绑）。

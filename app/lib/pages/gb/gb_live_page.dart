@@ -96,6 +96,8 @@ class _GbLivePageState extends State<GbLivePage>
   bool _rendererReady = false;
   GbWhepClient? _whep;
   MqttWebRtcClient? _mqtt;
+  /// ICE 配置按播放会话缓存：MQTT 失败回退 WHEP 时不再重复请求。
+  List<IceServerConfig>? _iceCache;
 
   // ── media_kit ─────────────────────────────────────────────
   Player? _player;
@@ -387,9 +389,26 @@ class _GbLivePageState extends State<GbLivePage>
 
   // ── MQTT 信令 ─────────────────────────────────────────────
 
+  /// 获取 ICE 配置（MQTT 与 WHEP 共用）。
+  ///
+  /// 未配置 TURN 时后端返回空数组，属于正常降级；请求失败同样按空处理，
+  /// 不能让 ICE 不可用阻断播放。结果按会话缓存，避免回退时重复请求。
+  Future<List<IceServerConfig>> _loadIceServers() async {
+    final List<IceServerConfig>? cached = _iceCache;
+    if (cached != null) return cached;
+    final RIceServers resp = await IotAppController.iceServers();
+    final List<IceServerConfig> servers =
+        resp.isSuccess ? resp.servers : const <IceServerConfig>[];
+    if (!resp.isSuccess) {
+      debugPrint('[IOT] ICE 配置获取失败，按直连处理：${resp.errorMessage}');
+    }
+    _iceCache = servers;
+    return servers;
+  }
+
   /// 通过 MQTT 交换 SDP 建立 WebRTC。
   ///
-  /// 需要三样东西：设备 ID（查服务组）、服务组里的 MQTT 服务项（broker + 凭据）、
+  /// 需要三样东西：设备 ID（查服务组）、服务组里的 MQTT 服务（broker + 产品级凭据）、
   /// 以及可选的 ICE 配置。任何一步失败都记录原因并返回 false，由调用方回退 WHEP。
   Future<bool> _tryMqtt(AppGbPlayInfo info, int gen) async {
     final int? deviceId = _deviceId;
@@ -419,15 +438,8 @@ class _GbLivePageState extends State<GbLivePage>
     }
 
     // ICE 配置是可选的：为空表示直连（局域网 / 内网部署），不应阻断播放。
-    final RIceServers iceResp = await IotAppController.iceServers();
+    final List<IceServerConfig> iceServers = await _loadIceServers();
     if (!mounted || gen != _generation) return false;
-    final List<IceServerConfig> iceServers =
-        iceResp.isSuccess
-            ? iceResp.servers
-            : const <IceServerConfig>[];
-    if (!iceResp.isSuccess) {
-      debugPrint('[IOT] ICE 配置获取失败，按直连处理：${iceResp.errorMessage}');
-    }
 
     _safeSetState(() => _status = '正在建立 MQTT 信令连接…');
     final MqttWebRtcClient client = MqttWebRtcClient();
@@ -470,9 +482,19 @@ class _GbLivePageState extends State<GbLivePage>
     }
     _safeSetState(() => _status = '正在建立 WebRTC 连接…');
 
+    // WHEP 与 MQTT 共用同一份 ICE 配置：受限网络下通过 TURN 中继。
+    final List<IceServerConfig> iceServers = await _loadIceServers();
+    if (!mounted || gen != _generation) return false;
+
     final GbWhepClient client = GbWhepClient();
     try {
-      await client.connect(url: info.webrtc, renderer: _renderer);
+      await client.connect(
+        url: info.webrtc,
+        renderer: _renderer,
+        iceServers: iceServers
+            .map((IceServerConfig item) => item.toRtcIceServer())
+            .toList(growable: false),
+      );
       if (!mounted || gen != _generation) {
         await client.close();
         return false;
