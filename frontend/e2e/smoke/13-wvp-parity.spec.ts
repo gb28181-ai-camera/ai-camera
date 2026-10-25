@@ -10,6 +10,22 @@ import { expect, gotoAdmin, test } from '../fixtures/auth'
  *  - 免登录分享：无效令牌的匿名错误态（不应跳登录页）
  */
 test.describe('13 WVP 功能对齐', () => {
+  test('左侧菜单：点击叶子菜单触发路由跳转', async ({ page }) => {
+    await gotoAdmin(page, '/dashboard')
+
+    // 展开「国标视频」→「流媒体运维」，再点「平台信息」。
+    const gbMenu = page.getByRole('menuitem', { name: /国标视频/ })
+    if ((await gbMenu.getAttribute('aria-expanded')) !== 'true') await gbMenu.click()
+
+    const opsMenu = page.getByRole('menuitem', { name: /流媒体运维/ })
+    if ((await opsMenu.getAttribute('aria-expanded')) !== 'true') await opsMenu.click()
+
+    await page.getByRole('menuitem', { name: /平台信息/ }).click()
+
+    await expect(page).toHaveURL(/\/gb\/ops\/platform-info$/)
+    await expect(page.locator('.e2e-gb-platform-info')).toBeVisible()
+  })
+
   test('平台信息：版本与 SIP/节点状态渲染', async ({ page }) => {
     const resp = page.waitForResponse(
       (res) => res.url().includes('/web/gb/platform-info') && res.request().method() === 'GET'
